@@ -1,0 +1,221 @@
+_target_: diffusion_policy.workspace.train_diffusion_unet_hybrid_cotrain_workspace.TrainDiffusionUnetHybridWorkspace
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    format_str: epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt
+    k: 20
+    mode: max
+    monitor_key: epoch
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  inv_gamma: 1.0
+  max_value: 0.9999
+  min_value: 0.0
+  power: 0.75
+  update_after_step: 0
+exp_name: default
+horizon: 16
+keypoint_visible_rate: 1.0
+logging:
+  group: null
+  id: null
+  mode: online
+  name: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_box_and_blocks_image
+  project: diffusion_policy_debug
+  resume: true
+  tags:
+  - train_diffusion_unet_hybrid
+  - box_and_blocks_image
+  - default
+multi_run:
+  run_dir: data/outputs/2023.01.16/20.20.06_train_diffusion_unet_hybrid_box_and_blocks_image
+  wandb_name_base: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_box_and_blocks_image
+n_action_steps: 8
+n_latency_steps: 0
+n_obs_steps: 1
+name: train_diffusion_unet_hybrid
+obs_as_global_cond: true
+optimizer:
+  _target_: torch.optim.AdamW
+  betas:
+  - 0.95
+  - 0.999
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+past_action_visible: false
+policy:
+  _target_: diffusion_policy.policy.diffusion_unet_hybrid_image_cotrain_policy.DiffusionUnetHybridImagePolicy
+  cond_predict_scale: true
+  crop_shape:
+  - 184
+  - 184
+  diffusion_step_embed_dim: 128
+  down_dims:
+  - 200
+  - 320
+  - 400
+  eval_fixed_crop: true
+  horizon: 16
+  kernel_size: 5
+  n_action_steps: 8
+  n_groups: 4
+  n_obs_steps: 1
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    beta_start: 0.0001
+    clip_sample: true
+    num_train_timesteps: 100
+    prediction_type: epsilon
+    variance_type: fixed_small
+  num_inference_steps: 100 # don't change here
+  obs_as_global_cond: true
+  obs_encoder_group_norm: true
+  shape_meta:
+    action:
+      shape:
+      - 21
+    obs:
+      agent_pos:
+        shape:
+        - 35
+        type: low_dim
+      image:
+        shape:
+        - 3
+        - 192
+        - 192
+        type: rgb
+      image2:
+        shape:
+        - 3
+        - 192
+        - 192
+        type: rgb
+shape_meta:
+  action:
+    shape:
+    - 21
+  obs:
+    agent_pos:
+      shape:
+      - 35
+      type: low_dim
+    image:
+      shape:
+      - 3
+      - 192
+      - 192
+      type: rgb
+    image2:
+      shape:
+      - 3
+      - 192
+      - 192
+      type: rgb
+dataloader:
+  persistent_workers: true
+  pin_memory: true
+  shuffle: true
+val_dataloader:
+  num_workers: 1
+  persistent_workers: false
+  pin_memory: false
+  shuffle: false
+task:
+  dataset:
+    _target_: diffusion_policy.dataset.dexnex_meta_2cams_dataset.MetaDataset
+    dataset:
+      n_obs_steps: 1
+      shape_meta:
+        action:
+          shape:
+          - 21
+        obs:
+          agent_pos:
+            shape:
+            - 35
+            type: low_dim
+          image:
+            shape:
+            - 3
+            - 192
+            - 192
+            type: rgb
+          image2:
+            shape:
+            - 3
+            - 192
+            - 192
+            type: rgb
+      _target_: diffusion_policy.dataset.dexnex_2cams_image_dataset.DexNexDataset
+      horizon: 16
+      state_length: 35
+      max_train_episodes: null
+      pad_after: 7 # afaik these are w.r.t. beginning's and ends of episodes? idk
+      pad_before: 1 # afaik these are w.r.t. beginning's and ends of episodes? idk
+      seed: 42
+      val_ratio: 0.02
+    zarr_paths: 
+      - /media/dexnex_ssd/data/box_and_blocks.2cams.zarr
+      - /media/dexnex_ssd/data/box_and_blocks.2cams.1cam_cotraining.zarr
+      - /media/dexnex_ssd/data/box_and_blocks.2cams.block_transfer.zarr
+    ratios:
+      - 0.5
+      - 0.25
+      - 0.25
+    num_workers:
+      - 8
+      - 4
+      - 4
+    num_train_batches: 1000 # nice and even
+    num_val_batches: 25
+    batch_size: 32
+
+  image_shape:
+  - 3
+  - 192
+  - 192
+  name: box_and_blocks
+  shape_meta:
+    action:
+      shape:
+      - 21
+    obs:
+      agent_pos:
+        shape:
+        - 35
+        type: low_dim
+      image:
+        shape:
+        - 3
+        - 192
+        - 192
+        type: rgb
+      image2:
+        shape:
+        - 3
+        - 192
+        - 192
+        type: rgb
+task_name: box_and_blocks
+training:
+  checkpoint_every: 10
+  debug: false
+  device: cuda:0
+  gradient_accumulate_every: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  max_train_steps: null
+  max_val_steps: null
+  num_epochs: 201
+  resume: true
+  rollout_every: 9999
+  sample_every: 4
+  seed: 42
+  tqdm_interval_sec: 1.0
+  use_ema: true
+  val_every: 4

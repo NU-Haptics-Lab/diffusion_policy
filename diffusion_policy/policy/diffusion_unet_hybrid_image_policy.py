@@ -170,6 +170,9 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
 
         print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
         print("Vision params: %e" % sum(p.numel() for p in self.obs_encoder.parameters()))
+        
+        ### TEST
+        self.random_noise = None
     
     # ========= inference  ============
     def conditional_sample(self, 
@@ -181,12 +184,21 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             ):
         model = self.model
         scheduler = self.noise_scheduler
+        
+        if False: # self.random_noise is None:
+            self.random_noise = torch.randn(
+            size=condition_data.shape, 
+            dtype=condition_data.dtype,
+            device=condition_data.device,
+            generator=generator)
 
         trajectory = torch.randn(
             size=condition_data.shape, 
             dtype=condition_data.dtype,
             device=condition_data.device,
             generator=generator)
+        
+        
     
         # set step values
         scheduler.set_timesteps(self.num_inference_steps)

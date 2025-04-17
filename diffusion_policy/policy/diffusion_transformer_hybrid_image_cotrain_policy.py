@@ -220,14 +220,15 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         return trajectory
 
 
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, nobs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
         """
-        assert 'past_action' not in obs_dict # not implemented yet
-        # normalize input
-        nobs = self.normalizer.normalize(obs_dict)
+        assert 'past_action' not in nobs_dict # not implemented yet
+        # normalizing done elsewhere
+        # nobs = self.normalizer.normalize(obs_dict)
+        nobs = nobs_dict
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
@@ -272,27 +273,28 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             cond=cond,
             **self.kwargs)
         
-        # unnormalize prediction
+        # unnormalize elsewhere
         naction_pred = nsample[...,:Da]
-        action_pred = self.normalizer['action'].unnormalize(naction_pred)
+        # action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
         if self.pred_action_steps_only:
-            action = action_pred
+            action = naction_pred
         else:
             start = To - 1
             end = start + self.n_action_steps
-            action = action_pred[:,start:end]
+            naction = naction_pred[:,start:end]
         
         result = {
-            'action': action,
-            'action_pred': action_pred
+            'naction': naction,
+            'naction_pred': naction_pred
         }
         return result
 
-    # ========= training  ============
-    def set_normalizer(self, normalizer: LinearNormalizer):
-        self.normalizer.load_state_dict(normalizer.state_dict())
+    ### NOTE: normalizing is done elsewhere when co-training
+    # # ========= training  ============
+    # def set_normalizer(self, normalizer: LinearNormalizer):
+    #     self.normalizer.load_state_dict(normalizer.state_dict())
 
     def get_optimizer(
             self, 
@@ -312,11 +314,15 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         )
         return optimizer
 
-    def compute_loss(self, batch):
+    def compute_loss(self, nbatch):
         # normalize input
-        assert 'valid_mask' not in batch
-        nobs = self.normalizer.normalize(batch['obs'])
-        nactions = self.normalizer['action'].normalize(batch['action'])
+        assert 'valid_mask' not in nbatch
+        
+        # # for cotraining, we normalize when we construct the batch
+        # nobs = self.normalizer.normalize(batch['obs'])
+        # nactions = self.normalizer['action'].normalize(batch['action'])
+        nobs = nbatch['nobs']
+        nactions = nbatch['naction']
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
         To = self.n_obs_steps

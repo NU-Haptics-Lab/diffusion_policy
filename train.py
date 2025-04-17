@@ -13,6 +13,10 @@ import hydra
 from omegaconf import OmegaConf
 import pathlib
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
+import click
+
+# to combat dataloader deadlock
+import torch.multiprocessing
 
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -20,7 +24,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 @hydra.main(
     version_base=None,
     config_path=str(pathlib.Path(__file__).parent.joinpath(
-        'diffusion_policy','config'))
+        'diffusion_policy','config')),
 )
 def main(cfg: OmegaConf):
     # resolve immediately so all the ${now:} resolvers
@@ -32,4 +36,6 @@ def main(cfg: OmegaConf):
     workspace.run()
 
 if __name__ == "__main__":
+    # only need the following if using my meta dataset
+    torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
     main()

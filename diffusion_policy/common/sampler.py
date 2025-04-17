@@ -4,7 +4,7 @@ import numba
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 
 
-@numba.jit(nopython=True)
+# @numba.jit(nopython=True) this is crashing the program
 def create_indices(
     episode_ends:np.ndarray, sequence_length:int, 
     episode_mask: np.ndarray,
@@ -99,11 +99,11 @@ class SequenceSampler:
             episode_mask = np.ones(episode_ends.shape, dtype=bool)
 
         if np.any(episode_mask):
-            indices = create_indices(episode_ends, 
+            indices = create_indices(episode_ends=episode_ends, 
                 sequence_length=sequence_length, 
+                episode_mask=episode_mask,
                 pad_before=pad_before, 
-                pad_after=pad_after,
-                episode_mask=episode_mask
+                pad_after=pad_after
                 )
         else:
             indices = np.zeros((0,4), dtype=np.int64)

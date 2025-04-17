@@ -22,6 +22,7 @@ import shutil
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.diffusion_unet_hybrid_image_policy import DiffusionUnetHybridImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
+from diffusion_policy.dataset.dexnex_meta_dataset import MetaDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
@@ -34,7 +35,11 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
-    def __init__(self, cfg: OmegaConf, output_dir=None):
+    # def __init__(self, cfg: OmegaConf, output_dir=None):
+    def __init__(self, 
+                 cfg: OmegaConf, 
+                 output_dir = None # '/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-04-06/14-48-48'
+                 ):
         super().__init__(cfg, output_dir=output_dir)
 
         # set seed
@@ -57,6 +62,8 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
+        
+        print("Total nb params: %e" % sum(p.numel() for p in self.model.parameters()))
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -68,17 +75,14 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
 
-        # configure dataset
-        dataset: BaseImageDataset
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        assert isinstance(dataset, BaseImageDataset)
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
-
+        cls = hydra.utils.get_class(cfg.task.dataset._target_)
+        meta_dataset = cls(cfg.task.dataset.num_train_batches, cfg)
+        
         # configure validation dataset
-        val_dataset = dataset.get_validation_dataset()
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-
+        meta_val_dataset = meta_dataset.get_validation_dataset(cfg.task.dataset.num_val_batches)
+        
+        # need to save as a class member so that the normalizers get pickled. Assume the first dataset listed is the task normalizer, used in evaluation.
+        normalizer = meta_dataset.get_normalizers()[0]
         self.model.set_normalizer(normalizer)
         if cfg.training.use_ema:
             self.ema_model.set_normalizer(normalizer)
@@ -89,7 +93,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
             optimizer=self.optimizer,
             num_warmup_steps=cfg.training.lr_warmup_steps,
             num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
+                len(meta_dataset) * cfg.training.num_epochs) \
                     // cfg.training.gradient_accumulate_every,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
@@ -103,12 +107,12 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 cfg.ema,
                 model=self.ema_model)
 
-        # configure env
-        env_runner: BaseImageRunner
-        env_runner = hydra.utils.instantiate(
-            cfg.task.env_runner,
-            output_dir=self.output_dir)
-        assert isinstance(env_runner, BaseImageRunner)
+        # # configure env
+        # env_runner: BaseImageRunner
+        # env_runner = hydra.utils.instantiate(
+        #     cfg.task.env_runner,
+        #     output_dir=self.output_dir)
+        # assert isinstance(env_runner, BaseImageRunner)
 
         # configure logging
         wandb_run = wandb.init(
@@ -146,6 +150,15 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
             cfg.training.checkpoint_every = 1
             cfg.training.val_every = 1
             cfg.training.sample_every = 1
+            
+        # # TEST
+        nbatch = next(meta_dataset)
+        policy = self.ema_model
+        policy.eval()
+        raw_loss = self.model.compute_loss(nbatch)
+        nresult = policy.predict_action(nbatch['nobs'])
+        result = meta_dataset.unnormalize(nresult)
+        policy.train()
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
@@ -154,16 +167,15 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
-                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                with tqdm.tqdm(meta_dataset, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
-                    for batch_idx, batch in enumerate(tepoch):
-                        # device transfer
-                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                    for batch_idx, nbatch in enumerate(tepoch):
+                        # device transfer -- done in meta_dataset
                         if train_sampling_batch is None:
-                            train_sampling_batch = batch
+                            train_sampling_batch = nbatch
 
                         # compute loss
-                        raw_loss = self.model.compute_loss(batch)
+                        raw_loss = self.model.compute_loss(nbatch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
@@ -188,7 +200,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
 
-                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
+                        is_last_batch = (batch_idx == (len(meta_dataset)-1))
                         if not is_last_batch:
                             # log of last step is combined with validation and rollout
                             wandb_run.log(step_log, step=self.global_step)
@@ -221,27 +233,27 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                     with torch.no_grad():
                         val_losses = list()
                         val_action_mse_errors = list()
-                        with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
+                        with tqdm.tqdm(meta_val_dataset, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
-                            for batch_idx, batch in enumerate(tepoch):
-                                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss = self.model.compute_loss(batch)
+                            for batch_idx, nbatch in enumerate(tepoch):
+                                # transfer to device done in meta_dataset
+                                loss = self.model.compute_loss(nbatch)
                                 val_losses.append(loss)
                                 
                                 # action mse
-                                obs_dict = batch['obs']
-                                gt_action = batch['action']
+                                nobs_dict = nbatch['nobs']
+                                gt_naction = nbatch['naction']
                                 
-                                result = policy.predict_action(obs_dict)
-                                pred_action = result['action_pred']
-                                mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                                result = policy.predict_action(nobs_dict)
+                                pred_naction = result['naction_pred']
+                                mse = torch.nn.functional.mse_loss(pred_naction, gt_naction)
                                 action_mse_error = mse.item()
                                 val_action_mse_errors.append(action_mse_error)
                                 
-                                del obs_dict
-                                del gt_action
+                                del nobs_dict
+                                del gt_naction
                                 del result
-                                del pred_action
+                                del pred_naction
                                 del mse
                                 
                                 
@@ -261,19 +273,22 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
-                        batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        obs_dict = batch['obs']
-                        gt_action = batch['action']
+                        # device transfer now done in meta_dataset
+                        nbatch = train_sampling_batch
+                        nobs_dict = nbatch['nobs']
+                        gt_naction = nbatch['naction']
                         
-                        result = policy.predict_action(obs_dict)
-                        pred_action = result['action_pred']
-                        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                        nresult = policy.predict_action(nobs_dict)
+                        naction_pred = nresult['naction_pred']
+                        
+                        # compare normalized action_pred to normalized ground truth action
+                        mse = torch.nn.functional.mse_loss(naction_pred, gt_naction)
                         step_log['train_action_mse_error'] = mse.item()
-                        del batch
-                        del obs_dict
-                        del gt_action
-                        del result
-                        del pred_action
+                        del nbatch
+                        del nobs_dict
+                        del gt_naction
+                        del nresult
+                        del naction_pred
                         del mse
                 
                 # checkpoint
