@@ -1,4 +1,6 @@
 import math
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -441,6 +443,52 @@ class HybridCNNViT(rmbn.ConvBase):
         # output is same shape as the input to the transformer
         return [8464] # 4x160
     
+## from clip, with minor changes
+class Transformer(nn.Module):
+    def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
+        super().__init__()
+        self.width = width
+        self.layers = layers
+        
+        # change: use our custom ResidualAttentionBlock
+        self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
+
+    def forward(self, x: torch.Tensor):
+        return self.resblocks(x)
+
+class ResidualAttentionBlock(nn.Module):
+    def __init__(self, d_model: int, n_head: int, attn_mask: torch.Tensor = None):
+        super().__init__()
+
+        self.attn = nn.MultiheadAttention(d_model, n_head)
+        self.ln_1 = clip_model.LayerNorm(d_model)
+        self.mlp = nn.Sequential(OrderedDict([
+            ("c_fc", nn.Linear(d_model, d_model * 4)),
+            ("gelu", clip_model.QuickGELU()),
+            ("c_proj", nn.Linear(d_model * 4, d_model))
+        ]))
+        self.ln_2 = clip_model.LayerNorm(d_model)
+        self.attn_mask = attn_mask
+
+    def attention(self, x: torch.Tensor):
+        self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
+        return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
+
+    def forward(self, x: torch.Tensor):
+        # change: I want to do layer norm before and after the permutation, because if not, then it's actually batch norm, because the sequence dimension and the batch dimension get swapped, and batch norm can lead to unstable training with small batch sizes, which is what we have
+        x = self.ln_1(x)
+        
+        # https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html#torch.nn.MultiheadAttention.forward
+        # must re-arrange so that sequence dimension is 1st, batch dimension is 2nd, embed (aka feature) dimension is 3rd
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = x + self.attention(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        
+        x = x + self.mlp(self.ln_2(x))
+        return x
+    
+## end from clip
+    
 class CNNSpatialSoftmaxTransformer(rmbn.ConvBase):
     def __init__(self):
         super().__init__()
@@ -453,8 +501,8 @@ class CNNSpatialSoftmaxTransformer(rmbn.ConvBase):
         # make the spatial cnn
         self.spatial_cnn = CascadingCNNSpatialSoftmax()
         
-        # make the transformer
-        self.transformer = clip_model.Transformer(width, layers, heads)
+        # make the transformer, our custom one
+        self.transformer = Transformer(width, layers, heads)
         
         self.fl = nn.Flatten()
         
@@ -462,11 +510,7 @@ class CNNSpatialSoftmaxTransformer(rmbn.ConvBase):
         # get the spatial features
         x = self.spatial_cnn(inputs) # output: [B, K, 3]
         
-        # https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html#torch.nn.MultiheadAttention.forward
-        # must re-arrange so that sequence dimension is 1st, batch dimension is 2nd, embed (aka feature) dimension is 3rd
-        x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = x + self.transformer(x) # residual style
         
         # flatten
         x = self.fl(x)
