@@ -53,14 +53,14 @@ policy:
   - 184
   diffusion_step_embed_dim: 128
   down_dims:
-  - 200
-  - 320
-  - 400
+  - 512 # 200
+  - 1024 # 320
+  - 2048 # 400
   eval_fixed_crop: true
   horizon: 16
   kernel_size: 5
   n_action_steps: 8
-  n_groups: 4
+  n_groups: 8
   n_obs_steps: 1
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
@@ -168,12 +168,12 @@ task:
       - 0.25
       - 0.25
     num_workers:
-      - 8
       - 4
-      - 4
+      - 2
+      - 2
     num_train_batches: 1000 # nice and even
     num_val_batches: 25
-    batch_size: 32
+    batch_size: 64
 
   image_shape:
   - 3
@@ -203,7 +203,7 @@ task:
         type: rgb
 task_name: box_and_blocks
 training:
-  checkpoint_every: 10
+  checkpoint_every: 15
   debug: false
   device: cuda:0
   gradient_accumulate_every: 1
@@ -211,7 +211,7 @@ training:
   lr_warmup_steps: 500
   max_train_steps: null
   max_val_steps: null
-  num_epochs: 201
+  num_epochs: 301
   resume: true
   rollout_every: 9999
   sample_every: 4

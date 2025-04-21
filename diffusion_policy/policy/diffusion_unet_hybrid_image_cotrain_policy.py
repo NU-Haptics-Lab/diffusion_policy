@@ -21,7 +21,7 @@ from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 import torchsummary
 from torchvision import models as vision_models
 
-from diffusion_policy.policy.dexnex_layers import ImageModule
+import diffusion_policy.policy.dexnex_layers as dexnex_layers
 
 
 class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
@@ -106,9 +106,10 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
 
         obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
         
-                
-        obs_encoder.obs_nets.image = ImageModule()
-        obs_encoder.obs_nets.image2 = ImageModule()
+        obs_encoder.obs_nets.image = dexnex_layers.CNNSpatialSoftmaxTransformer()
+        obs_encoder.obs_nets.image2 = dexnex_layers.CNNSpatialSoftmaxTransformer()
+        # obs_encoder.obs_nets.image = ImageModule()
+        # obs_encoder.obs_nets.image2 = ImageModule()
         # obs_encoder.obs_nets.image.nets[0] = ResNetSlice()
         # obs_encoder.obs_nets.image2.nets[0] = ResNetSlice()
         
@@ -117,7 +118,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         # obs_encoder.obs_nets.image2.nets[1] = rmbn.SpatialSoftmax((128, 24, 24), 32)
         
         # ways to see model input/outputs
-        print("Resnet output size: ", obs_encoder.obs_nets.image.nets[0](torch.zeros((1, 3, 184, 184))).shape)
+        # print("obs encoder output size: ", obs_encoder.obs_nets.image.nets[0:5](torch.zeros((1, 3, 184, 184))).shape)
         # obs_encoder.obs_nets.image.nets[0].nets[0:6](torch.zeros((1, 3, 192, 192))).shape
 
         
@@ -126,10 +127,12 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             replace_submodules(
                 root_module=obs_encoder,
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
-                func=lambda x: nn.GroupNorm(
-                    # num_groups=x.num_features//16, # hardcode to 4
-                    num_groups=4, # hardcode to 4, will run faster
+                func=lambda x: 
+                    nn.GroupNorm(
+                    num_groups=x.num_features//16, # optimal is 16 channels per group ... although it really didn't vary THAT much according to this blogpost: https://amaarora.github.io/posts/2020-08-09-groupnorm.html
+                    # num_groups=2, # hardcode, will run faster
                     num_channels=x.num_features)
+                    # nn.Identity()
             )
             # obs_encoder.obs_nets['agentview_image'].nets[0].nets
         

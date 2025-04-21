@@ -117,10 +117,10 @@ AVERAGE_WAYPOINTS = False
 # how many average waypoints to calculate
 NB_AVERAGING_WAYPOINTS = 10
 
-CHECKPOINT_DIR = "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-04-16/18-20-55/checkpoints"
+CHECKPOINT_DIR = "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-04-18/13-51-01/checkpoints"
 
 # checkpoint name
-CHECKPOINT_NAME = "epoch=0140-train_loss=0.018.ckpt"
+CHECKPOINT_NAME = "epoch=0075-train_loss=0.020.ckpt"
 
 # concat
 CHECKPOINT_PATH = CHECKPOINT_DIR + "/" + CHECKPOINT_NAME
