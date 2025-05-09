@@ -25,6 +25,7 @@ from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 # ROS2 stuff
 import rclpy
+import rclpy.duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSLivelinessPolicy
 from rclpy.duration import Duration
@@ -35,10 +36,12 @@ import rosbag2_py
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 # ROS2 messages
+from builtin_interfaces.msg import Time
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import JointState
 from haptx_interfaces.msg import BiotacNormalized
 from ros2_to_rlds_msgs.msg import Float64array
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 
 # moveit for FK
 from moveit.core.robot_model import RobotModel
@@ -53,7 +56,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 DEBUG = False
 
 # whether to use the custom num of inference steps during denoising (generally recommended)
-USE_CUSTOM_INFERENCE_STEPS = False
+USE_CUSTOM_INFERENCE_STEPS = True
 
 # paper uses 16 for real-time control, higher nb = more accurate waypoints w.r.t. the inputs. 
 # WARNING: if this value is less than the training value, then you MUST use a DDIM scheduler instead of a DDPM scheduler (you have to replace the policy's scheduler in this script)
@@ -117,11 +120,10 @@ AVERAGE_WAYPOINTS = False
 # how many average waypoints to calculate
 NB_AVERAGING_WAYPOINTS = 10
 
-# CHECKPOINT_DIR = "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
-CHECKPOINT_DIR = "/media/dexnex_ssd/models/box_and_blocks_current_best/checkpoints"
+CHECKPOINT_DIR = "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
 
 # checkpoint name
-CHECKPOINT_NAME = "epoch=0105-train_loss=0.016.ckpt"
+CHECKPOINT_NAME = "epoch=0120-train_loss=0.013.ckpt"
 
 # concat
 CHECKPOINT_PATH = CHECKPOINT_DIR + "/" + CHECKPOINT_NAME
@@ -252,9 +254,6 @@ class EvalDexNex(Node):
             
         print("n_action_steps: {}".format(self.policy.n_action_steps))
 
-        # setup experiment
-        dt = 1/INFERENCE_FREQUENCY
-
         print("n_obs_steps: ", n_obs_steps)
         
         # default values, one time step
@@ -274,10 +273,6 @@ class EvalDexNex(Node):
         if True:
             self.m_image2 = np.zeros(IMAGE2_SHAPE[0] * IMAGE2_SHAPE[1] * IMAGE2_SHAPE[2]) # update with image2 shape
             
-        self.m_image_msg = Image()
-        self.m_image2_msg = Image()
-        self.m_stamp = None
-        
         # observation history
         self.image_history = deque(maxlen=n_obs_steps) # use deque instead of queue because it has maxlen
         self.image2_history = deque(maxlen=n_obs_steps) # use deque instead of queue because it has maxlen
@@ -287,7 +282,19 @@ class EvalDexNex(Node):
         with torch.no_grad():
             self.policy.reset() # don't think this actually does anything for a Unet policy
         
-        ## ROS2 setup
+        #### ROS2 setup ####
+        self.m_image_msg = Image()
+        self.m_image2_msg = Image()
+        self.m_stamp = None
+        
+        # new request setup
+        # self.m_new_request_time = rclpy.time.Time(clock_type=_rclpy.ClockType.ROS_TIME) # s
+        self.m_new_request_time = self.get_clock().now() + rclpy.duration.Duration(seconds=1)
+        self.b_new_request = True # start by infering a new trajectory
+        self.p_inference_latency = NUM_CUSTOM_INFERENCE_STEPS / 100.0 # rough estimate. 50 steps = 0.5s inference
+        self.request_timer = 0.0
+        self.new_request_dt = 0.05
+        
         # QoS, required for image compat
         qos_profile = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         
@@ -300,11 +307,13 @@ class EvalDexNex(Node):
         
         self.sub3_ = self.create_subscription(BiotacNormalized, HAPTICS_TOPIC, self.SubHaptics, qos_profile)
         
+        self.sub4_ = self.create_subscription(Time, '~/in/request_delay', self.SubRequestDelay, qos_profile)
+        
         # pubs
         self.pub_trajectory = self.create_publisher(JointTrajectory, "~/out/joint_trajectory", 10)
         
         # timer
-        self.timer_ = self.create_timer(dt, self.Run)
+        self.timer_ = self.create_timer(self.new_request_dt, self.Run)
         
         if False:
             self.timer2_ = self.create_timer(1.0 / self.data_frequency, self.TimerRosData) # MUST be ran at the same rate as the difference between states/obs that the policy was trained on.
@@ -343,6 +352,20 @@ class EvalDexNex(Node):
         
     def SubHaptics(self, msg):
         self.m_haptics = msg.values[:]
+        
+    def SubRequestDelay(self, msg):
+        # convert to time
+        t = rclpy.time.Time.from_msg(msg)
+        
+        # subtract off the estimated inference latency
+        s = int(self.p_inference_latency)
+        ns = int((self.p_inference_latency - s) * 1e9)
+        
+        t2 = t - rclpy.duration.Duration(seconds=s, nanoseconds=ns)
+        
+        # save
+        self.m_new_request_time = t2
+        self.b_new_request = True
         
     def ImageProc(self, imp_np, shape):
         # reshape the image
@@ -587,9 +610,7 @@ class EvalDexNex(Node):
         msg.header.stamp = self.m_joint_states_msg.header.stamp
         self.pub_trajectory.publish(msg)
         
-
-    """ Ran on a timer """
-    def Run(self):
+    def RunOnce(self):
         # TEST. just save the most recent data here instead of using the timer
         if True:
             self.SaveRosData()
@@ -619,6 +640,25 @@ class EvalDexNex(Node):
         # analytics
         if ANALYTICS:
             self.CalculateAnalytics()
+
+    """ Ran on a timer """
+    def Run(self):
+        # get now
+        now = self.get_clock().now()
+        
+        # if a new request
+        if self.b_new_request and self.m_new_request_time < now:
+            self.RunOnce()
+            
+            self.b_new_request = False
+            self.request_timer = 0.0
+            return
+            
+        # timeout in case a new trajectory hasn't been generated in a while
+        if self.request_timer > 10.0:
+            self.b_new_request = True
+        else:
+            self.request_timer += self.new_request_dt
             
     def CalculateAnalytics(self):
         if len(self.ANALYTICS_telemetry_dt_ls) > 2:
@@ -654,7 +694,7 @@ def main(args=None):
     # node.Test()
     
     rclpy.spin(node)
-
+    
     node.destroy_node()
     rclpy.shutdown()
 

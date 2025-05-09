@@ -203,7 +203,7 @@ task:
         type: rgb
 task_name: box_and_blocks
 training:
-  checkpoint_every: 15
+  checkpoint_every: 20
   debug: false
   device: cuda:0
   gradient_accumulate_every: 1
@@ -211,11 +211,11 @@ training:
   lr_warmup_steps: 500
   max_train_steps: null
   max_val_steps: null
-  num_epochs: 301
+  num_epochs: 141
   resume: true
   rollout_every: 9999
-  sample_every: 4
+  sample_every: 2
   seed: 42
   tqdm_interval_sec: 1.0
   use_ema: true
-  val_every: 4
+  val_every: 2

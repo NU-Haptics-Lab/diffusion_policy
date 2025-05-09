@@ -38,7 +38,8 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
     # def __init__(self, cfg: OmegaConf, output_dir=None):
     def __init__(self, 
                  cfg: OmegaConf, 
-                 output_dir = None # '/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-04-06/14-48-48'
+                 output_dir = None
+                #  output_dir = "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-04-22/16-58-25"
                  ):
         super().__init__(cfg, output_dir=output_dir)
 
