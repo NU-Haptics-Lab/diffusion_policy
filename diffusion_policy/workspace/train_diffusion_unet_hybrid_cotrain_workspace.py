@@ -29,6 +29,7 @@ from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from diffusion_policy.model.diffusion_ql import QL_Training
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -68,6 +69,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
+        config = cfg # I just prefer it spelled out
 
         # resume training
         if cfg.training.resume:
@@ -114,6 +116,14 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
         #     cfg.task.env_runner,
         #     output_dir=self.output_dir)
         # assert isinstance(env_runner, BaseImageRunner)
+        
+        # configure diffusion-ql (if valid)
+        if config.training.use_qloss:
+            # make the critic network
+            critic = <>
+            
+            # make the trainer
+            self.ql_trainer = QL_Training(critic)
 
         # configure logging
         wandb_run = wandb.init(
@@ -178,6 +188,16 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                         # compute loss
                         raw_loss = self.model.compute_loss(nbatch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
+                        
+                        # diffusion-ql, q-learning
+                        if config.training.use_qloss:
+                            qloss, qmetrics = self.ql_trainer(nbatch['nobs'])
+                            loss += qloss
+                            
+                            # add metrics to the wandb step logger
+                            step_log.update(qmetrics)
+                        
+                        # calculate gradients
                         loss.backward()
 
                         # step optimizer

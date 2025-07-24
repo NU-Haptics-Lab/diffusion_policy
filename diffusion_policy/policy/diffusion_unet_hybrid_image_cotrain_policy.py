@@ -203,13 +203,14 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
     # ========= inference  ============
     def conditional_sample(self, 
             condition_data, condition_mask,
+            scheduler,
+            num_inference_steps,
             local_cond=None, global_cond=None,
             generator=None,
             # keyword arguments to scheduler.step
             **kwargs
             ):
         model = self.model
-        scheduler = self.noise_scheduler
         
         if False: # self.random_noise is None:
             self.random_noise = torch.randn(
@@ -227,7 +228,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         
     
         # set step values
-        scheduler.set_timesteps(self.num_inference_steps)
+        scheduler.set_timesteps(num_inference_steps)
 
         for t in scheduler.timesteps:
             # 1. apply conditioning
@@ -249,8 +250,18 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
 
         return trajectory
 
-
     def predict_action(self, nobs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        return self.predict_action_impl(
+            nobs_dict,
+            self.noise_scheduler,
+            self.num_inference_steps
+            )
+
+    def predict_action_impl(self, 
+            nobs_dict: Dict[str, torch.Tensor],
+            noise_scheduler,
+            num_inference_steps
+            ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -308,6 +319,8 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         nsample = self.conditional_sample(
             cond_data, 
             cond_mask,
+            noise_scheduler,
+            num_inference_steps,
             local_cond=local_cond,
             global_cond=global_cond,
             **self.kwargs)

@@ -166,7 +166,9 @@ class DexNexDataset(BaseImageDataset):
                 'image2': image2,
                 'agent_pos': agent_pos, # T, self.state_length
             },
-            'action': sample['action'].astype(np.float32) # T, self.state_length
+            'action': sample['action'].astype(np.float32), # T, self.state_length
+            'reward': sample['reward'].astype(np.float32),
+            'not_done': sample['not_done'].astype(np.float32)
         }
         return data
     

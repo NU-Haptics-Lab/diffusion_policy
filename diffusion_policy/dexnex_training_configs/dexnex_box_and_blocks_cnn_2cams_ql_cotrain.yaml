@@ -219,3 +219,8 @@ training:
   tqdm_interval_sec: 1.0
   use_ema: true
   val_every: 2
+  use_qloss: true
+qloss:
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDIMScheduler
+    num_inference_steps: 16
