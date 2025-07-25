@@ -129,6 +129,7 @@ task:
   dataset:
     _target_: diffusion_policy.dataset.dexnex_meta_2cams_dataset.MetaDataset
     dataset:
+      _target_: diffusion_policy.dataset.dexnex_2cams_image_dataset.DexNexDataset
       n_obs_steps: 1
       shape_meta:
         action:
@@ -151,7 +152,6 @@ task:
             - 192
             - 192
             type: rgb
-      _target_: diffusion_policy.dataset.dexnex_2cams_image_dataset.DexNexDataset
       horizon: 16
       state_length: 35
       max_train_episodes: null
@@ -159,6 +159,7 @@ task:
       pad_before: 1 # afaik these are w.r.t. beginning's and ends of episodes? idk
       seed: 42
       val_ratio: 0.02
+      history_indices: [15, 10, 5] # 0.5s skip, with 0.1s dt, get state from 1.5s, 1.0s, and 0.5s ago
     zarr_paths: 
       - /media/dexnex_ssd/data/box_and_blocks.2cams.zarr
       - /media/dexnex_ssd/data/box_and_blocks.2cams.1cam_cotraining.zarr
@@ -204,7 +205,7 @@ task:
 task_name: box_and_blocks
 training:
   checkpoint_every: 20
-  debug: false
+  debug: true
   device: cuda:0
   gradient_accumulate_every: 1
   lr_scheduler: cosine

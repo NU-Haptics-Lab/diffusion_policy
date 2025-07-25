@@ -4,7 +4,7 @@ import numpy as np
 import copy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.common.sampler import (
+from diffusion_policy.common.sampler_ql import (
     SequenceSampler, get_val_mask, downsample_mask)
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
@@ -64,7 +64,8 @@ class DexNexDataset(BaseImageDataset):
             seed=42,
             val_ratio=0.0,
             max_train_episodes=None,
-            state_length=8
+            state_length=8,
+            history_indices=[]
             ):
         
         super().__init__()
@@ -104,7 +105,8 @@ class DexNexDataset(BaseImageDataset):
             pad_before=pad_before, 
             pad_after=pad_after,
             episode_mask=train_mask,
-            key_first_k=key_first_k
+            key_first_k=key_first_k,
+            history_indices=history_indices
             )
         self.train_mask = train_mask
         self.horizon = horizon
@@ -112,6 +114,7 @@ class DexNexDataset(BaseImageDataset):
         self.pad_after = pad_after
         self.state_length = state_length
         self.n_obs_steps = n_obs_steps
+        self.history_indices = history_indices
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
@@ -143,33 +146,60 @@ class DexNexDataset(BaseImageDataset):
 
     def __len__(self) -> int:
         return len(self.sampler)
-
-    def _sample_to_data(self, sample):
+    
+    def _collate_state(self, sample, suffix=""):
         # to save RAM, only return first n_obs_steps of OBS
         # since the rest will be discarded anyway.
         # when self.n_obs_steps is None
         # this slice does nothing (takes all)
         T_slice = slice(self.n_obs_steps) # trajectory slice
         
-        agent_pos = sample['state'][T_slice][:, :self.state_length].astype(np.float32)
+        # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
+        state_keys = [
+            "img",
+            "img2",
+            "state",
+        ]
+        
+        agent_pos = sample['state' + suffix][T_slice][:, :self.state_length].astype(np.float32)
         
         # Moveaxis moved to the dataset generation script to save training time
         # now I must do this to be backwards compatable with my messed up dataset order. whoops!
-        image = np.moveaxis(sample['img'][T_slice], 2, 1)
-        image2 = np.moveaxis(sample['img2'][T_slice], 2, 1)
+        image = np.moveaxis(sample['img' + suffix][T_slice], 2, 1)
+        image2 = np.moveaxis(sample['img2' + suffix][T_slice], 2, 1)
+
+        out = {
+            'image': image,  # T, 3, 96, 96
+            'image2': image2,
+            'agent_pos': agent_pos,  # T, self.state_length
+        }
+
+        return out
+        
+
+    def _sample_to_data(self, sample):
         # image = sample['img']
         # image2 = sample['img2']
+        
+        # collate this state
+        state = self._collate_state(sample)
 
+        # current state
         data = {
-            'obs': {
-                'image': image, # T, 3, 96, 96
-                'image2': image2,
-                'agent_pos': agent_pos, # T, self.state_length
-            },
+            'obs': state,
             'action': sample['action'].astype(np.float32), # T, self.state_length
             'reward': sample['reward'].astype(np.float32),
             'not_done': sample['not_done'].astype(np.float32)
         }
+        
+        # next state
+        data['obs_next'] = self._collate_state(sample, suffix="_next")
+        
+        # history of states
+        for val in self.history_indices:
+            suffix = "_" + str(val)
+            data['obs' + suffix] = self._collate_state(sample, suffix=suffix)
+        
         return data
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:

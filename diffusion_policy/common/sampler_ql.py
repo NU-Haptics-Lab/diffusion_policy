@@ -3,18 +3,73 @@ import numpy as np
 import numba
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 
+def get_lower_bound_idx(sorted_array, value):
+    lb = np.searchsorted(sorted_array, value) - 1
+    return lb
+    
+
+def get_history_indices(
+    episode_ends, 
+    index: int,
+    history_indices
+    ):
+    """
+    get the indices corresponding to the history of current index, as a function of a skip_amount.
+    So, for example, if you want to provide the state history of the last two seconds, but spaced at 0.5s intervals, assuming the dataset frequency is 10hz and the current index is 100, then you'd call
+    get_history_indices(ends, 100, 5, 3).
+    
+    Accounts for episode ends
+    """
+    indices = {}
+    
+    # find lower bound episode index
+    lb_idx = get_lower_bound_idx(episode_ends, index)
+    lb = episode_ends[lb_idx]
+    
+    for i in history_indices:
+        j = index - i
+        
+        # valid index
+        if j > lb:
+            indices[i] = j
+            
+        # invalid index, is before the episode start
+        else:
+            indices[i] = None
+            
+    return indices
+
+def get_next_index(
+    episode_ends, 
+    index: int,
+    ):
+    """
+    Get the next index. Ensures it's not past the end of the episode, although this should be taken care of in `create_indices`
+    """
+    lb_idx = get_lower_bound_idx(episode_ends, index)
+    ub_idx = lb_idx + 1
+    
+    if ub_idx > len(episode_ends):
+        print("sampler_ql.get_next_index: Something went terribly wrong.")
+        raise
+        
+    return index + 1
 
 # @numba.jit(nopython=True) this is crashing the program
 def create_indices(
     episode_ends:np.ndarray, sequence_length:int, 
     episode_mask: np.ndarray,
     pad_before: int=0, pad_after: int=0,
-    debug:bool=True) -> np.ndarray:
+    debug:bool=True
+    ) -> np.ndarray:
+    
     episode_mask.shape == episode_ends.shape        
     pad_before = min(max(pad_before, 0), sequence_length-1)
     pad_after = min(max(pad_after, 0), sequence_length-1)
 
     indices = list()
+    
+    # iterate through each episode separately
     for i in range(len(episode_ends)):
         if not episode_mask[i]:
             # skip episode
@@ -83,6 +138,7 @@ class SequenceSampler:
         keys=None,
         key_first_k=dict(),
         episode_mask: Optional[np.ndarray]=None,
+        history_indices=[]
         ):
         """
         key_first_k: dict str: int
@@ -114,9 +170,53 @@ class SequenceSampler:
         self.sequence_length = sequence_length
         self.replay_buffer = replay_buffer
         self.key_first_k = key_first_k
+        self.history_indices = history_indices
     
     def __len__(self):
         return len(self.indices)
+    
+    def key_zero_fill(self, key):
+        input_arr = self.replay_buffer[key]
+        
+        data = np.zeros(shape=(self.sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
+        
+        return data
+    
+    def get_sequence_by_key(self, idx, key):
+        """
+        given an index and a key, obtain the proper sequence of that key's data from the dataset.
+        """
+        
+        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
+            = self.indices[idx]
+    
+        input_arr = self.replay_buffer[key]
+        # performance optimization, avoid small allocation if possible
+        if key not in self.key_first_k:
+            sample = input_arr[buffer_start_idx:buffer_end_idx]
+        else:
+            # performance optimization, only load used obs steps
+            n_data = buffer_end_idx - buffer_start_idx
+            k_data = min(self.key_first_k[key], n_data)
+            # fill value with Nan to catch bugs
+            # the non-loaded region should never be used
+            sample = np.full((n_data,) + input_arr.shape[1:], 
+                fill_value=np.nan, dtype=input_arr.dtype)
+            try:
+                sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
+            except Exception as e:
+                import pdb; pdb.set_trace()
+        data = sample
+        if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
+            # fill with zeros
+            data = self.key_zero_fill(key)
+            if sample_start_idx > 0:
+                data[:sample_start_idx] = sample[0]
+            if sample_end_idx < self.sequence_length:
+                data[sample_end_idx:] = sample[-1]
+            data[sample_start_idx:sample_end_idx] = sample
+        
+        return data
         
     def sample_sequence(self, idx):
         """
@@ -127,35 +227,45 @@ class SequenceSampler:
         Furthermore, we may want to input a non-contiguous state history into our networks, so we want to have those indices available too.
         """
         
-        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
-            = self.indices[idx]
         result = dict()
+        
+        # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
+        state_keys = [
+            "img",
+            "img2",
+            "state",
+        ]
+        
+        # get data for all keys for this index
         for key in self.keys:
-            input_arr = self.replay_buffer[key]
-            # performance optimization, avoid small allocation if possible
-            if key not in self.key_first_k:
-                sample = input_arr[buffer_start_idx:buffer_end_idx]
-            else:
-                # performance optimization, only load used obs steps
-                n_data = buffer_end_idx - buffer_start_idx
-                k_data = min(self.key_first_k[key], n_data)
-                # fill value with Nan to catch bugs
-                # the non-loaded region should never be used
-                sample = np.full((n_data,) + input_arr.shape[1:], 
-                    fill_value=np.nan, dtype=input_arr.dtype)
-                try:
-                    sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
-                except Exception as e:
-                    import pdb; pdb.set_trace()
-            data = sample
-            if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
-                data = np.zeros(
-                    shape=(self.sequence_length,) + input_arr.shape[1:],
-                    dtype=input_arr.dtype)
-                if sample_start_idx > 0:
-                    data[:sample_start_idx] = sample[0]
-                if sample_end_idx < self.sequence_length:
-                    data[sample_end_idx:] = sample[-1]
-                data[sample_start_idx:sample_end_idx] = sample
-            result[key] = data
+            result[key] = self.get_sequence_by_key(idx, key)
+            
+        # get idx of next state
+        idx_next = get_next_index(self.replay_buffer.episode_ends, idx)
+            
+        # get data for the next state
+        for state in state_keys:
+            result[state + "_next"] = self.get_sequence_by_key(idx_next, state)
+            
+        # get indices from the history
+        history_indices = get_history_indices(self.replay_buffer.episode_ends, idx, self.history_indices)
+        
+        # get data from the history. Keys should be {3, 2, 1} for example, values should be {300, 305, 310} for example
+        for key, value in enumerate(history_indices):
+            # make the suffix
+            suffix = "_" + str(key)
+            
+            # iterate over state keys in the dataset
+            for state in state_keys:
+                # invalid value means we have to pad using all zeros
+                if value is None:
+                    result[state + suffix] = self.key_zero_fill(key)
+                    
+                # valid data index
+                else:
+                    result[state + suffix] = self.get_sequence_by_key(idx_next, state)
+            
+        
+        
+        # we're done
         return result
