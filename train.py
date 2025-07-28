@@ -15,6 +15,9 @@ import pathlib
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 import click
 
+# global config
+from diffusion_policy.config.config import CONFIG
+
 # to combat dataloader deadlock
 import torch.multiprocessing
 
@@ -27,6 +30,10 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
         'diffusion_policy','config')),
 )
 def main(cfg: OmegaConf):
+    # save config into the global config
+    global CONFIG
+    CONFIG = cfg
+    
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
     OmegaConf.resolve(cfg)

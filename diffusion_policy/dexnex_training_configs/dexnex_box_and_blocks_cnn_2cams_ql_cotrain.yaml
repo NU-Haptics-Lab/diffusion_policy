@@ -225,3 +225,5 @@ qloss:
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDIMScheduler
     num_inference_steps: 16
+critic:
+_target_: diffusion_policy.model.diffusion_ql.critic_ql.QLCritic

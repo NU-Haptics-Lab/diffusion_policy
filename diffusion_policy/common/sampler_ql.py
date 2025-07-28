@@ -55,6 +55,23 @@ def get_next_index(
         
     return index + 1
 
+def get_not_done(
+    episode_ends,
+    index: int
+    ):
+    lb_idx = get_lower_bound_idx(episode_ends, index)
+    ub_idx = lb_idx + 1
+    
+    ub_step_idx = episode_ends[ub_idx]
+    
+    # if this index is the 2nd to last index in this episode, then it's done (since it needs to get the next_state from the final index).
+    if index == ub_step_idx - 1:
+        not_done = False
+    else:
+        not_done = True
+    
+    return not_done
+
 # @numba.jit(nopython=True) this is crashing the program
 def create_indices(
     episode_ends:np.ndarray, sequence_length:int, 
@@ -265,7 +282,8 @@ class SequenceSampler:
                 else:
                     result[state + suffix] = self.get_sequence_by_key(idx_next, state)
             
-        
+        # if episode is done, convert to np array
+        result["not_done"] = np.array(get_not_done(self.replay_buffer.episode_ends, idx))
         
         # we're done
         return result

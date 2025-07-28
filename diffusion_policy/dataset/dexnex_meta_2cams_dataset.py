@@ -15,9 +15,39 @@ from diffusion_policy.common.normalize_util import get_image_range_normalizer
 import hydra
 from collections import defaultdict
 
+from diffusion_policy.config.config import CONFIG
+
 """
 A dataset composed of several other datasets. To be used in co-training.
 """
+
+# slice_dict_by_subkey_hash = {}
+def slice_dict_by_subkey(dict, prefix):
+    # if this method is too slow, use the hash table feature
+    # if prefix in slice_dict_by_subkey_hash:
+    #     return slice_dict_by_subkey_hash[prefix]
+    
+    out = {}
+    for key in dict:
+        if prefix in key:
+            out[key] = dict[key]
+            
+    return out
+    
+def get_history_dict(dict, key):
+    """ Just an semantic alias for slice_dict_by_subkey """
+    return slice_dict_by_subkey(dict, key)
+
+def get_dict_value_by_suffix(dict, key, suffix):
+    suffix = "_" + str(suffix)
+    return dict[key + suffix]
+
+def get_history_value(dict, key, history_index):
+    return get_dict_value_by_suffix(dict, key, history_index)
+
+def get_obs_history_value(dict, history_index):
+    return get_history_value(dict, 'obs', history_index)
+    
 
 class MetaDataset():
     def __init__(self, num_batches, cfg):
@@ -149,17 +179,79 @@ class MetaDataset():
             
         return self
     
-    def normalize_batch(self, batch, idx):
-        # batch is a dictionary on the GPU
-        # idx is which normalizer to use
-        normalizer = self.normalizers[idx]
-        nobs = normalizer.normalize(batch['obs'])
+    def normalize_key_and_history(self, normalizer, batch, key):
+        # setup return var
+        out = {}
         
+        # get the appropriate normalizer
+        n = normalizer[key]
+        
+        # get the dict of all data this normalizer pertains to
+        d = get_history_dict(batch, key)
+        
+        # iterate over appropriate data points
+        for key2, val2 in enumerate(d):
+            out[key2] = n(val2)
+            
+        # we're done
+        return out
+    
+    def get_single_field_normalizer_by_key(self, normalizer, key):
+        # kinda hacky, so it goes. At least the hack is contained within this method instead of spread out
+        if key in normalizer:
+            return normalizer[key]
+        
+        elif key == "obs":
+            obs_n = normalizer
+            
+    def normalize_obs_impl(self, normalizer, obs_dict):
+        """ This method uses the obs dictionary itself """
+        return normalizer.normalize(obs_dict)
+        
+    def normalize_obs(self, normalizer, batch):
+        """ This method assumes the input batch has an 'obs' key """
+        nobs = self.normalize_obs_impl(normalizer, batch['obs'])
+        return nobs
+        
+    def normalize_action(self, normalizer, batch):
         if 'action' in batch:
             naction = normalizer['action'].normalize(batch['action'])
         else:
             naction = None
+        return naction
+    
+    def normalize_batch(self, batch, idx):
+        """
+        batch - a dictionary on the GPU
+        idx - which dataset to use
+        """
+        # get normalizer for this dataset
+        normalizer = self.normalizers[idx]
+        
+        # observations
+        nobs = self.normalize_obs(normalizer, batch)
+        
+        # actions
+        naction = self.normalize_action(normalizer, batch)
+        
+        # put into data dict
+        ndata = {
+            "nobs": nobs,
+            "naction": naction
+        }
+        
+        # next state
+        obs = get_dict_value_by_suffix(batch, "obs", "next")
+        nnobs = self.normalize_obs_impl(normalizer, obs)
+        ndata["nobs_next"] = nnobs
+        
+        # history of states
+        for val in CONFIG.history_indices:
+            obs = get_obs_history_value(batch, val)
+            hnobs = self.normalize_obs_impl(normalizer, obs)
+            ndata["nobs_" + str(val)] = hnobs
             
+        # we're done
         return nobs, naction
         
     def normalize(self, obs_dict_np, idx):
@@ -167,12 +259,10 @@ class MetaDataset():
         obs_dict = dict_apply(obs_dict_np, 
                 lambda x: torch.from_numpy(x).unsqueeze(0).to(self.device))
         
-        nobs, naction = self.normalize_batch(obs_dict, idx)
-        nobs_dict = {
-            "nobs": nobs,
-            "naction": naction
-        }
-        return nobs_dict
+        # normalize the batch
+        ndata = self.normalize_batch(obs_dict, idx)
+        
+        return ndata
         
         
     def unnormalize(self, nresult):

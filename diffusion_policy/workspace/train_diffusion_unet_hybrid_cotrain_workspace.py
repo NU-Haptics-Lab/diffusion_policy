@@ -116,14 +116,6 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
         #     cfg.task.env_runner,
         #     output_dir=self.output_dir)
         # assert isinstance(env_runner, BaseImageRunner)
-        
-        # configure diffusion-ql (if valid)
-        if config.training.use_qloss:
-            # make the critic network
-            critic = <>
-            
-            # make the trainer
-            self.ql_trainer = QL_Training(critic)
 
         # configure logging
         wandb_run = wandb.init(
@@ -152,6 +144,17 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
 
         # save batch for sampling
         train_sampling_batch = None
+        
+        # configure diffusion-ql (if valid)
+        if config.training.use_qloss:
+            # make the critic network
+            critic = hydra.utils.instantiate(cfg.critic)
+            
+            # make the trainer
+            self.ql_trainer = QL_Training(
+                self.model,
+                self.ema_model,
+                critic)
 
         if cfg.training.debug:
             cfg.training.num_epochs = 2
