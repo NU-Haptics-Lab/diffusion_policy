@@ -3,6 +3,8 @@ import numpy as np
 import numba
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 
+
+
 def get_lower_bound_idx(sorted_array, value):
     lb = np.searchsorted(sorted_array, value) - 1
     return lb
@@ -216,171 +218,126 @@ def downsample_mask(mask, max_n, seed=0):
         assert np.sum(train_mask) == n_train
     return train_mask
 
-class SequenceSampler:
-    def __init__(self, 
-        replay_buffer: ReplayBuffer, 
-        sequence_length:int,
-        pad_before:int=0,
-        pad_after:int=0,
-        keys=None,
-        key_first_k=dict(),
-        episode_mask: Optional[np.ndarray]=None,
-        history_indices=[]
-        ):
+class KeyStepSampler:
+    """
+    Sampler for a specific datapoint for a specific key. Allows 
+    """
+    def __init__(self, key, rb, rb_ep_idx):
+        self.key = key
+        self.rb = rb
+        self.rb_ep_idx = rb_ep_idx
+
+    def get_sample(self, ep_indices):
         """
-        key_first_k: dict str: int
-            Only take first k data from these keys (to improve perf)
+        ep_indices - relative indices within the episode
         """
+        # get this key's data
+        rb_key = self.rb[self.key]
 
-        super().__init__()
-        assert(sequence_length >= 1)
-        if keys is None:
-            keys = list(replay_buffer.keys())
-        
-        episode_ends = replay_buffer.episode_ends[:]
-        if episode_mask is None:
-            episode_mask = np.ones(episode_ends.shape, dtype=bool)
+        # not yet supported
+        if np.any(ep_indices < 0):
+            raise
 
-        if np.any(episode_mask):
-            indices, valid_indices = create_indices(episode_ends=episode_ends, 
-                sequence_length=sequence_length, 
-                episode_mask=episode_mask,
-                pad_before=pad_before, 
-                pad_after=pad_after
-                )
-        else:
-            indices = np.zeros((0,4), dtype=np.int64)
-            valid_indices = np.array([0], dtype=np.int64)
+        # convert to replay buffer indices
+        rb_indices = self.rb_ep_idx + ep_indices
 
-        # (buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx)
-        self.indices = indices 
+        # access using numpy "fancy indexing". If zarr doesn't have that feature, just iterate through and concat
+        data = rb_key[rb_indices]
 
-        # a mapping from training datapoints to all data-points (which are contained in `self.indices`). This is needed so that we don't use the last datapoint in an episode, else the (s, a, r, s') R.L. tuple wouldn't have a valid s' for some datapoints 
-        self.valid_indices = valid_indices
-
-        self.keys = list(keys) # prevent OmegaConf list performance problem
-        self.sequence_length = sequence_length
-        self.replay_buffer = replay_buffer
-        self.key_first_k = key_first_k
-        self.history_indices = history_indices
-    
-    def __len__(self):
-        return len(self.valid_indices)
-    
-    def key_zero_fill(self, key):
-        input_arr = self.replay_buffer[key]
-        
-        data = np.zeros(shape=(self.sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
-        
+        # done
         return data
-    
-    def get_sequence_by_key(self, idx, key):
-        """
-        given an index and a key, obtain the proper sequence of that key's data from the dataset.
-        """
-        
-        # extract the buffer and sample start/end indices
-        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
-            = self.indices[idx]
-    
-        # get this key's data from the r.b.
-        input_arr = self.replay_buffer[key]
 
-        # performance optimization, avoid small allocation if possible
-        if key not in self.key_first_k:
-            sample = input_arr[buffer_start_idx:buffer_end_idx]
-        else:
-            # performance optimization, only load used obs steps
-            # number of data points
-            n_data = buffer_end_idx - buffer_start_idx
 
-            # key first k nb data points
-            k_data = min(self.key_first_k[key], n_data)
+# class StepSampler:
+#     def __init__(self):
+#         buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx
 
-            # fill value with Nan to catch bugs
-            # the non-loaded region should never be used
-            sample = np.full((n_data,) + input_arr.shape[1:], fill_value=np.nan, dtype=input_arr.dtype)
+class EpisodeSampler:
+    def __init__(self):
+        self.indices = <>
 
-            # will throw if we try to access the non-loaded region
-            try:
-                # save the original data from the r.b. (SSD) into the sample in RAM
-                sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
-            except Exception as e:
-                import pdb; pdb.set_trace()
-
-        # save as data
-        data = sample
-
-        # zero-padding before the sample start or after the sample end
-        if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
-            # reset data to be full of zeros
-            data = self.key_zero_fill(key)
-
-            # copy the first sample into the first sample_start_idx elements
-            if sample_start_idx > 0:
-                data[:sample_start_idx] = sample[0]
-
-            # copy the last sample into the last `sequence_length - sample_end_idx` elements
-            if sample_end_idx < self.sequence_length:
-                data[sample_end_idx:] = sample[-1]
-
-            # copy the sample into the correct elements, based off the sample start/end indices
-            data[sample_start_idx:sample_end_idx] = sample
-        
-        return data
-        
-    def sample_sequence(self, valid_indices_idx):
-        """
-        Given an index, we want to return a sequence of data corresponding to that index. For B.C. we only need a sequence of (s, a), but for Q.L., we need a sequence of (s, a) a.k.a. the current state & current action, the single (r, not_done) values a.k.a. the current reward and current done, and a sequence of (s') a.k.a. the next state.
-        
-        Instead of saving s' with each s, which would about double the dataset size, let's be clever and simply save which indices correspond to s' when obtaining the indices for index idx.
-        
-        Furthermore, we may want to input a non-contiguous state history into our networks, so we want to have those indices available too.
-        """
-        
-        result = dict()
-
-        # we need to get the `self.indices` index to use from the self.valid_indices array
-        idx = self.valid_indices[valid_indices_idx]
-        
         # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
-        state_keys = [
+        self.state_keys = [
             "img",
             "img2",
             "state",
         ]
+
+    def __len__(self):
+        return len(self.indices)
+    
+    def get_history_indices(self, ep_idx):
+        """
+        ep_idx is the current time tc
+        """
+        # something like this
+        hist_arr = np.array([0, 5, 10])
+        ep_indices = ep_idx - hist_arr
+
+        return ep_indices
+    
+    def get_sample(self, ep_idx):
+        """
+        return dict with  (s, a, r, not_done, s')
+        """
+        # get the state episode indices
+        ep_indices = self.get_history_indices(ep_idx)
+
+        state_sample = {}
+
+        # iterate over state keys
+        for keystepsampler in self.key_step_samplers:
+            skey = keystepsampler.key
+            state_sample[skey] = keystepsampler.get_sample(ep_indices)
+
+
+
+class SequenceSampler:
+    """
+    Here's the issue. In order to shuffle datasets, the data must be laid out in a single iterable. But the organization of our data is in episodes -> steps. So it makes sense to structure our sampler's around episode classes which contain step classes.
+
+    But, to further compound the design problem, we use zarr to store our datasets on disk, which are linear in nature. We are only able to distinguish data in zarr into different episodes because of the `episode_ends` key in the zarr meta data.
+
+    More complicated: the sampler provides the ability to pad the beginning or end of episodes, which means the training nb of datapoints may be different from the real nb of datapoints. I'll _rb_ to refer to replay buffer datapoints, and _tr_ to refer to training datapoints
+    """
+    def __init__(self,
+        replay_buffer: ReplayBuffer, 
+                 ):
+        # the dataset's aka replay-buffer
+        self.replay_buffer = replay_buffer
+
+        # the training data-
+        self.episode_ends = 
+
+    def make_episodes(self):
+        """ Using the replay buffer's episode_ends, make episode sampler classes  """
+
+        for episode_end in self.replay_buffer.episode_ends:
+            # make the ep sampler
+            ep_sampler = EpisodeSampler()
+
+    def get_episode_and_index(self, idx):
+        # get the episode index
+        ep_idx = get_lower_bound_idx(self.episode_ends, idx)
+
+        # get the episode's replay buffer start index
+        ep_rb_idx = self.episode_ends[ep_idx]
+
+        # get this ep's relative datapoint index
+        ep_dp_idx = idx - ep_rb_idx
         
-        # get data for all keys for this index
-        for key in self.keys:
-            result[key] = self.get_sequence_by_key(idx, key)
-            
-        # get idx of next state
-        idx_next = get_next_index(self.replay_buffer.episode_ends, idx)
-            
-        # get data for the next state
-        for state in state_keys:
-            result[state + "_next"] = self.get_sequence_by_key(idx_next, state)
-            
-        # get indices from the history
-        history_indices = get_history_indices(self.replay_buffer.episode_ends, idx, self.history_indices)
-        
-        # get data from the history. Keys should be {3, 2, 1} for example, values should be {300, 305, 310} for example
-        for key, value in enumerate(history_indices):
-            # make the suffix
-            suffix = "_" + str(key)
-            
-            # iterate over state keys in the dataset
-            for state in state_keys:
-                # invalid value means we have to pad using all zeros
-                if value is None:
-                    result[state + suffix] = self.key_zero_fill(key)
-                    
-                # valid data index
-                else:
-                    result[state + suffix] = self.get_sequence_by_key(idx_next, state)
-            
-        # if episode is done, convert to np array
-        result["not_done"] = np.array(get_not_done(self.replay_buffer.episode_ends, idx))
-        
+
+
+    def get_sample(self, tr_idx):
+        """
+        tr_idx - training dataset index
+        """
+        # convert absolute idx into 
+        ep, ep_idx = self.get_episode_and_index(tr_idx)
+
+        # get the sample from the episode
+        sample = ep.get_sample(ep_idx)
+
         # we're done
-        return result
+        return sample
+

@@ -79,7 +79,7 @@ policy:
       shape:
       - 21
     obs:
-      agent_pos:
+      lowdim_obs:
         shape:
         - 35
         type: low_dim
@@ -100,7 +100,7 @@ shape_meta:
     shape:
     - 21
   obs:
-    agent_pos:
+    lowdim_obs:
       shape:
       - 35
       type: low_dim
@@ -136,7 +136,7 @@ task:
           shape:
           - 21
         obs:
-          agent_pos:
+          lowdim_obs:
             shape:
             - 35
             type: low_dim
@@ -186,7 +186,7 @@ task:
       shape:
       - 21
     obs:
-      agent_pos:
+      lowdim_obs:
         shape:
         - 35
         type: low_dim

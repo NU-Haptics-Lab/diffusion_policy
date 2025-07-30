@@ -253,16 +253,20 @@ class MetaDataset():
             
         # we're done
         return nobs, naction
+    
+    def batch_to_gpu(self, batch):
+        batch_gpu = dict_apply(batch, lambda x: x.to(self.device, non_blocking=True))
+        return batch_gpu
         
-    def normalize(self, obs_dict_np, idx):
-        # convert from numpy to torch, add a batch dimension, and transfer to the GPU
-        obs_dict = dict_apply(obs_dict_np, 
-                lambda x: torch.from_numpy(x).unsqueeze(0).to(self.device))
+    # def normalize_gpu(self, batch_gpu, idx):
+    #     # convert from numpy to torch, add a batch dimension, and transfer to the GPU
+    #     # batch_gpu = dict_apply(batch, 
+    #     #         lambda x: torch.from_numpy(x).unsqueeze(0).to(self.device))
         
-        # normalize the batch
-        ndata = self.normalize_batch(obs_dict, idx)
+    #     # normalize the batch
+    #     ndata = self.normalize_batch(batch_gpu, idx)
         
-        return ndata
+    #     return ndata
         
         
     def unnormalize(self, nresult):
@@ -302,64 +306,93 @@ class MetaDataset():
     # def unnormalize(self, nresult, normalizer):
     #     # TODO: when you want to unnormalize using the passed in normalizer
     #     pass
+
+    def next_batch(self, idx):
+
+        # dataset specific vars
+        iterator = self.dataset_iterators[idx]
+        normalizer = self.normalizers[idx]
+        dataloader = self.dataloaders[idx]
+        dataset = self.datasets[idx]
+        
+        try:
+            batch = next(iterator) # output: dict
+        # except can occur from a timeout or a StopIteration
+        # I'm still not sure why the timeout's are occuring, but this will get around it
+        except Exception as e:
+            print("next(iterator) except: ")
+            print(e)
+            print("len(dataset): ", len(dataset))
+            
+            # reshuffle this iterator
+            self.dataset_iterators[idx] = iter(dataloader)
+            iterator = self.dataset_iterators[idx]
+            
+            # get a new batch
+            batch = next(iterator) # output: dict
+        
+        # put on gpu
+        batch_gpu = self.batch_to_gpu(batch)
+        
+        # normalizer = dataset.get_normalizer()
+        ndata = self.normalize_batch(batch_gpu, idx)
+        
+        # we're done
+        return ndata
+
+    def concat_datas(self, ndatas):
+        """
+        Concatenate all data with the same key. Right now doesn't work with nested dicts...
+
+        ndatas - list of dicts of data on GPU
+        """
+        tensors = defaultdict(list)
+        out_d = {}
+
+        # flatten the data
+        for ndata in ndatas:
+            for key, val in enumerate(ndata):
+                # if it's a nested dict
+                if isinstance(val, dict):
+                    pass
+                    
+                else:
+                    tensors[key].append(val)
+                    
+        # concat the data
+        for key, val in enumerate(tensors):
+            out_d[key] = torch.cat(val)
+
+        # we're done
+        return out_d
+        
     
     # called each for-loop
     def __next__(self):
+        """
+        This method will assemble a single batch consisting of data from each dataset, with the ratio defined in the config yaml.
+        """
+        
         if self.count < self.num_batches:
             # increment our count
             self.count += 1
             
             # containers
             tensors = defaultdict(list)
+            ndatas = []
             
             # process each batch
             for idx in range(len(self.dataset_iterators)):
-                iterator = self.dataset_iterators[idx]
-                normalizer = self.normalizers[idx]
-                dataloader = self.dataloaders[idx]
-                dataset = self.datasets[idx]
-                
-                try:
-                    batch = next(iterator) # output: dict
-                # except can occur from a timeout or a StopIteration
-                # I'm still not sure why the timeout's are occuring, but this will get around it
-                except Exception as e:
-                    print("next(iterator) except: ")
-                    print(e)
-                    print("len(dataset): ", len(dataset))
-                    
-                    # reshuffle this iterator
-                    self.dataset_iterators[idx] = iter(dataloader)
-                    iterator = self.dataset_iterators[idx]
-                    
-                    # get a new batch
-                    batch = next(iterator) # output: dict
-                
-                # put on gpu
-                batch_gpu = dict_apply(batch, lambda x: x.to(self.device, non_blocking=True))
-                
-                # normalizer = dataset.get_normalizer()
-                nobs = normalizer.normalize(batch_gpu['obs'])
-                naction = normalizer['action'].normalize(batch_gpu['action'])
+                ndata = self.next_batch(idx)
 
-                # append to our dict of lists
-                tensors['image'].append(nobs['image'])
-                tensors['image2'].append(nobs['image2'])
-                tensors['agent_pos'].append(nobs['agent_pos'])
-                tensors['action'].append(naction)
-            
-            # construct out data dict. Using nobs and nactions to signify normalized tensors
-            data = {
-                'nobs': {
-                    'image': torch.cat(tensors['image']),
-                    'image2': torch.cat(tensors['image2']),
-                    'agent_pos': torch.cat(tensors['agent_pos']),
-                },
-                'naction': torch.cat(tensors['action'])
-            }
+                # add to list
+                ndatas.append(ndata)
+
+            # concatenate all data with the same key
+            out_d = self.concat_datas(ndatas)
                 
             # return the data
-            return data
+            return out_d
         else:    
             # we've done num_batches
             # print("Iteration done. Count: {}".format(self.count))
