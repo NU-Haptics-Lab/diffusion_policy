@@ -50,6 +50,9 @@ def get_obs_history_value(dict, history_index):
     
 
 class MetaDataset():
+    """
+    A superset of multiple datasets, used for co-training
+    """
     def __init__(self, num_batches, cfg):
         cfg_dataset = cfg.task.dataset
         ratios = cfg_dataset.ratios
@@ -253,10 +256,6 @@ class MetaDataset():
             
         # we're done
         return nobs, naction
-    
-    def batch_to_gpu(self, batch):
-        batch_gpu = dict_apply(batch, lambda x: x.to(self.device, non_blocking=True))
-        return batch_gpu
         
     # def normalize_gpu(self, batch_gpu, idx):
     #     # convert from numpy to torch, add a batch dimension, and transfer to the GPU
@@ -330,9 +329,6 @@ class MetaDataset():
             
             # get a new batch
             batch = next(iterator) # output: dict
-        
-        # put on gpu
-        batch_gpu = self.batch_to_gpu(batch)
         
         # normalizer = dataset.get_normalizer()
         ndata = self.normalize_batch(batch_gpu, idx)

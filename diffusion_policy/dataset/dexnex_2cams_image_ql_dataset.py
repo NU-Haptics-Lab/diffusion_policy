@@ -10,6 +10,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
 from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
+from diffusion_policy.globals import CONFIG
 
 """ 
 joint limits for the normalizer. Only thing that matters is the scale and offset. stat's aren't used in normalization
@@ -52,6 +53,18 @@ maxs = [0.5204, 1.3973, 0.4805, 0.5474, 1.4750, 0.5378, 0.5411, 1.4861, 0.5283]
 FINGERTIP_POS = np.stack((np.floor(mins), np.ceil(maxs)), axis=1)
 
 LIMITS = np.concatenate((JOINT_LIMITS, HAPTICS, FINGERTIP_POS), axis=0, dtype='float32')
+
+class Batch:
+    """
+    Maintain a batch & associated state info
+    """
+    def __init__(self, idx=None, batch=None):
+        self.idx = idx
+        self.batch = batch
+
+    def Set(self, batch, idx):
+        self.batch = batch
+        self.idx = idx
 
 class DexNexDataset(BaseImageDataset):
     def __init__(self,
@@ -115,6 +128,7 @@ class DexNexDataset(BaseImageDataset):
         self.state_length = state_length
         self.n_obs_steps = n_obs_steps
         self.history_indices = history_indices
+        self.device = torch.device(CONFIG.training.device)
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
@@ -202,11 +216,23 @@ class DexNexDataset(BaseImageDataset):
         
         return data
     
+    def batch_to_gpu(self, batch):
+        batch_gpu = dict_apply(batch, lambda x: x.to(self.device, non_blocking=True))
+        return batch_gpu
+    
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """
+        Return a single sample from the dataset
+        """
+        # get sample from the sampler, axes are [B, T, ...], B - batch, T - trajectory
         sample = self.sampler.sample_sequence(idx)
         
+        # convert the sample to a neural net compatible data dict 
         data = self._sample_to_data(sample)
+
+        # put in a torch array
         torch_data = dict_apply(data, torch.from_numpy)
+
         return torch_data
 
 
