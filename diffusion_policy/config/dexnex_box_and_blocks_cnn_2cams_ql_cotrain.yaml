@@ -1,3 +1,5 @@
+# debugging
+debug: true
 
 # common data
 shape_meta:
@@ -28,7 +30,7 @@ policy:
   state_length: {shape_meta.obs.lowdim_obs.shape}
 
 common_dataset:
-  _target_: diffusion_policy.dataset.dexnex_2cams_image_ql_dataset.DexNexDataset
+  _target_: diffusion_policy.dataset.sars.SARSDataset
   n_obs_steps : ${policy.n_obs_steps}
   horizon : ${policy.horizon}
   state_length : ${policy.state_length}
@@ -39,24 +41,39 @@ common_dataset:
   history_indices: [15, 10, 5] # 0.5s skip, with 0.1s dt, get state from 1.5s, 1.0s, and 0.5s ago
   max_train_episodes: null
   shape_meta: ${shape_meta}
+
+  # child
+  sampler:
+    _target_: diffusion_policy.common.sars_sampler:DatasetSampler
+
+    # child
+
   
 common_wbatch_loss:
-  block_transfer:
-    _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+
+  # children
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
 
     # children
-    batch_loss:
-      _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.BatchLoader
 
       # children
-      batch_loader:
-        _target_: diffusion_policy.dataset.batch_loader.BatchLoader
-
-        # children
-        dataset: 
-          {common_dataset}
+      dataset: 
+        {common_dataset}
 
 data_directory: /media/dexnex_ssd/data/bnb/
+
+# replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader:ReplayBufferLoader
+  rb_paths:
+    - {data_directory}bt.reward.zarr
+    - {data_directory}1cam.reward.zarr
+    - {data_directory}2cam.reward.zarr
+
 
 
 # training entry point
@@ -67,6 +84,7 @@ session_trainer:
   # children
   epoch_trainer:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: 10 # testing
 
     # children
     step_trainer: 
@@ -76,12 +94,13 @@ session_trainer:
       w_batch_losses:
         block_transfer: {common_wbatch_loss}
         block_transfer.weight: 0.25
-        block_transfer.batch_loss.batch_loader.dataset.zarr_path: {data_directory}bt.reward.zarr
+        block_transfer.batch_loss.batch_loader.dataset.sampler.rb_id: block_transfer
 
         bnb_1cam: {common_wbatch_loss}
         bnb_1cam.weight: 0.25
-        bnb_1cam.batch_loss.batch_loader.dataset.zarr_path: {data_directory}1cam.reward.zarr
+        bnb_1cam.batch_loss.batch_loader.dataset.sampler.rb_id: bnb_1cam
 
         bnb_2cam: {common_wbatch_loss}
         bnb_2cam.weight: 0.5
-        bnb_2cam.batch_loss.batch_loader.dataset.zarr_path: {data_directory}2cam.reward.zarr
+        bnb_2cam.batch_loss.batch_loader.dataset.sampler.rb_id: bnb_2cam
+        

@@ -11,11 +11,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
+from diffusion_policy.common.replay_buffer_loader import ReplayBufferLoader
 
 """
 Global config access
 """
 
-CONFIG: OmegaConf
+CONFIG: OmegaConf = None
 
-DATASET: BaseImageDataset
+DATASET: BaseImageDataset = None
+
+REPLAY_BUFFER_LOADER: ReplayBufferLoader = None

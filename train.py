@@ -30,7 +30,10 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 import click
 
 # global config
-from diffusion_policy.config.config import CONFIG
+from diffusion_policy.globals import CONFIG
+from diffusion_policy.globals import REPLAY_BUFFER_LOADER
+# from diffusion_policy.globals import CONFIG
+
 from diffusion_policy.trainers.session_trainer import SessionTrainer
 
 # to combat dataloader deadlock
@@ -52,10 +55,10 @@ def main(cfg: OmegaConf):
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
     OmegaConf.resolve(cfg)
-
-    # spin up the batch loader
-    global BATCH_LOADER
-    BATCH_LOADER = hydra.utils.instantiate(CONFIG.batch_loader)
+    
+    # spin up the replay buffer loader
+    global REPLAY_BUFFER_LOADER
+    REPLAY_BUFFER_LOADER = hydra.utils.instantiate(CONFIG.replay_buffer_loader)
 
     # spin up the session trainer
     cls = hydra.utils.get_class(cfg._target_)

@@ -8,7 +8,7 @@ from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
 from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
 from diffusion_policy.common.normalize_util import get_identity_normalizer_from_stat
-from diffusion_policy.dataset.dexnex_2cams_image_ql_dataset import DexNexDataset
+from diffusion_policy.dataset.base_dataset import BaseImageDataset
 
 """ 
 joint limits for the normalizer. Only thing that matters is the scale and offset. stat's aren't used in normalization
@@ -161,7 +161,7 @@ class BatchLoader:
     I've put the normalizer here because we only normalize after getting a full batch (on GPU btw), which happens one level above the data-loader, and the dataset sits below the data-loader
     """
     def __init__(self,
-            dataset: DexNexDataset
+            dataset: BaseImageDataset
             ):
         self.dataset = dataset
         self.dataloader = DataLoader(self.dataset,

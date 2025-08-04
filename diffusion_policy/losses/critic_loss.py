@@ -22,7 +22,7 @@ another decision to make: which action to start with. We pass partially noised a
 
 """
 
-class QLTrainer:
+class CriticLoss:
     def __init__(self,
                  actor,
                  ema_actor,

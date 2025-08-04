@@ -128,7 +128,7 @@ class Indices:
         
         if not self.episode_mask[i]:
             # skip episode
-            continue
+            return
 
         # set up start index
         start_idx = 0
@@ -427,10 +427,11 @@ class DatasetSampler:
     More complicated: the sampler provides the ability to pad the beginning or end of episodes, which means the training nb of datapoints may be different from the real nb of datapoints. I'll _rb_ to refer to replay buffer datapoints, and _tr_ to refer to training datapoints
     """
     def __init__(self,
-        replay_buffer: ReplayBuffer, 
+        rb_id: str, 
                  ):
         # the dataset's aka replay-buffer
-        self.replay_buffer = replay_buffer
+        self.rb_id = rb_id
+        self.replay_buffer = REPLAY_BUFFER_LOADER[self.rb_id]
 
         # episode classes
         self.ep_samplers = []

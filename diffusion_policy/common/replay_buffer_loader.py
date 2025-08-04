@@ -18,3 +18,6 @@ class ReplayBufferLoader:
 
             print("Replay buffer nb datapoints: ", self.rbs[key].n_steps) 
             print("Replay buffer nb episodes: ", self.rbs[key].n_episodes) 
+            
+    def __getitem__(self, key):
+        return self.rb_paths[key]

@@ -1,8 +1,8 @@
 import diffusion_policy.globals
 
 from diffusion_policy.dataset.batch_loader import BatchLoader
-from diffusion_policy.trainers.actor_trainer import ActorTrainer
-from diffusion_policy.losses.critic_loss import CriticTrainer
+from diffusion_policy.losses.actor_loss import ActorLoss
+from diffusion_policy.losses.critic_loss import CriticLoss
 
 
 class BatchLoss:

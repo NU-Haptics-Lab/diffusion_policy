@@ -8,9 +8,12 @@ class EpochTrainer:
     """
 
     def __init__(self,
-            step_trainer: StepTrainer
+            step_trainer: StepTrainer,
+            nb_batches: int
             ):
         self.step_trainer = step_trainer
+        self.nb_batches = nb_batches
+        
 
 
     def train(self):
@@ -18,16 +21,12 @@ class EpochTrainer:
         Train for one epoch. 
         Done once we've gone through the entire dataset...? Doesn't quite work with co-training off multiple datasets
         """
-        done = False
-        while not done:
+        for nb in range(self.nb_batches):
             # train for one batch
             self.step_trainer.train()
 
             # end of batch logging
             pass
-
-            # check if done?
-            done = <>
 
         # end of epoch stuff
         pass
