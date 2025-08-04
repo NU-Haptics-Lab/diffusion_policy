@@ -13,7 +13,17 @@ from diffusion_policy.common.normalize_util import get_range_normalizer_from_sta
 from diffusion_policy.globals import CONFIG
 
 
-class DexNexDataset(BaseImageDataset):
+class SARSDataset(BaseImageDataset):
+    """
+    Dataset to provide (s, a, r, s') samples to a torch dataloader. Formerly named dexnex_2cams_image_ql_dataset.py:DexNexDataset but that name isn't descriptive.
+
+    s and s' are actually observations.
+
+    zarr dataset keys:
+    - img
+    - img2
+    - state
+    """
     def __init__(self,
             shape_meta: dict,
             zarr_path, 
@@ -41,6 +51,8 @@ class DexNexDataset(BaseImageDataset):
         ## block taken from real_pusht_image_dataset.py for huge training speedup
         rgb_keys = ['img', 'img2']
         lowdim_keys = ['state']
+
+        self.dataset_keys = rgb_keys + lowdim_keys
         
         key_first_k = dict()
         if n_obs_steps is not None:
@@ -101,13 +113,6 @@ class DexNexDataset(BaseImageDataset):
         # this slice does nothing (takes all)
         T_slice = slice(self.n_obs_steps) # trajectory slice
         
-        # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
-        state_keys = [
-            "img",
-            "img2",
-            "state",
-        ]
-        
         agent_pos = sample['state' + suffix][T_slice][:, :self.state_length].astype(np.float32)
         
         # Moveaxis moved to the dataset generation script to save training time
@@ -125,9 +130,9 @@ class DexNexDataset(BaseImageDataset):
         
 
     def _sample_to_data(self, sample):
-        # image = sample['img']
-        # image2 = sample['img2']
+        """
         
+        """
         # collate this state
         state = self._collate_state(sample)
 
@@ -141,11 +146,6 @@ class DexNexDataset(BaseImageDataset):
         
         # next state
         data['obs_next'] = self._collate_state(sample, suffix="_next")
-        
-        # history of states
-        for val in self.history_indices:
-            suffix = "_" + str(val)
-            data['obs' + suffix] = self._collate_state(sample, suffix=suffix)
         
         return data
     
@@ -163,15 +163,3 @@ class DexNexDataset(BaseImageDataset):
         torch_data = dict_apply(data, torch.from_numpy)
 
         return torch_data
-
-
-def test():
-    import os
-    zarr_path = os.path.expanduser('~/dev/diffusion_policy/data/pusht/pusht_cchi_v7_replay.zarr')
-    dataset = DexNexDataset(zarr_path, horizon=16)
-
-    # from matplotlib import pyplot as plt
-    # normalizer = dataset.get_normalizer()
-    # nactions = normalizer['action'].normalize(dataset.replay_buffer['action'])
-    # diff = np.diff(nactions, axis=0)
-    # dists = np.linalg.norm(np.diff(nactions, axis=0), axis=-1)

@@ -332,13 +332,6 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 CONFIG.ema,
                 model=self.ema_model)
 
-        # # configure env
-        # env_runner: BaseImageRunner
-        # env_runner = hydra.utils.instantiate(
-        #     CONFIG.task.env_runner,
-        #     output_dir=self.output_dir)
-        # assert isinstance(env_runner, BaseImageRunner)
-
         # configure logging
         wandb_run = wandb.init(
             dir=str(self.output_dir),

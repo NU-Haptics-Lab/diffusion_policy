@@ -9,6 +9,70 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.model.common.dict_of_tensor_mixin import DictOfTensorMixin
 
 
+class NestedNormalizer(DictOfTensorMixin):
+    """
+    Expands LinearNormalizer functionality to allow arbitarily deep nested structures, where each branch is a NestedNormalizer and each leaf is a LinearNormalizer
+
+    example usage:
+    nn = NestedNormalizer()
+    obs = LinearNormalizer
+    obs["image"] = get_image_range_normalizer()
+
+    nn['obs'] = obs
+    ...
+    nn.normalize( {'obs': {'image': image_data}} )
+    """
+    def __init__(self, params_dict=None):
+        super().__init__(params_dict)
+        self.nested = {}
+
+    def __getitem__(self, key: str):
+        return self.nested[key]
+
+    def __setitem__(self, key: str , value: Union[Dict, 'LinearNormalizer']):
+        self.nested[key] = value
+
+    def recurse(self, input, key=None):
+        """
+        if input is data, return value will be data
+        if input is a dict, return value will be a dict
+        """
+        # it's data
+        if not isinstance(input, dict):
+            if key is None:
+                print("This should never happen")
+                raise
+            else:
+                ninput = self[key].normalize(input)
+
+        # it's a dict
+        else:
+            ninput = {}
+            # iterate through
+            for key2, val2 in enumerate(input):
+                # get the nested normalizer
+                n2 = self[key2]
+
+                # recurse
+                ninput2 = recurse(val2, n2)
+
+                # put into output dict
+                ninput[key] = ninput2
+
+        return ninput
+    
+    def normalize(self, dd: dict):
+        """
+        dd - an nested data dictionary
+        example:
+        dd = {
+            'obs': {
+                'image': image_data
+            }
+        }
+        """
+        ndd = self.recurse(dd)
+
 class LinearNormalizer(DictOfTensorMixin):
     avaliable_modes = ['limits', 'gaussian']
     

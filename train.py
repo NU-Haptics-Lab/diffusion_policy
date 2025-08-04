@@ -31,6 +31,7 @@ import click
 
 # global config
 from diffusion_policy.config.config import CONFIG
+from diffusion_policy.trainers.session_trainer import SessionTrainer
 
 # to combat dataloader deadlock
 import torch.multiprocessing
@@ -52,16 +53,16 @@ def main(cfg: OmegaConf):
     # will use the same time.
     OmegaConf.resolve(cfg)
 
-    # spin up the dataset
-    global DATASET
-    DATASET = hydra.utils.instantiate(CONFIG.dataset)
+    # spin up the batch loader
+    global BATCH_LOADER
+    BATCH_LOADER = hydra.utils.instantiate(CONFIG.batch_loader)
 
-    # spin up the workspace
+    # spin up the session trainer
     cls = hydra.utils.get_class(cfg._target_)
-    workspace: BaseWorkspace = cls(cfg)
+    session_trainer = hydra.utils.instantiate(CONFIG.session_trainer)
 
     # run it
-    workspace.run()
+    session_trainer.train()
 
 if __name__ == "__main__":
     # only need the following if using my meta dataset

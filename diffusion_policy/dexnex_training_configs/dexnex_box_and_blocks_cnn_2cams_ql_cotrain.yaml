@@ -125,7 +125,7 @@ val_dataloader:
   persistent_workers: false
   pin_memory: false
   shuffle: false
-task:
+batch_loader:
   dataset:
     _target_: diffusion_policy.dataset.dexnex_meta_2cams_dataset.MetaDataset
     dataset:
@@ -176,6 +176,8 @@ task:
     num_val_batches: 25
     batch_size: 64
 
+
+task:
   image_shape:
   - 3
   - 192

@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
 
+from diffusion_policy.model.trunk import Trunk
+from diffusion_policy.model.branch import Branch
+from diffusion_policy.model.tree import Tree
+
 # example, from https://github.com/NU-Haptics-Lab/Diffusion-Policies-for-Offline-RL#
 
 
@@ -34,16 +38,50 @@ class QLDenser(nn.Module):
     def forward(self, input):
         x = self.model(input)
         return x
+    
+class QLBranch(nn.Module):
+    def __init__(self, input_dim, hidden_dim=256):
+        super().__init__()
+        
+        self.model = nn.Sequential(nn.Linear(input_dim, hidden_dim),
+                    nn.Mish(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.Mish(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.Mish(),
+                    nn.Linear(hidden_dim, 1))
+        
+    def forward(self, input):
+        x = self.model(input)
+        return x
 
 class QLModel(nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         
         # construct the image encoder
-        self.image_encoder = QLImageEncoder()
+        image_encoder = QLImageEncoder()
         
         # construct the denser part of the network
-        self.denser = QLDenser(<>)
+        denser = QLDenser(<>)
+
+        # trunk
+        trunk = Trunk(
+            image_encoder,
+            denser
+        )
+
+        # branches
+        branches = {}
+        for key, val in enumerate(CONFIG.datasets):
+            branches[key] = Branch(QLBranch())
+
+        # tree
+        self.tree = Tree(trunk, branches)
+
+    def forward(self, input, key):
+        x = self.tree.forward(input, key)
+        return x
         
     
 
