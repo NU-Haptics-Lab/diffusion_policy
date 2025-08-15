@@ -12,7 +12,7 @@ class ReplayBufferLoader:
 
         # load replay buffers
         self.rbs = {}
-        for key, val in enumerate(self.rb_paths):
+        for key, val in self.rb_paths.items():
             # this will load directly from disk, and not into RAM. There's no noticeable slowdown. You really don't want to load into RAM, so that we don't save the entire dataset into each checkpoint during pickling
             self.rbs[key] = ReplayBuffer.create_from_path(val)
 
@@ -20,4 +20,4 @@ class ReplayBufferLoader:
             print("Replay buffer nb episodes: ", self.rbs[key].n_episodes) 
             
     def __getitem__(self, key):
-        return self.rb_paths[key]
+        return self.rbs[key]

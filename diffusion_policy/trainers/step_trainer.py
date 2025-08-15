@@ -25,7 +25,7 @@ class StepTrainer:
         total_loss = torch.tensor([0.0], requires_grad=True)
 
         # iterate over the batch losses and get the total loss
-        for key, batch_loss in enumerate(self.w_batch_losses):
+        for key, batch_loss in self.w_batch_losses.items():
             loss = batch_loss.compute_weighted_loss()
 
             total_loss += loss

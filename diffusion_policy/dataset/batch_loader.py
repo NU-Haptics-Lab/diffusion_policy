@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.globals import CONFIG
+import diffusion_policy.globals as globals
 from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
@@ -172,7 +172,7 @@ class BatchLoader:
         
         self.nested_data_array = NestedDataArray()
         
-        self.device = torch.device(CONFIG.training.device)
+        self.device = torch.device(globals.CONFIG.training.device)
 
     def init_normalizer(self):
         """

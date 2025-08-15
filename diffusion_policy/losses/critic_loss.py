@@ -1,7 +1,7 @@
 from typing import Any
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 import hydra
-import diffusion_ql
+from diffusion_policy.model.diffusion_ql.trainer import DiffusionQL
 
 """
 reference paper: https://arxiv.org/pdf/2208.06193
@@ -26,7 +26,7 @@ class CriticLoss:
     def __init__(self,
                  actor,
                  ema_actor,
-                 critic: diffusion_ql.DiffusionQL,
+                 critic: DiffusionQL,
                  cfg
                  ) -> None:
         """
@@ -61,7 +61,7 @@ class CriticLoss:
         Take the current state, run it through the actor to get actions, then run the (state, action) tuple through the critic to get a predicted cumulative reward, then compute a loss. This method returns that loss.
         
         [TODO]
-        This is exactly the same as the Diffusion-QL repo, the downside however is that we have to do denoising twice per step, once on this state and once on the next state. If this proves very slow to train, then a potential optimization is to do critic training on the previous state & this state so we only have to denoise once per step.
+        This is exactly the same as the Diffusion-QL repo, the downside however is that we have to do denoising twice per step, once on this state and once on the next state. If this proves to be very slow to train, then a potential optimization is to do critic training on the previous state & this state so we only have to denoise once per step.
         """
         new_action = self.Denoise(nbatch['nobs'])
         
@@ -69,5 +69,7 @@ class CriticLoss:
         next_action = self.Denoise(nbatch['nobs_next'])
         
         # returns loss, metric
-        return self.critic.Step(nbatch, new_action, next_action)
+        loss, metric = self.critic.Step(nbatch, new_action, next_action)
+        
+        return loss, metric
         

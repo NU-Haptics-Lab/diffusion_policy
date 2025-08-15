@@ -30,9 +30,7 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 import click
 
 # global config
-from diffusion_policy.globals import CONFIG
-from diffusion_policy.globals import REPLAY_BUFFER_LOADER
-# from diffusion_policy.globals import CONFIG
+import diffusion_policy.globals as globals
 
 from diffusion_policy.trainers.session_trainer import SessionTrainer
 
@@ -49,25 +47,26 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 )
 def main(cfg: OmegaConf):
     # save config into the global config
-    global CONFIG
-    CONFIG = cfg
+    globals.CONFIG = cfg
     
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
-    OmegaConf.resolve(cfg)
+    OmegaConf.resolve(globals.CONFIG)
+    
+    # apply overrides, much faster than merge
+    OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override)
     
     # spin up the replay buffer loader
-    global REPLAY_BUFFER_LOADER
-    REPLAY_BUFFER_LOADER = hydra.utils.instantiate(CONFIG.replay_buffer_loader)
+    globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader)
 
     # spin up the session trainer
-    cls = hydra.utils.get_class(cfg._target_)
-    session_trainer = hydra.utils.instantiate(CONFIG.session_trainer)
+    # cls = hydra.utils.get_class(cfg._target_)
+    session_trainer = hydra.utils.instantiate(globals.CONFIG.session_trainer)
 
     # run it
     session_trainer.train()
 
 if __name__ == "__main__":
     # only need the following if using my meta dataset
-    torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
+    # torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
     main()

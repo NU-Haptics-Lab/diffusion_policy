@@ -3,8 +3,7 @@ import numpy as np
 import numba
 import hydra
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.globals import CONFIG
-from diffusion_policy.globals import REPLAY_BUFFERS
+import diffusion_policy.globals as globals
 
 
 
@@ -80,11 +79,10 @@ def get_not_done(
 class Indices:
     def __init__(self,
         rb_id: str,
-        key_first_k,
+        key_first_k: dict,
         episode_length: int, 
         rb_offset: int,
         sequence_length : int, 
-        episode_mask : np.ndarray,
         pad_before : int=0, 
         pad_after : int=0,
         debug : bool=True
@@ -94,12 +92,11 @@ class Indices:
         self.episode_length = episode_length
         self.rb_offset = rb_offset
         self.sequence_length = sequence_length
-        self.episode_mask = episode_mask
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.debug = debug
 
-        self.replay_buffer = REPLAY_BUFFERS[self.rb_id]
+        self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
         self.indices = []
         
         
@@ -125,16 +122,12 @@ class Indices:
 
         # for R.L., we don't want to use the last datapoint in the episode because then we wouldn't have a valid next_state for the 2nd to last datapoint in the episode
         use_last_datapoint_in_episode = False
-        
-        if not self.episode_mask[i]:
-            # skip episode
-            return
 
         # set up start index
         start_idx = 0
 
         # set up end index
-        end_idx = self.episode_length
+        end_idx = self.episode_end
 
         # episode length is relative
         episode_length = end_idx - start_idx
@@ -332,8 +325,8 @@ class EpisodeSampler:
         # self.tr_offset = tr_offset
         self.rb_offset = rb_offset
 
-        # make using the config for this dataset
-        self.indices: Indices = hydra.utils.instantiate(CONFIG.indices,
+        # make using the config for this dataset. Could move this to the constructor
+        self.indices: Indices = hydra.utils.instantiate(globals.CONFIG.indices,
             rb_offset = self.rb_offset
                                                         )
 
@@ -431,7 +424,7 @@ class DatasetSampler:
                  ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
-        self.replay_buffer = REPLAY_BUFFER_LOADER[self.rb_id]
+        self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
 
         # episode classes
         self.ep_samplers = []
@@ -448,16 +441,21 @@ class DatasetSampler:
 
         # first ep offset
         self.tr_ep_offsets = [tr_ep_offset]
+        rb_offset = 0
 
         # one episode sampler per episode
         for episode_end in self.replay_buffer.episode_ends:
+            # if skip? previously episode_mask
+            <>
+            
             # make the ep sampler
             ep_sampler = EpisodeSampler(
-                episode_end
+                rb_offset
             )
 
             # add the length of the training episode
             tr_ep_offset += len(ep_sampler)
+            rb_offset += episode_end
 
             self.ep_samplers.append(ep_sampler)
             self.tr_ep_offsets.append(tr_ep_offset)

@@ -1,6 +1,5 @@
 
 import torch
-import diffusion_policy.model.diffusion_ql.trainer as trainer
 
 import copy
 import numpy as np
@@ -9,10 +8,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from model.diffusion.ema_model import EMAModel
+from diffusion_policy.model.diffusion.ema_model import EMAModel
 
 """
 Based on this paper: https://arxiv.org/pdf/2208.06193
+and this associated repo: https://github.com/Zhendong-Wang/Diffusion-Policies-for-Offline-RL 
 """
 
 class DiffusionQL(object):
