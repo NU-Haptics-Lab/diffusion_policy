@@ -164,11 +164,16 @@ class BatchLoader:
             dataset: BaseImageDataset
             ):
         self.dataset = dataset
+        
+        # make the training data loader
         self.dataloader = DataLoader(self.dataset,
             batch_size=dataset_batch_size,
             timeout=self.timeout,
             num_workers=num_workers[idx],
             **cfg.dataloader)
+        
+        # make the validation data loader
+        self.val_dataloader
         
         self.nested_data_array = NestedDataArray()
         

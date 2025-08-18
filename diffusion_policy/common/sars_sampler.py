@@ -5,6 +5,9 @@ import hydra
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
 
+import copy
+from omegaconf import OmegaConf, open_dict
+
 
 
 def get_lower_bound_idx(sorted_array, value):
@@ -77,20 +80,23 @@ def get_not_done(
     return not_done
 
 class Indices:
+    """
+    Class to generate training indices for each episode. Each episode has 1 instance of this class.
+    
+    
+    """
     def __init__(self,
         rb_id: str,
-        key_first_k: dict,
-        episode_length: int, 
         rb_offset: int,
+        episode_end: int, 
         sequence_length : int, 
         pad_before : int=0, 
         pad_after : int=0,
         debug : bool=True
         ):
         self.rb_id = rb_id
-        self.key_first_k = key_first_k
-        self.episode_length = episode_length
         self.rb_offset = rb_offset
+        self.episode_end = episode_end
         self.sequence_length = sequence_length
         self.pad_before = pad_before
         self.pad_after = pad_after
@@ -98,6 +104,12 @@ class Indices:
 
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
         self.indices = []
+        
+        self.key_first_k = dict()
+        if globals.CONFIG.n_obs_steps is not None:
+            # only take first k obs from images
+            for key in rgb_keys + lowdim_keys:
+                key_first_k[key] = globals.CONFIG.n_obs_steps
         
         
     def create_indices(self
@@ -124,7 +136,7 @@ class Indices:
         use_last_datapoint_in_episode = False
 
         # set up start index
-        start_idx = 0
+        start_idx = self.rb_offset
 
         # set up end index
         end_idx = self.episode_end
@@ -215,7 +227,7 @@ class Indices:
         buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
             = self.indices[idx]
         
-        # add on the episode replay buffer offset
+        # add on the episode's replay buffer offset
         buffer_start_idx += self.rb_offset
         buffer_end_idx   += self.rb_offset
         sample_start_idx += self.rb_offset
@@ -315,22 +327,34 @@ def downsample_mask(mask, max_n, seed=0):
 
 class EpisodeSampler:
     """
-    Get samples from an episode
+    Get a sample from an episode
     """
     def __init__(self,
             # indices: Indices,
             # tr_offset,
-            rb_offset
+            rb_id,
+            rb_offset,
+            rb_ep_end
             ):
         # self.tr_offset = tr_offset
+        self.rb_id = rb_id
         self.rb_offset = rb_offset
+        self.rb_ep_end = rb_ep_end
+        
+        # copy config for indices
+        indices_cfg = copy.deepcopy(globals.CONFIG.common_indices)
+        
+        # update indices cfg
+        with open_dict(indices_cfg):
+            indices_cfg.rb_id = self.rb_id
+            indices_cfg.key_first_k = <>
+            indices_cfg.rb_offset = self.rb_offset
+            indices_cfg.episode_end = self.rb_ep_end
 
-        # make using the config for this dataset. Could move this to the constructor
-        self.indices: Indices = hydra.utils.instantiate(globals.CONFIG.indices,
-            rb_offset = self.rb_offset
-                                                        )
+        # make using the config for this dataset. Could move this to the constructor?
+        self.indices: Indices = hydra.utils.instantiate(indices_cfg)
 
-
+        # make the training indices
         self.indices.create_indices()
 
         # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
@@ -346,6 +370,14 @@ class EpisodeSampler:
     def __len__(self):
         return len(self.indices)
     
+    def get_history_indices(self, ep_idx):
+        """
+        ep_idx is the current time tc
+        """
+        # something like this
+        hist_arr = np.array([0, 5, 10])
+        ep_indices = ep_idx - hist_arr
+    
     def get_not_done(self, ep_idx):
         # last valid sample in the ep => second to last ep_idx, and don't forget python is zero-indexed.
 
@@ -354,14 +386,6 @@ class EpisodeSampler:
         not_done = not done
         # not_done = np.array(not_done)
         return not_done
-    
-    def get_history_indices(self, ep_idx):
-        """
-        ep_idx is the current time tc
-        """
-        # something like this
-        hist_arr = np.array([0, 5, 10])
-        ep_indices = ep_idx - hist_arr
 
         return ep_indices
 
@@ -383,16 +407,31 @@ class EpisodeSampler:
         ep_indices = self.get_history_indices(ep_idx)
 
         sample = {}
+        
+        # construct the indices
+        indices = <>
 
         # iterate over obs keys
         for key in self.obs_keys:
-            sample[key] = self.indices.get_history_by_key(ep_indices, key)
+            sample[key] = self.indices.get_sequence_by_key(indices, key)
 
         return sample
     
     def get_key_sample(self, key, ep_idx):
+        """
+        Get sequence by key
+        """
         data = self.indices.get_sequence_by_key(ep_idx, key)
         return data
+    
+    def get_action_sample(self, ep_idx):
+        """
+        For an action, we want a sequence from ep_idx to ep_idx + horizon
+        """
+        range1 = range(0, horizon)
+        sample = self.get_key_sample("action", ep_idx, range1)
+        
+        return sample
 
     
     def get_sample(self, ep_idx):
@@ -403,7 +442,7 @@ class EpisodeSampler:
         sample["obs"] = self.get_obs_sample(ep_idx)
         sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
 
-        sample["action"] = self.get_key_sample(self.action_key, ep_idx)
+        sample["action"] = self.get_action_sample(ep_idx)
 
         sample["reward"] = self.get_key_sample(self.reward_key, ep_idx)
 
@@ -450,7 +489,9 @@ class DatasetSampler:
             
             # make the ep sampler
             ep_sampler = EpisodeSampler(
-                rb_offset
+                self.rb_id,
+                rb_offset,
+                episode_end
             )
 
             # add the length of the training episode

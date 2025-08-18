@@ -34,7 +34,7 @@ class StepTrainer:
         total_loss.backward()
 
         # step optimizer
-        if self.global_step % CONFIG.training.gradient_accumulate_every == 0:
+        if self.global_step % globals.CONFIG.training.gradient_accumulate_every == 0:
             self.optimizer.step()
             self.optimizer.zero_grad()
             lr_scheduler.step()

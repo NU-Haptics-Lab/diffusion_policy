@@ -1,6 +1,7 @@
 # globals
 debug: true
-horizon: 16
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] # 0 is current idx, negative number is in the past, positive number is in the future
+obs_rel_indices: [-15, -10, -5, 0]
 
 # common data
 shape_meta:
@@ -26,54 +27,20 @@ shape_meta:
       type: rgb
 
 common_policy:
-  n_obs_steps: 1
+  n_obs_steps: ${n_obs_steps}
   horizon: ${horizon}
   state_length: ${shape_meta.obs.lowdim_obs.shape}
 
-common_dataset:
-  _target_: diffusion_policy.dataset.sars.SARSDataset
-  n_obs_steps : ${policy.n_obs_steps}
-  horizon : ${horizon}
-  state_length : ${policy.state_length}
-  pad_after: 7 # afaik these are w.r.t. beginning's and ends of episodes
-  pad_before: 1 # afaik these are w.r.t. beginning's and ends of episodes
-  seed: 42
-  val_ratio: 0.02
-  history_indices: [15, 10, 5] # 0.5s skip, with 0.1s dt, get state from 1.5s, 1.0s, and 0.5s ago
-  max_train_episodes: null
-  shape_meta: ${shape_meta}
-
-  # child
-  sampler:
-    _target_: diffusion_policy.common.sars_sampler.DatasetSampler
-    rb_id: "default"
-
-    # child
 
   
-common_wbatch_loss:
-  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
-  weight: 1.0
-
-  # children
-  batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.BatchLoss
-
-    # children
-    batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.BatchLoader
-
-      # children
-      dataset: 
-        ${common_dataset}
 
 
 common_indices:
   _target_: diffusion_policy.common.sars_sampler.Indices
   rb_id: default
   key_first_k: {}
-  episode_length: 0
   rb_offset: 0
+  episode_end: 0
   sequence_length: ${horizon}
   pad_before: 1
   pad_after: 7
@@ -82,7 +49,7 @@ common_indices:
 
 data_directory: /media/dexnex_ssd/data/bnb/
 
-# replay buffer loader entry point
+# NODE -- replay buffer loader entry point
 replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
   rb_paths:
@@ -92,7 +59,7 @@ replay_buffer_loader:
 
 
 
-# training entry point
+# NODE -- training entry point
 session_trainer:
   _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
   nb_epochs: 1000
@@ -111,6 +78,42 @@ session_trainer:
         block_transfer: ${common_wbatch_loss}
         bnb_1cam: ${common_wbatch_loss}
         bnb_2cams: ${common_wbatch_loss}
+
+common_wbatch_loss:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  # children
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+
+    # children
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.BatchLoader
+
+      # children
+      dataset: 
+        ${common_dataset}
+
+common_dataset:
+  _target_: diffusion_policy.dataset.sars.SARSDataset
+  n_obs_steps : ${policy.n_obs_steps}
+  horizon : ${horizon}
+  state_length : ${policy.state_length}
+  pad_after: 7 # these are w.r.t. beginning's and ends of episodes
+  pad_before: 1 # these are w.r.t. beginning's and ends of episodes
+  seed: 42
+  val_ratio: 0.02
+  history_indices: [15, 10, 5] # 0.5s skip, with 0.1s dt, get obs from 1.5s, 1.0s, and 0.5s ago
+  max_train_episodes: null
+  shape_meta: ${shape_meta}
+
+  # child
+  sampler:
+    _target_: diffusion_policy.common.sars_sampler.DatasetSampler
+    rb_id: "default"
+
+    # child
 
         
 override:
