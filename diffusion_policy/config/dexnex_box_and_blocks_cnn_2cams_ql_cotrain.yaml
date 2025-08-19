@@ -96,22 +96,19 @@ common_wbatch_loss:
         ${common_dataset}
 
 common_dataset:
-  _target_: diffusion_policy.dataset.sars.SARSDataset
-  n_obs_steps : ${policy.n_obs_steps}
-  horizon : ${horizon}
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
   state_length : ${policy.state_length}
-  pad_after: 7 # these are w.r.t. beginning's and ends of episodes
-  pad_before: 1 # these are w.r.t. beginning's and ends of episodes
   seed: 42
   val_ratio: 0.02
-  history_indices: [15, 10, 5] # 0.5s skip, with 0.1s dt, get obs from 1.5s, 1.0s, and 0.5s ago
   max_train_episodes: null
   shape_meta: ${shape_meta}
+  rb_id: default
 
   # child
   sampler:
     _target_: diffusion_policy.common.sars_sampler.DatasetSampler
-    rb_id: "default"
+    rb_id: default
+    ep_mask: None
 
     # child
 

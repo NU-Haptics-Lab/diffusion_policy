@@ -13,7 +13,7 @@ from diffusion_policy.common.normalize_util import get_range_normalizer_from_sta
 import diffusion_policy.globals as globals
 
 
-class SARSDataset(BaseImageDataset):
+class TrainAndVal(BaseImageDataset):
     """
     Dataset to provide (s, a, r, s') samples to a torch dataloader. Formerly named dexnex_2cams_image_ql_dataset.py:DexNexDataset but that name isn't descriptive.
 
@@ -25,62 +25,57 @@ class SARSDataset(BaseImageDataset):
     - state
     """
     def __init__(self,
-            sampler: DatasetSampler,
-            shape_meta: dict,
-            zarr_path, 
-            horizon=1,
-            pad_before=0,
-            pad_after=0,
+            sampler: DatasetSampler, # default sampler
             seed=42,
             val_ratio=0.0,
             max_train_episodes=None,
             state_length=8,
-            history_indices=[]
+            rb_id: str = "default",
             ):
         
         super().__init__()
-        self.sampler = sampler
-        
-        ## block taken from real_pusht_image_dataset.py for huge training speedup
-        rgb_keys = ['img', 'img2']
-        lowdim_keys = ['state']
 
-        self.dataset_keys = rgb_keys + lowdim_keys
+        # get nb episodes
+        nb_episodes = globals.REPLAY_BUFFER_LOADER[rb_id].n_episodes
         
         val_mask = get_val_mask(
-            n_episodes=self.replay_buffer.n_episodes, 
+            n_episodes=nb_episodes, 
             val_ratio=val_ratio,
             seed=seed)
         train_mask = ~val_mask
+
+        # downsamples if max_train_episodes is not None
         train_mask = downsample_mask(
             mask=train_mask, 
             max_n=max_train_episodes, 
             seed=seed)
 
-        self.train_mask = train_mask
-        self.horizon = horizon
-        self.pad_before = pad_before
-        self.pad_after = pad_after
+        # remake sampler with train mask
+        sampler.Reset(train_mask)
+
+        # make an exact copy
+        val_sampler = copy.deepcopy(sampler)
+        val_sampler.Reset(val_mask)
+
+        self.train_sampler = sampler
+        self.val_sampler = val_sampler
+        
+        # set default mode as train
+        self.train_mode()
+
         self.state_length = state_length
-        self.history_indices = history_indices
         self.device = torch.device(globals.CONFIG.training.device)
-
-    def get_validation_dataset(self):
-        val_set = copy.copy(self)
-        val_set.sampler = SequenceSampler(
-            replay_buffer=self.replay_buffer, 
-            sequence_length=self.horizon,
-            pad_before=self.pad_before, 
-            pad_after=self.pad_after,
-            episode_mask=~self.train_mask
-            )
-        val_set.train_mask = ~self.train_mask
-        return val_set
-
-    
 
     def __len__(self) -> int:
         return len(self.sampler)
+    
+    def val_mode(self):
+        self.sampler = self.val_sampler
+        self.mode = "val"
+
+    def train_mode(self):
+        self.sampler = self.train_sampler
+        self.mode = "train"
     
     def _collate_state(self, sample, suffix=""):
         agent_pos = sample['state' + suffix][:][:, :self.state_length].astype(np.float32)

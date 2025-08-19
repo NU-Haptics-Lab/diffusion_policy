@@ -143,6 +143,7 @@ class Indices:
 
         # episode length is relative
         episode_length = end_idx - start_idx
+        self.ep_length = episode_length
         
         # optional datapoint padding before the start of the episode, relative value
         min_start = -pad_before
@@ -217,6 +218,40 @@ class Indices:
         data = np.zeros(shape=(self.sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
         
         return data
+    
+    def get_sequence_by_indices_and_key(self, indices, key):
+        """
+        The caller requests data from `indices`, which may or may not exist in the episode this instance is associated with.
+        If using the fill-back / fill-forward (default) option, then we first modify indices to be all valid indexes.
+        We then use the indices to "fancy index" the r.b.
+
+        indices - episode-relative indices. Meaning the only valid values are [0, len(episode)-1]
+        """
+        # ensure it's numpy
+        valid_indices = np.array(indices)
+
+        # fill-back any indices less than zero
+        mask = valid_indices < 0
+        valid_indices[mask] = 0
+
+        # fill-forward any indices greater than ep length, minus one
+        mask = valid_indices > self.ep_length - 1
+        valid_indices[mask] = self.ep_length - 1
+
+        # add on rb ep offset to make the indices rb-relative
+        valid_indices += self.rb_offset
+
+        # get this key's data from the r.b.
+        input_arr = self.replay_buffer[key]
+
+        # fancy index the sample
+        sequence = input_arr[valid_indices]
+
+        # we're done
+        return sequence
+
+
+        
     
     def get_sequence_by_key(self, idx, key):
         """
@@ -347,7 +382,6 @@ class EpisodeSampler:
         # update indices cfg
         with open_dict(indices_cfg):
             indices_cfg.rb_id = self.rb_id
-            indices_cfg.key_first_k = <>
             indices_cfg.rb_offset = self.rb_offset
             indices_cfg.episode_end = self.rb_ep_end
 
@@ -369,14 +403,6 @@ class EpisodeSampler:
 
     def __len__(self):
         return len(self.indices)
-    
-    def get_history_indices(self, ep_idx):
-        """
-        ep_idx is the current time tc
-        """
-        # something like this
-        hist_arr = np.array([0, 5, 10])
-        ep_indices = ep_idx - hist_arr
     
     def get_not_done(self, ep_idx):
         # last valid sample in the ep => second to last ep_idx, and don't forget python is zero-indexed.
@@ -403,17 +429,15 @@ class EpisodeSampler:
     #     return data
     
     def get_obs_sample(self, ep_idx):
-        # get the state episode indices
-        ep_indices = self.get_history_indices(ep_idx)
-
+        # output dict
         sample = {}
-        
-        # construct the indices
-        indices = <>
+
+        # make indices which are episode-relative
+        indices = np.array(globals.CONFIG.obs_rel_indices) + ep_idx
 
         # iterate over obs keys
         for key in self.obs_keys:
-            sample[key] = self.indices.get_sequence_by_key(indices, key)
+            sample[key] = self.indices.get_sequence_by_indices_and_key(indices, key)
 
         return sample
     
@@ -421,15 +445,19 @@ class EpisodeSampler:
         """
         Get sequence by key
         """
-        data = self.indices.get_sequence_by_key(ep_idx, key)
+        indices = [ep_idx]
+        data = self.indices.get_sequence_by_key(indices, key)
         return data
     
     def get_action_sample(self, ep_idx):
         """
-        For an action, we want a sequence from ep_idx to ep_idx + horizon
+        For an action, we want a sequence from ep_idx - n_obs_steps to ep_idx + horizon.
         """
-        range1 = range(0, horizon)
-        sample = self.get_key_sample("action", ep_idx, range1)
+        # make indices which are episode-relative
+        indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx
+
+        # get the sample
+        sample = self.indices.get_sequence_by_indices_and_key(indices, "action")
         
         return sample
 
@@ -459,11 +487,19 @@ class DatasetSampler:
     More complicated: the sampler provides the ability to pad the beginning or end of episodes, which means the training nb of datapoints may be different from the real nb of datapoints. I'll _rb_ to refer to replay buffer datapoints, and _tr_ to refer to training datapoints
     """
     def __init__(self,
-        rb_id: str, 
-                 ):
+            rb_id: str,
+            ep_mask = None
+            ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
+
+        self.Reset(ep_mask)
+
+    def Reset(self,
+              ep_mask
+              ):
+        self.ep_mask = ep_mask
 
         # episode classes
         self.ep_samplers = []
@@ -483,23 +519,25 @@ class DatasetSampler:
         rb_offset = 0
 
         # one episode sampler per episode
-        for episode_end in self.replay_buffer.episode_ends:
-            # if skip? previously episode_mask
-            <>
-            
-            # make the ep sampler
-            ep_sampler = EpisodeSampler(
-                self.rb_id,
-                rb_offset,
-                episode_end
-            )
+        for idx, episode_end in enumerate(self.replay_buffer.episode_ends):
+            # if skip a.k.a. episode mask
+            if self.ep_mask is None or self.ep_mask[idx]:
+                # make the ep sampler
+                ep_sampler = EpisodeSampler(
+                    self.rb_id,
+                    rb_offset,
+                    episode_end
+                )
 
-            # add the length of the training episode
-            tr_ep_offset += len(ep_sampler)
+                self.ep_samplers.append(ep_sampler)
+                self.tr_ep_offsets.append(tr_ep_offset)
+
+                # add the length of the training episode
+                tr_ep_offset += len(ep_sampler)
+
+            # always add to the rb offset
             rb_offset += episode_end
 
-            self.ep_samplers.append(ep_sampler)
-            self.tr_ep_offsets.append(tr_ep_offset)
 
     def get_episode_and_index(self, idx):
         # get the episode index
