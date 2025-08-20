@@ -1,4 +1,4 @@
-import diffusion_policy.globals
+import diffusion_policy.globals as globals
 
 from diffusion_policy.dataset.batch_loader import BatchLoader
 from diffusion_policy.losses.actor_loss import ActorLoss
@@ -13,9 +13,14 @@ class BatchLoss:
 
     def __init__(self,
         batch_loader: BatchLoader,
-        actor
+        eta: float # weight of the critic loss
         ):
-        pass
+        self.batch_loader = batch_loader
+        self.eta = eta
+        
+        # save handles to nodes
+        self.actor = globals.MODELS["actor"]
+        self.critic = globals.MODELS["critic"]
 
     def compute_loss(self):
         """
@@ -25,10 +30,10 @@ class BatchLoss:
         nbatch = next(self.batch_loader)
 
         # get the actor loss
-        actor_loss = self.actor_loss(nbatch)
+        actor_loss = self.actor.loss(nbatch) #, task_id)
 
         # get the critic loss
-        critic_loss = self.critic_loss(nbatch)
+        critic_loss = self.critic.loss(nbatch) #, task_id
 
         # weighted sum them
         loss = actor_loss + self.eta * critic_loss

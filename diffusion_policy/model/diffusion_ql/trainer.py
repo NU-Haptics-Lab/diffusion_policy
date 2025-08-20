@@ -16,10 +16,14 @@ and this associated repo: https://github.com/Zhendong-Wang/Diffusion-Policies-fo
 """
 
 class DiffusionQL(object):
+    """
+    default values taken from the diffusion-ql repo.
+    https://github.com/Zhendong-Wang/Diffusion-Policies-for-Offline-RL/blob/d871f5c6b4a3a3a19a10c662a54f32d5819dfcdb/agents/ql_diffusion.py#L49 
+    """
     def __init__(self,
                  critic, # should be on device
-                 discount,
-                 tau,
+                 discount=0.99,
+                 tau=0.005,
                  max_q_backup=False,
                  eta=1.0,
                  beta_schedule='linear',
@@ -114,7 +118,6 @@ class DiffusionQL(object):
     
     def StepActor(self, state, new_action):
         """
-        
         Use the uncorrupted state and the denoise action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
         """
         metric = {}

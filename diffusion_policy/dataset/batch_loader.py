@@ -161,19 +161,11 @@ class BatchLoader:
     I've put the normalizer here because we only normalize after getting a full batch (on GPU btw), which happens one level above the data-loader, and the dataset sits below the data-loader
     """
     def __init__(self,
-            dataset: BaseImageDataset
+                 rb_id: str,
+                 train_or_val: str
             ):
-        self.dataset = dataset
-        
-        # make the training data loader
-        self.dataloader = DataLoader(self.dataset,
-            batch_size=dataset_batch_size,
-            timeout=self.timeout,
-            num_workers=num_workers[idx],
-            **cfg.dataloader)
-        
-        # make the validation data loader
-        self.val_dataloader
+        # handle to Node
+        self.dataloader: DataLoader = globals.DATALOADERS[rb_id][train_or_val]
         
         self.nested_data_array = NestedDataArray()
         
@@ -244,7 +236,6 @@ class BatchLoader:
 
         # extract the normalized data
         nbatch = self.nested_data_array.get()
-
         
         # we're done
         return nbatch
@@ -259,7 +250,6 @@ class BatchLoader:
         except Exception as e:
             print("next(iterator) except: ")
             print(e)
-            print("len(dataset): ", len(self.dataset))
             
             # reshuffle this iterator
             self.iterator = iter(self.dataloader)

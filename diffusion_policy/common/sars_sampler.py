@@ -89,7 +89,6 @@ class Indices:
         rb_id: str,
         rb_offset: int,
         episode_end: int, 
-        sequence_length : int, 
         pad_before : int=0, 
         pad_after : int=0,
         debug : bool=True
@@ -97,7 +96,6 @@ class Indices:
         self.rb_id = rb_id
         self.rb_offset = rb_offset
         self.episode_end = episode_end
-        self.sequence_length = sequence_length
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.debug = debug
@@ -222,12 +220,12 @@ class Indices:
     def __len__(self):
         return len(self.indices)
     
-    def key_zero_fill(self, key):
-        input_arr = self.replay_buffer[key]
+    # def key_zero_fill(self, key):
+    #     input_arr = self.replay_buffer[key]
         
-        data = np.zeros(shape=(self.sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
+    #     data = np.zeros(shape=(self.sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
         
-        return data
+    #     return data
     
     def get_sequence_by_indices_and_key(self, indices, key):
         """
@@ -392,8 +390,8 @@ class EpisodeSampler:
         # update indices cfg
         with open_dict(indices_cfg):
             indices_cfg.rb_id = self.rb_id
-            indices_cfg.rb_offset = self.rb_offset
-            indices_cfg.episode_end = self.rb_ep_end
+            indices_cfg.rb_offset = int(self.rb_offset)
+            indices_cfg.episode_end = int(self.rb_ep_end)
 
         # make using the config for this dataset. Could move this to the constructor?
         self.indices: Indices = hydra.utils.instantiate(indices_cfg)
@@ -498,15 +496,14 @@ class DatasetSampler:
     """
     def __init__(self,
             rb_id: str,
-            ep_mask = None
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
+        
+        self.initd = False
 
-        self.Reset(ep_mask)
-
-    def Reset(self,
+    def Init(self,
               ep_mask
               ):
         self.ep_mask = ep_mask
@@ -518,6 +515,8 @@ class DatasetSampler:
         self.tr_ep_offsets = []
 
         self.make_episodes()
+        
+        self.initd = True
 
     def make_episodes(self):
         """ Using the replay buffer's episode_ends, make episode sampler classes  """
@@ -549,7 +548,7 @@ class DatasetSampler:
             rb_offset += episode_end
 
 
-    def get_episode_and_index(self, idx):
+    def get_episode_and_index(self, idx) -> tuple[EpisodeSampler, int]:
         # get the episode index
         ep_idx = get_lower_bound_idx(self.tr_ep_offsets, idx)
 
@@ -567,6 +566,8 @@ class DatasetSampler:
     def get_sample(self, tr_idx: int) -> dict[str, np.ndarray]:
         """
         tr_idx - training dataset index
+        
+        return dict with keys (obs, action, reward, not_done, obs_next)
         """
         # convert absolute training idx into the episode and episode idx 
         ep, ep_idx = self.get_episode_and_index(tr_idx)

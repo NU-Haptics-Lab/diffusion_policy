@@ -55,15 +55,27 @@ def main(cfg: OmegaConf):
     
     # apply overrides, much faster than merge
     OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override)
+    print("Config merged.")
     
     # spin up the replay buffer loader
     globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader)
+    print("Replay Buffer Loader spun.")
+    
+    # spin up the dataloaders
+    globals.DATALOADERS = hydra.utils.instantiate(globals.CONFIG.dataloaders)
+    print("Dataloaders spun.")
+        
+    # spin up the models
+    globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models)
+    print("Models spun.")
 
     # spin up the session trainer
     # cls = hydra.utils.get_class(cfg._target_)
-    session_trainer = hydra.utils.instantiate(globals.CONFIG.session_trainer)
+    session_trainer: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer)
+    print("Session Trainer spun.")
 
     # run it
+    print("Begin training.")
     session_trainer.train()
 
 if __name__ == "__main__":

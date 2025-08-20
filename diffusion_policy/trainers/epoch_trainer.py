@@ -1,8 +1,58 @@
-import diffusion_policy.globals
+import torch
+import diffusion_policy.globals as globals
 from diffusion_policy.trainers.step_trainer import StepTrainer
+from .common import CalcSumLoss
+from diffusion_policy.utils import EveryEpoch
 
+class Epoch:
+    """
+    Responsible for doing something for one epoch.
+    """
 
-class EpochTrainer:
+    def __init__(self,
+            nb_batches: int
+            ):
+        self.nb_batches = nb_batches
+
+class EpochEvaluator(Epoch):
+    """
+    Responsible for evaluating for one epoch.
+    """
+
+    def __init__(self,
+            nb_batches: int,
+            val_every: int,
+            w_batch_losses: dict
+            ):
+        self.nb_batches = nb_batches
+        self.val_every = val_every
+        self.w_batch_losses = w_batch_losses
+        
+        # handle to node
+        self.models = globals.MODELS
+
+    @torch.no_grad()
+    def eval(self):
+        """
+        eval for one epoch.
+        """
+        if EveryEpoch(self.val_every):
+            self.models.eval()
+            
+            for nb in range(self.nb_batches):
+                # eval for one batch
+                total_loss = CalcSumLoss(self.w_batch_losses)
+
+                # end of batch logging
+                pass
+
+            # end of epoch stuff
+            pass
+        
+            self.models.train()
+    
+    
+class EpochTrainer(Epoch):
     """
     Responsible for a training for one epoch.
     """

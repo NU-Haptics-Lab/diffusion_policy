@@ -2,6 +2,9 @@ from typing import Any
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 import hydra
 from diffusion_policy.model.diffusion_ql.trainer import DiffusionQL
+import diffusion_policy.globals as globals
+from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 """
 reference paper: https://arxiv.org/pdf/2208.06193
@@ -24,28 +27,27 @@ another decision to make: which action to start with. We pass partially noised a
 
 class CriticLoss:
     def __init__(self,
-                 actor,
-                 ema_actor,
                  critic: DiffusionQL,
-                 cfg
+                 noise_scheduler: DDIMScheduler,
+                 num_inference_steps: int
                  ) -> None:
         """
         actor - an actor policy
         critic - a critic policy
         """
-        self.actor = actor
-        self.ema_actor = ema_actor
         self.critic = critic
+        self.noise_scheduler = noise_scheduler
+        self.num_inference_steps = num_inference_steps
         
-        # setup the noise scheduler
-        cls = hydra.utils.get_class(cfg.qloss.noise_scheduler._target_)
-        scheduler = cls(cfg.qloss.noise_scheduler)
+        # save handles to nodes
+        self.actor = globals.ACTOR
         
-        scheduler.set_timesteps(cfg.qloss.noise_scheduler.num_inference_steps)
+        # set the noise scheduler time steps
+        self.noise_scheduler.set_timesteps(self.num_inference_steps)
         
-        self.noise_scheduler = scheduler
         
     def Denoise(self, nobs_dict):
+        # use actor or ema actor?
         nresult = self.actor.predict_action_impl(
             nobs_dict, 
             self.noise_scheduler, 
@@ -54,7 +56,7 @@ class CriticLoss:
         naction_pred = nresult['naction_pred']
         return naction_pred
         
-    def __call__(self, nbatch):
+    def loss(self, nbatch):
         """
         nbatch - normalized batch dictionary with keys: nobs, naction, nreward, <...>
         
@@ -63,13 +65,13 @@ class CriticLoss:
         [TODO]
         This is exactly the same as the Diffusion-QL repo, the downside however is that we have to do denoising twice per step, once on this state and once on the next state. If this proves to be very slow to train, then a potential optimization is to do critic training on the previous state & this state so we only have to denoise once per step.
         """
-        new_action = self.Denoise(nbatch['nobs'])
+        action = self.Denoise(nbatch['nobs'])
         
         # get the next action from the ema model, same as the Diffusion-QL repo
-        next_action = self.Denoise(nbatch['nobs_next'])
+        action_next = self.Denoise(nbatch['nobs_next'])
         
         # returns loss, metric
-        loss, metric = self.critic.Step(nbatch, new_action, next_action)
+        loss, metric = self.critic.Step(nbatch, action, action_next)
         
         return loss, metric
         

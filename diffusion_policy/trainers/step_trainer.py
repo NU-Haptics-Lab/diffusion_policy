@@ -1,9 +1,10 @@
 
 import torch
-import diffusion_policy.globals
-from diffusion_policy.globals import CONFIG
+import diffusion_policy.globals as globals
 
 from diffusion_policy.losses.batch_loss import WeightedBatchLoss
+
+from .common import CalcSumLoss
 
 
 class StepTrainer:
@@ -16,19 +17,14 @@ class StepTrainer:
     """
 
     def __init__(self,
-            w_batch_losses = dict
+                 w_batch_losses: dict
         ):
+        # handle to node
         self.w_batch_losses = w_batch_losses
 
     def train(self):
         # initialize a zero loss variable
-        total_loss = torch.tensor([0.0], requires_grad=True)
-
-        # iterate over the batch losses and get the total loss
-        for key, batch_loss in self.w_batch_losses.items():
-            loss = batch_loss.compute_weighted_loss()
-
-            total_loss += loss
+        total_loss = CalcSumLoss(self.w_batch_losses)
 
         # calculate gradients for all datasets simultaneously
         total_loss.backward()

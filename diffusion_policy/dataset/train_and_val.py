@@ -1,5 +1,9 @@
+import copy
+from omegaconf import OmegaConf
+
 from typing import Dict
 import torch
+from torch.utils.data import DataLoader as torchDataLoader
 import numpy as np
 import copy
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -12,70 +16,12 @@ from diffusion_policy.common.normalize_util import get_image_range_normalizer
 from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
 import diffusion_policy.globals as globals
 
-
-class TrainAndVal(BaseImageDataset):
-    """
-    Dataset to provide (s, a, r, s') samples to a torch dataloader. Formerly named dexnex_2cams_image_ql_dataset.py:DexNexDataset but that name isn't descriptive.
-
-    note: s and s' are actually observations.
-
-    zarr dataset keys:
-    - img
-    - img2
-    - state
-    """
+# TODO: move this class to its own file
+class DexNexDataset(BaseImageDataset):
     def __init__(self,
-            sampler: DatasetSampler, # default sampler
-            seed=42,
-            val_ratio=0.0,
-            max_train_episodes=None,
-            state_length=8,
-            rb_id: str = "default",
-            ):
-        
-        super().__init__()
-
-        # get nb episodes
-        nb_episodes = globals.REPLAY_BUFFER_LOADER[rb_id].n_episodes
-        
-        val_mask = get_val_mask(
-            n_episodes=nb_episodes, 
-            val_ratio=val_ratio,
-            seed=seed)
-        train_mask = ~val_mask
-
-        # downsamples if max_train_episodes is not None
-        train_mask = downsample_mask(
-            mask=train_mask, 
-            max_n=max_train_episodes, 
-            seed=seed)
-
-        # remake sampler with train mask
-        sampler.Reset(train_mask)
-
-        # make an exact copy
-        val_sampler = copy.deepcopy(sampler)
-        val_sampler.Reset(val_mask)
-
-        self.train_sampler = sampler
-        self.val_sampler = val_sampler
-        
-        # set default mode as train
-        self.train_mode()
-
-        self.state_length = state_length
-        self.device = torch.device(globals.CONFIG.training.device)
-
-    def __len__(self) -> int:
-        return len(self.sampler)
-    
-    def val_mode(self):
-        self.sampler = self.val_sampler
-        self.mode = "val"
-
-    def train_mode(self):
-        self.sampler = self.train_sampler
-        self.mode = "train"
+                 sampler: DatasetSampler
+        ):
+        self.sampler = sampler
     
     def _fix_state(self, sample):
         """
@@ -85,19 +31,10 @@ class TrainAndVal(BaseImageDataset):
         # now I must do this to be backwards compatable with my messed up dataset order. whoops!
         sample['img'] = np.moveaxis(sample['img'], 2, 1)
         sample['img2'] = np.moveaxis(sample['img2'], 2, 1)
-    
-    def _mask_state(self, state):
-        """
-        The zarr datasets contain values for the entire robot (66 joints), so we mask the joint-specific arrays w.r.t. which joints we're using.
-        """
-        pass
-
-
-        
 
     def _sample_to_data(self, sample):
         """
-        the zarr sample is flat so here we put it into the correct structure for ingestion by our policies
+        custom fix for our zarr dataset, as well as casting the data down to float32 to save space
         """
         # fix this state
         self._fix_state(sample)
@@ -124,3 +61,81 @@ class TrainAndVal(BaseImageDataset):
         torch_data = dict_apply(data, torch.from_numpy)
 
         return torch_data
+
+    def __len__(self) -> int:
+        return len(self.sampler)
+    
+
+class TrainAndVal:
+    """
+    Dataset to provide (s, a, r, s') samples to a torch dataloader. Formerly named dexnex_2cams_image_ql_dataset.py:DexNexDataset but that name isn't descriptive.
+
+    note: s and s' are actually observations.
+
+    zarr dataset keys:
+    - img
+    - img2
+    - state
+    """
+    def __init__(self,
+            sampler: DatasetSampler, # default sampler, not init'd
+            options: dict,
+            seed=42,
+            val_ratio=0.0,
+            max_train_episodes=None,
+            ):
+        
+        super().__init__()
+        rb_id = sampler.rb_id
+        self.options = options
+
+        # get nb episodes
+        nb_episodes = globals.REPLAY_BUFFER_LOADER[rb_id].n_episodes
+        
+        val_mask = get_val_mask(
+            n_episodes=nb_episodes, 
+            val_ratio=val_ratio,
+            seed=seed)
+        train_mask = ~val_mask
+
+        # downsamples if max_train_episodes is not None
+        train_mask = downsample_mask(
+            mask=train_mask, 
+            max_n=max_train_episodes, 
+            seed=seed)
+
+        # make train sampler with train mask
+        self.train_sampler = copy.deepcopy(sampler)
+        self.train_sampler.Init(train_mask)
+
+        # make an exact copy
+        self.val_sampler = copy.deepcopy(sampler)
+        self.val_sampler.Init(val_mask)
+        
+        # make the datasets
+        self.train_dataset = DexNexDataset(self.train_sampler)
+        self.val_dataset = DexNexDataset(self.val_sampler)
+        
+        # make the train & val config
+        train_cfg = copy.deepcopy(options.common)
+        val_cfg = copy.deepcopy(options.common)
+        OmegaConf.unsafe_merge(train_cfg, options.train)
+        OmegaConf.unsafe_merge(val_cfg, options.val)
+        
+        # make the train & val dataloader
+        self.train_dataloader = torchDataLoader(
+            self.train_dataset,
+            **train_cfg
+        )
+        self.val_dataloader = torchDataLoader(
+            self.val_dataset,
+            **val_cfg
+        )
+        
+        # dict access
+        self.dd = {}
+        self.dd["train"] = self.train_dataloader
+        self.dd["val"] = self.val_dataloader
+        
+    def __getitem__(self, key):
+        return self.dd[key]

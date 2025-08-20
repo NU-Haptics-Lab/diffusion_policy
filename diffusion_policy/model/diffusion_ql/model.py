@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-from diffusion_policy.model.trunk import Trunk
-from diffusion_policy.model.branch import Branch
-from diffusion_policy.model.tree import Tree
+from diffusion_policy.model.components.trunk import Trunk
+from diffusion_policy.model.components.leaf import Leaf
+from diffusion_policy.model.components.tree import Tree
 
 # example, from https://github.com/NU-Haptics-Lab/Diffusion-Policies-for-Offline-RL#
 
@@ -16,10 +16,11 @@ class QLImageEncoder(nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         
-        self.model = <>
+        # self.model = <>
         
     def forward(self, input):
-        x = self.model(input)
+        # x = self.model(input)
+        x = input
         return x
     
 
@@ -39,7 +40,7 @@ class QLDenser(nn.Module):
         x = self.model(input)
         return x
     
-class QLBranch(nn.Module):
+class QLLeaf(nn.Module):
     def __init__(self, input_dim, hidden_dim=256):
         super().__init__()
         
@@ -71,13 +72,13 @@ class QLModel(nn.Module):
             denser
         )
 
-        # branches
-        branches = {}
+        # leafes
+        leafes = {}
         for key, val in enumerate(CONFIG.datasets):
-            branches[key] = Branch(QLBranch())
+            leafes[key] = Leaf(QLLeaf())
 
         # tree
-        self.tree = Tree(trunk, branches)
+        self.tree = Tree(trunk, leafes)
 
     def forward(self, input, key):
         x = self.tree.forward(input, key)
