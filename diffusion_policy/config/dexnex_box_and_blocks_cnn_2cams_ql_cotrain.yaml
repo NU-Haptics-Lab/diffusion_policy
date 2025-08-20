@@ -27,8 +27,6 @@ shape_meta:
       type: rgb
 
 common_policy:
-  n_obs_steps: ${n_obs_steps}
-  horizon: ${horizon}
   state_length: ${shape_meta.obs.lowdim_obs.shape}
 
 
@@ -41,9 +39,8 @@ common_indices:
   key_first_k: {}
   rb_offset: 0
   episode_end: 0
-  sequence_length: ${horizon}
-  pad_before: 1
-  pad_after: 7
+  pad_before: 0
+  pad_after: 0
   debug: ${debug}
 
 
@@ -52,6 +49,8 @@ data_directory: /media/dexnex_ssd/data/bnb/
 # NODE -- replay buffer loader entry point
 replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
     block_transfer: ${data_directory}bt.reward.zarr
     bnb_1cam: ${data_directory}1cam.reward.zarr
@@ -97,7 +96,7 @@ common_wbatch_loss:
 
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
-  state_length : ${policy.state_length}
+  state_length : ${common_policy.state_length}
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
@@ -129,3 +128,7 @@ override:
           bnb_2cams:
             weight: 0.5
             batch_loss: {batch_loader: {dataset: {sampler: {rb_id: bnb_2cams }}}}
+
+# order: left gofa, lh wr, lh ff, lh mf, lh th
+# state_mask <TODO: must consider all state entries, not just joints>:
+# [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]

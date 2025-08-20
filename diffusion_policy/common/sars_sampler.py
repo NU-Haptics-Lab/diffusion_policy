@@ -105,36 +105,11 @@ class Indices:
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
         self.indices = []
         
-        self.key_first_k = dict()
-        if globals.CONFIG.n_obs_steps is not None:
-            # only take first k obs from images
-            for key in rgb_keys + lowdim_keys:
-                key_first_k[key] = globals.CONFIG.n_obs_steps
-        
-        
-    def create_indices(self
-        ) -> np.ndarray:
+    def create_indices(self):
         """
-        Iterate through the dataset episodes and corresponding r.b. indices to determine which indices correspond to which data-points.
-        This is necessary because we're converting a dataset of waypoints into a dataset of trajectories, and we must be careful to only load the appropriate data.
-
-        Output is list of lists of valid indices for each diffusion datapoint (a.k.a. a trajectory). So each element of the output `indices` is a list with [buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx].
-
-        buffer_start_idx - what data from the r.b. to start loading
-        buffer_end_idx - what data from the r.b. to end loading
-        sample_start_idx - how many additional datapoints to add before the start of the real data sequence
-        sample_end_idx - how many additional datapoints to add after the end of the real data sequence
+        generate training indices based on padding before / after an episode.
+        Positive and negative pad values are allowed
         """
-        
-        pad_before = min(max(self.pad_before, 0), self.sequence_length-1)
-        pad_after = min(max(self.pad_after, 0), self.sequence_length-1)
-
-        indices = list()
-        valid_indices = list()
-
-        # for R.L., we don't want to use the last datapoint in the episode because then we wouldn't have a valid next_state for the 2nd to last datapoint in the episode
-        use_last_datapoint_in_episode = False
-
         # set up start index
         start_idx = self.rb_offset
 
@@ -144,70 +119,105 @@ class Indices:
         # episode length is relative
         episode_length = end_idx - start_idx
         self.ep_length = episode_length
+
+        self.indices = range(-self.pad_before, self.ep_length + self.pad_after)
         
-        # optional datapoint padding before the start of the episode, relative value
-        min_start = -pad_before
+    # def create_indices_OLD(self
+    #     ) -> np.ndarray:
+    #     """
+    #     Iterate through the dataset episodes and corresponding r.b. indices to determine which indices correspond to which data-points.
+    #     This is necessary because we're converting a dataset of waypoints into a dataset of trajectories, and we must be careful to only load the appropriate data.
 
-        # since each sample is a trajectory with `sequence_length` waypoints, the last valid start index will be `sequence_length` indices before the end of the episode, plus an optional pad-after length.
-        max_start = episode_length - self.sequence_length + pad_after
+    #     Output is list of lists of valid indices for each diffusion datapoint (a.k.a. a trajectory). So each element of the output `indices` is a list with [buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx].
 
-        # range end
-        range_end = max_start+1
+    #     buffer_start_idx - what data from the r.b. to start loading
+    #     buffer_end_idx - what data from the r.b. to end loading
+    #     sample_start_idx - how many additional datapoints to add before the start of the real data sequence
+    #     sample_end_idx - how many additional datapoints to add after the end of the real data sequence
+    #     """
         
-        # range stops one idx before end, so use max_start + 1.
-        for idx in range(min_start, range_end):
-            # buffer start corresponds to first real datapoint.
-            buffer_start_idx = max(idx, 0) + start_idx
+    #     pad_before = min(max(self.pad_before, 0), self.sequence_length-1)
+    #     pad_after = min(max(self.pad_after, 0), self.sequence_length-1)
 
-            # buffer end corresponds to the last real datapoint.
-            buffer_end_idx = min(idx+ self.sequence_length, episode_length) + start_idx
+    #     indices = list()
+    #     valid_indices = list()
 
-            # start-offset is a relative value.
-            start_offset = buffer_start_idx - (idx+start_idx)
+    #     # for R.L., we don't want to use the last datapoint in the episode because then we wouldn't have a valid next_state for the 2nd to last datapoint in the episode
+    #     use_last_datapoint_in_episode = False
+
+    #     # set up start index
+    #     start_idx = self.rb_offset
+
+    #     # set up end index
+    #     end_idx = self.episode_end
+
+    #     # episode length is relative
+    #     episode_length = end_idx - start_idx
+    #     self.ep_length = episode_length
+        
+    #     # optional datapoint padding before the start of the episode, relative value
+    #     min_start = -pad_before
+
+    #     # since each sample is a trajectory with `sequence_length` waypoints, the last valid start index will be `sequence_length` indices before the end of the episode, plus an optional pad-after length.
+    #     max_start = episode_length - self.sequence_length + pad_after
+
+    #     # range end
+    #     range_end = max_start + 1
+        
+    #     # range stops one idx before end, so use max_start + 1.
+    #     for idx in range(min_start, range_end):
+    #         # buffer start corresponds to first real datapoint.
+    #         buffer_start_idx = max(idx, 0) + start_idx
+
+    #         # buffer end corresponds to the last real datapoint.
+    #         buffer_end_idx = min(idx+ self.sequence_length, episode_length) + start_idx
+
+    #         # start-offset is a relative value.
+    #         start_offset = buffer_start_idx - (idx+start_idx)
             
-            # end offset is a relative value.
-            end_offset = (idx + self.sequence_length + start_idx) - buffer_end_idx
+    #         # end offset is a relative value.
+    #         end_offset = (idx + self.sequence_length + start_idx) - buffer_end_idx
 
-            # sample-start-idx is relative
-            sample_start_idx = 0 + start_offset
+    #         # sample-start-idx is relative
+    #         sample_start_idx = 0 + start_offset
 
-            # sample-end-idx is relative
-            sample_end_idx = self.sequence_length - end_offset
+    #         # sample-end-idx is relative
+    #         sample_end_idx = self.sequence_length - end_offset
 
-            # debug
-            if self.debug:
-                assert(start_offset >= 0)
-                assert(end_offset >= 0)
-                assert (sample_end_idx - sample_start_idx) == (buffer_end_idx - buffer_start_idx)
+    #         # debug
+    #         if self.debug:
+    #             assert(start_offset >= 0)
+    #             assert(end_offset >= 0)
+    #             assert (sample_end_idx - sample_start_idx) == (buffer_end_idx - buffer_start_idx)
 
-            # add to the indices list
-            indices.append([
-                buffer_start_idx, buffer_end_idx, 
-                sample_start_idx, sample_end_idx])
+    #         # add to the indices list
+    #         indices.append([
+    #             buffer_start_idx, buffer_end_idx, 
+    #             sample_start_idx, sample_end_idx])
             
-            def add_to_valid_indices(i, va):
-                va.append(len(i) - 1)
+    #         def add_to_valid_indices(i, va):
+    #             va.append(len(i) - 1)
             
-            # add to the valid indices list
-            if use_last_datapoint_in_episode:
-                add_to_valid_indices(indices, valid_indices)
+    #         # add to the valid indices list
+    #         if use_last_datapoint_in_episode:
+    #             add_to_valid_indices(indices, valid_indices)
 
-            # if we must skip the last datapoint in an episode
-            else:
-                # recall, range() ends one before the range-end value
-                if idx == range_end - 1:
-                    # skip it
-                    pass
-                # not at the end of the episode, so add to valid indices
-                else:
-                    add_to_valid_indices(indices, valid_indices)
+    #         # if we must skip the last datapoint in an episode
+    #         else:
+    #             # recall, range() ends one before the range-end value
+    #             if idx == range_end - 1:
+    #                 # skip it
+    #                 pass
+    #             # not at the end of the episode, so add to valid indices
+    #             else:
+    #                 add_to_valid_indices(indices, valid_indices)
 
                 
-        # convert to numpy
-        indices = np.array(indices)
+    #     # convert to numpy
+    #     indices = np.array(indices)
 
-        # we're done
-        self.indices = indices
+    #     # we're done
+    #     self.indices = indices
 
     def __len__(self):
         return len(self.indices)
@@ -253,79 +263,79 @@ class Indices:
 
         
     
-    def get_sequence_by_key(self, idx, key):
-        """
-        given an index and a key, obtain the proper sequence of that index's data from the dataset.
-        """
+    # def get_sequence_by_key(self, idx, key):
+    #     """
+    #     given an index and a key, obtain the proper sequence of that index's data from the dataset.
+    #     """
         
-        # extract the buffer and sample start/end indices
-        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
-            = self.indices[idx]
+    #     # extract the buffer and sample start/end indices
+    #     buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
+    #         = self.indices[idx]
         
-        # add on the episode's replay buffer offset
-        buffer_start_idx += self.rb_offset
-        buffer_end_idx   += self.rb_offset
-        sample_start_idx += self.rb_offset
-        sample_end_idx   += self.rb_offset
+    #     # add on the episode's replay buffer offset
+    #     buffer_start_idx += self.rb_offset
+    #     buffer_end_idx   += self.rb_offset
+    #     sample_start_idx += self.rb_offset
+    #     sample_end_idx   += self.rb_offset
     
-        # get this key's data from the r.b.
-        input_arr = self.replay_buffer[key]
+    #     # get this key's data from the r.b.
+    #     input_arr = self.replay_buffer[key]
 
-        # performance optimization, avoid small allocation if possible
-        if key not in self.key_first_k:
-            sample = input_arr[buffer_start_idx:buffer_end_idx]
-        else:
-            # performance optimization, only load used obs steps
-            # number of data points
-            n_data = buffer_end_idx - buffer_start_idx
+    #     # performance optimization, avoid small allocation if possible
+    #     if key not in self.key_first_k:
+    #         sample = input_arr[buffer_start_idx:buffer_end_idx]
+    #     else:
+    #         # performance optimization, only load used obs steps
+    #         # number of data points
+    #         n_data = buffer_end_idx - buffer_start_idx
 
-            # key first k nb data points
-            k_data = min(self.key_first_k[key], n_data)
+    #         # key first k nb data points
+    #         k_data = min(self.key_first_k[key], n_data)
 
-            # fill value with Nan to catch bugs
-            # the non-loaded region should never be used
-            sample = np.full((n_data,) + input_arr.shape[1:], fill_value=np.nan, dtype=input_arr.dtype)
+    #         # fill value with Nan to catch bugs
+    #         # the non-loaded region should never be used
+    #         sample = np.full((n_data,) + input_arr.shape[1:], fill_value=np.nan, dtype=input_arr.dtype)
 
-            # will throw if we try to access the non-loaded region
-            try:
-                # save the original data from the r.b. (SSD) into the sample in RAM
-                sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
-            except Exception as e:
-                import pdb; pdb.set_trace()
+    #         # will throw if we try to access the non-loaded region
+    #         try:
+    #             # save the original data from the r.b. (SSD) into the sample in RAM
+    #             sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
+    #         except Exception as e:
+    #             import pdb; pdb.set_trace()
 
-        # save as data
-        data = sample
+    #     # save as data
+    #     data = sample
 
-        # padding before the sample start or after the sample end
-        if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
-            # reset data to be full of zeros
-            data = self.key_zero_fill(key)
+    #     # padding before the sample start or after the sample end
+    #     if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):
+    #         # reset data to be full of zeros
+    #         data = self.key_zero_fill(key)
 
-            # copy the first sample into the first sample_start_idx elements
-            if sample_start_idx > 0:
-                data[:sample_start_idx] = sample[0]
+    #         # copy the first sample into the first sample_start_idx elements
+    #         if sample_start_idx > 0:
+    #             data[:sample_start_idx] = sample[0]
 
-            # copy the last sample into the last `sequence_length - sample_end_idx` elements
-            if sample_end_idx < self.sequence_length:
-                data[sample_end_idx:] = sample[-1]
+    #         # copy the last sample into the last `sequence_length - sample_end_idx` elements
+    #         if sample_end_idx < self.sequence_length:
+    #             data[sample_end_idx:] = sample[-1]
 
-            # copy the sample into the correct elements, based off the sample start/end indices
-            data[sample_start_idx:sample_end_idx] = sample
+    #         # copy the sample into the correct elements, based off the sample start/end indices
+    #         data[sample_start_idx:sample_end_idx] = sample
         
-        return data
+    #     return data
     
-    def get_history_by_key(self, indices, key):
-        """
-        Get the history of a key w.r.t input indices. Will return the specified history in a single array of structure [H, T, ...] --- where H == history, T == trajectory (a.k.a. sequence)
-        """
-        sequence = []
+    # def get_history_by_key(self, indices, key):
+    #     """
+    #     Get the history of a key w.r.t input indices. Will return the specified history in a single array of structure [H, T, ...] --- where H == history, T == trajectory (a.k.a. sequence)
+    #     """
+    #     sequence = []
 
-        for idx in indices:
-            sequence.append(self.get_sequence_by_key(idx, key))
+    #     for idx in indices:
+    #         sequence.append(self.get_sequence_by_key(idx, key))
 
-        # convert to np, basically adds a history dimension
-        out = np.array(sequence)
-        return out
+    #     # convert to np, basically adds a history dimension
+    #     out = np.array(sequence)
+    #     return out
 
 
 def get_val_mask(n_episodes, val_ratio, seed=0):
@@ -446,7 +456,7 @@ class EpisodeSampler:
         Get sequence by key
         """
         indices = [ep_idx]
-        data = self.indices.get_sequence_by_key(indices, key)
+        data = self.indices.get_sequence_by_indices_and_key(indices, key)
         return data
     
     def get_action_sample(self, ep_idx):
@@ -472,7 +482,7 @@ class EpisodeSampler:
 
         sample["action"] = self.get_action_sample(ep_idx)
 
-        sample["reward"] = self.get_key_sample(self.reward_key, ep_idx)
+        sample["reward"] = self.get_key_sample("reward", ep_idx)
 
         sample["not_done"] = self.get_not_done(ep_idx)
 
@@ -554,7 +564,7 @@ class DatasetSampler:
         
         return ep, dp_ep_idx
 
-    def get_sample(self, tr_idx):
+    def get_sample(self, tr_idx: int) -> dict[str, np.ndarray]:
         """
         tr_idx - training dataset index
         """

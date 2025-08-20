@@ -77,49 +77,45 @@ class TrainAndVal(BaseImageDataset):
         self.sampler = self.train_sampler
         self.mode = "train"
     
-    def _collate_state(self, sample, suffix=""):
-        agent_pos = sample['state' + suffix][:][:, :self.state_length].astype(np.float32)
-        
+    def _fix_state(self, sample):
+        """
+        Fix the messups in the zarr dataset. 
+        """
         # Moveaxis moved to the dataset generation script to save training time
         # now I must do this to be backwards compatable with my messed up dataset order. whoops!
-        image = np.moveaxis(sample['img' + suffix], 2, 1)
-        image2 = np.moveaxis(sample['img2' + suffix], 2, 1)
+        sample['img'] = np.moveaxis(sample['img'], 2, 1)
+        sample['img2'] = np.moveaxis(sample['img2'], 2, 1)
+    
+    def _mask_state(self, state):
+        """
+        The zarr datasets contain values for the entire robot (66 joints), so we mask the joint-specific arrays w.r.t. which joints we're using.
+        """
+        pass
 
-        out = {
-            'image': image,  # T, 3, 96, 96
-            'image2': image2,
-            'agent_pos': agent_pos,  # T, self.state_length
-        }
 
-        return out
         
 
     def _sample_to_data(self, sample):
         """
-        output -- data: {s, a, r, s', not_done}
+        the zarr sample is flat so here we put it into the correct structure for ingestion by our policies
         """
-        # collate this state
-        state = self._collate_state(sample)
+        # fix this state
+        self._fix_state(sample)
+        
+        # convert all data to float32 to save space
+        def fcn(x):
+            out = x.astype(np.float32) # returns a copy
+            return out
+        data = dict_apply(sample, fcn)
 
-        # current state
-        data = {
-            'obs': state,
-            'action': sample['action'].astype(np.float32), # T, self.state_length
-            'reward': sample['reward'].astype(np.float32),
-            'not_done': sample['not_done'].astype(np.float32)
-        }
-        
-        # next state
-        data['obs_next'] = self._collate_state(sample, suffix="_next")
-        
         return data
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """
         Return a single sample from the dataset
         """
-        # get sample from the sampler, axes are [T, ...], T - trajectory
-        sample = self.sampler.sample_sequence(idx)
+        # get sample from the sampler, axes are [T, ...], T - trajectory. The sampler already puts the data in a dictionary.
+        sample = self.sampler.get_sample(idx)
         
         # convert the sample to a neural net compatible data dict 
         data = self._sample_to_data(sample)
