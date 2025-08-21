@@ -164,8 +164,11 @@ class BatchLoader:
                  rb_id: str,
                  train_or_val: str
             ):
+        self.rb_id = rb_id
+        self.train_or_val = train_or_val
+        
         # handle to Node
-        self.dataloader: DataLoader = globals.DATALOADERS[rb_id][train_or_val]
+        self.dataloader: DataLoader = globals.DATALOADERS[self.rb_id][self.train_or_val]
         
         self.nested_data_array = NestedDataArray()
         

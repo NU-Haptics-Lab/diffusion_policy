@@ -21,3 +21,6 @@ class ReplayBufferLoader:
             
     def __getitem__(self, key):
         return self.rbs[key]
+    
+    def __len__(self):
+        return len(self.rbs)

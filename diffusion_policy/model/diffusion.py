@@ -68,58 +68,18 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 obs_config['low_dim'].append(key)
             else:
                 raise RuntimeError(f"Unsupported obs type: {type}")
-
-        # get raw robomimic config
-        config = get_robomimic_config(
-            algo_name='bc_rnn',
-            hdf5_type='image',
-            task_name='square',
-            dataset_type='ph')
+            
+        # init the obs encoder object
+        obs_encoder = object()
+            
+        # make the crop randomizer
+        <>
         
-        with config.unlocked():
-            # set config with shape_meta
-            config.observation.modalities.obs = obs_config
-
-            if crop_shape is None:
-                for key, modality in config.observation.encoder.items():
-                    if modality.obs_randomizer_class == 'CropRandomizer':
-                        modality['obs_randomizer_class'] = None
-            else:
-                # set random crop parameter
-                ch, cw = crop_shape
-                for key, modality in config.observation.encoder.items():
-                    if modality.obs_randomizer_class == 'CropRandomizer':
-                        modality.obs_randomizer_kwargs.crop_height = ch
-                        modality.obs_randomizer_kwargs.crop_width = cw
-
-        # init global state
-        ObsUtils.initialize_obs_utils_with_config(config)
-
-        # load model
-        policy: PolicyAlgo = algo_factory(
-                algo_name=config.algo_name,
-                config=config,
-                obs_key_shapes=obs_key_shapes,
-                ac_dim=action_dim,
-                device='cpu',
-            )
-
-        obs_encoder = policy.nets['policy'].nets['encoder'].nets['obs']
+        # make the resnet, using robomimic
         
         obs_encoder.obs_nets.image = dexnex_layers.CNNSpatialSoftmaxTransformer()
         obs_encoder.obs_nets.image2 = dexnex_layers.CNNSpatialSoftmaxTransformer()
-        # obs_encoder.obs_nets.image = ImageModule()
-        # obs_encoder.obs_nets.image2 = ImageModule()
-        # obs_encoder.obs_nets.image.nets[0] = ResNetSlice()
-        # obs_encoder.obs_nets.image2.nets[0] = ResNetSlice()
         
-        # quick and dirty because I'm in a hurry
-        # obs_encoder.obs_nets.image.nets[1] = rmbn.SpatialSoftmax((128, 24, 24), 32)
-        # obs_encoder.obs_nets.image2.nets[1] = rmbn.SpatialSoftmax((128, 24, 24), 32)
-        
-        # ways to see model input/outputs
-        # print("obs encoder output size: ", obs_encoder.obs_nets.image.nets[0:5](torch.zeros((1, 3, 184, 184))).shape)
-        # obs_encoder.obs_nets.image.nets[0].nets[0:6](torch.zeros((1, 3, 192, 192))).shape
 
         
         if obs_encoder_group_norm:

@@ -59,7 +59,7 @@ class DiffusionQL(object):
         self.eta = eta  # q_learning weight
         self.max_q_backup = max_q_backup
         
-    def StepCritic(self, nbatch_dict, next_action):
+    def StepCritic(self, nbatch_dict, next_action, task_id):
         """
         samples - must be the same noised trajectories that were passed through the actor model (fcn: policy.compute_loss)
         new_action - should be the action calculated by using the predicted noise from the actor model.
@@ -77,7 +77,7 @@ class DiffusionQL(object):
         not_done = nbatch_dict['not_done']
 
         """ Q Training """
-        current_q1, current_q2 = self.critic(state, action)
+        current_q1, current_q2 = self.critic(state, action, task_id)
 
         """ max-q-backup not yet integrated, Kumar et al. 2020 """
         # if self.max_q_backup:
@@ -134,9 +134,9 @@ class DiffusionQL(object):
         
         return loss, metric
         
-    def Step(self, nbatch_dict, new_action, next_action):
+    def Step(self, nbatch_dict, new_action, next_action, task_id):
         # train the critic, using (s, a, r, s') & a'
-        metric = self.StepCritic(nbatch_dict, next_action)
+        metric = self.StepCritic(nbatch_dict, next_action, task_id)
         
         # extract the state
         state = nbatch_dict['nobs']

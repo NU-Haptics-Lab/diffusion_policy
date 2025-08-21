@@ -56,7 +56,7 @@ class CriticLoss:
         naction_pred = nresult['naction_pred']
         return naction_pred
         
-    def loss(self, nbatch):
+    def loss(self, nbatch, task_id):
         """
         nbatch - normalized batch dictionary with keys: nobs, naction, nreward, <...>
         
@@ -71,7 +71,7 @@ class CriticLoss:
         action_next = self.Denoise(nbatch['nobs_next'])
         
         # returns loss, metric
-        loss, metric = self.critic.Step(nbatch, action, action_next)
+        loss, metric = self.critic.Step(nbatch, action, action_next, task_id)
         
         return loss, metric
         

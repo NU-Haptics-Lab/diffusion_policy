@@ -146,7 +146,7 @@ models:
       _target_: diffusion_policy.model.diffusion_ql.trainer.DiffusionQL
 
       critic:
-        _target_: diffusion_policy.model.diffusion_ql.model.QLCritic
+        _target_: diffusion_policy.model.diffusion_ql.model.DoubleCritic
 
 
     noise_scheduler: ${common_noise_scheduler}
