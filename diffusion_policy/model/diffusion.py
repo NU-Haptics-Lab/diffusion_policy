@@ -23,11 +23,14 @@ from torchvision import models as vision_models
 
 import diffusion_policy.model.components.dexnex_layers as dexnex_layers
 
+from .obs_encoder import ObsEncoder
 
-class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
+
+class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
+            obs_encoder: ObsEncoder,
             horizon, 
             n_action_steps, 
             n_obs_steps,
@@ -70,17 +73,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 raise RuntimeError(f"Unsupported obs type: {type}")
             
         # init the obs encoder object
-        obs_encoder = object()
-            
-        # make the crop randomizer
-        <>
-        
-        # make the resnet, using robomimic
-        
-        obs_encoder.obs_nets.image = dexnex_layers.CNNSpatialSoftmaxTransformer()
-        obs_encoder.obs_nets.image2 = dexnex_layers.CNNSpatialSoftmaxTransformer()
-        
-
+        self.obs_encoder = obs_encoder
         
         if obs_encoder_group_norm:
             # replace batch norm with group norm

@@ -8,23 +8,30 @@ shape_meta:
   action:
     shape:
     - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
-  obs:
-    lowdim_obs:
-      shape:
-      - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
-      type: low_dim
-    img:
-      shape:
-      - 3
-      - 192
-      - 192
-      type: rgb
-    img2:
-      shape:
-      - 3
-      - 192
-      - 192
-      type: rgb
+
+  obs_encoder:
+    _target_: diffusion_policy.model.obs_encoder.ObsEncoder
+
+    obs_cfg:
+      lowdim_obs:
+        shape:
+        - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
+        type: low_dim
+      img:
+        shape:
+        - 3
+        - 192
+        - 192
+        type: rgb
+      img2:
+        shape:
+        - 3
+        - 192
+        - 192
+        type: rgb
+
+    ch: 184
+    cw: 184
 
 common_policy:
   state_length: ${shape_meta.obs.lowdim_obs.shape}
