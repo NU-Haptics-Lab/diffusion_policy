@@ -78,7 +78,7 @@ class DiffusionModel(BaseImagePolicy):
         if obs_encoder_group_norm:
             # replace batch norm with group norm
             replace_submodules(
-                root_module=obs_encoder,
+                root_module=self.obs_encoder,
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
                 func=lambda x: 
                     nn.GroupNorm(

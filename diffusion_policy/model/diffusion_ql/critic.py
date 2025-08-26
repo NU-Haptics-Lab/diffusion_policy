@@ -1,9 +1,15 @@
+import copy
 import torch
 import torch.nn as nn
+import robomimic.models.base_nets as rmbn
+from robomimic.models.obs_nets import ObservationEncoder
+from robomimic.models.base_nets import MLP
+
 
 from diffusion_policy.model.components.trunk import Trunk
 from diffusion_policy.model.components.leaf import Leaf
 from diffusion_policy.model.components.tree import Tree
+from diffusion_policy.model.obs_encoder import ObsEncoderMaker
 
 from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialSoftmax
 
@@ -16,24 +22,9 @@ import diffusion_policy.globals as globals
 TODO - understand how to use the same weights for multiple image inputs while ensuring proper forward/backward passes are done, and the weights are updated correctly. I know this repo does it, just need to study it a bit
 """
 
-class QLImageEncoder(nn.Module):
-    """
-    Convert images into features with expected x, y values
-    """
-    def __init__(self):
-        super().__init__()
-        
-        # for now just use resnet18
-        self.model = CascadingCNNSpatialSoftmax()
-        
-    def forward(self, input):
-        x = self.model(input)
-        return x
-    
-
 class QLDenser(nn.Module):
     """
-    Standard MLP
+    Standard MLP ... could just use robomimic's
     """
     def __init__(self, input_dim, hidden_dim=256):
         super().__init__()
@@ -52,8 +43,15 @@ class QLDenser(nn.Module):
         return x
 
 class QLModel(nn.Module):
-    def __init__(self):
+    def __init__(self,
+                 obs_encoder_maker: ObsEncoderMaker
+                 ):
         super().__init__()
+        
+        # get the robomimic obs-encoder
+        obs_encoder: ObservationEncoder = obs_encoder_maker.get()
+        
+        # calc the obs output
         
         # rootcaps
         rootcaps = {}
@@ -63,8 +61,8 @@ class QLModel(nn.Module):
 
         # trunk
         trunk = nn.Sequential(
-            QLImageEncoder(),
-            QLDenser(<>)
+            obs_encoder,
+            QLDenser(obs_encoder.output_shape())
         )
         
         branches = {}
@@ -92,11 +90,13 @@ class QLModel(nn.Module):
         
 
 class DoubleCritic(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self,
+                 qlmodel: QLModel
+                 ):
+        super().__init__()
         
-        self.q1_model = QLModel()
-        self.q2_model = QLModel()
+        self.q1_model = qlmodel
+        self.q2_model = copy.deepcopy(self.q1_model)
     
     def forward(self, state_dict, action, options=None):
         return self.q1_model(state_dict, action, options), self.q2_model(state_dict, action, options)
