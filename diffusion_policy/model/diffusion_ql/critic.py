@@ -12,6 +12,7 @@ from diffusion_policy.model.components.tree import Tree
 from diffusion_policy.model.obs_encoder import ObsEncoderMaker
 
 from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialSoftmax
+from diffusion_policy.common.pytorch_util import dict_apply
 
 import diffusion_policy.globals as globals
 
@@ -54,12 +55,14 @@ class QLDenser(nn.Module):
 
 class QLModel(nn.Module):
     def __init__(self,
-                 obs_encoder_maker: ObsEncoderMaker
+                 obs_encoder_maker: ObsEncoderMaker,
+                 if_stack_history: bool = True,
                  ):
         super().__init__()
         
         # get the robomimic obs-encoder
         self.obs_encoder: ObservationEncoder = obs_encoder_maker.get()
+        self.if_stack_history = if_stack_history
         
         # calc the obs output
         
@@ -70,7 +73,8 @@ class QLModel(nn.Module):
         roots = {}
 
         # trunk
-        self.trunk_denser = QLDenser(self.obs_encoder.output_shape())
+        # MLP based off obs encoder output shape. Output is a list, should be 1 long, so extract the first and only element
+        self.trunk_denser = QLDenser(self.obs_encoder.output_shape()[0])
         trunk = nn.Sequential(
             self.obs_encoder,
             self.trunk_denser
@@ -90,8 +94,21 @@ class QLModel(nn.Module):
                          trunk,
                          branches,
                          leafs)
+        
+    def StackHistory(self, dd):
+        def fcn(x):
+            # assumes the data is [batch, history, ...]
+            x = torch.flatten(x, start_dim=1, end_dim=2)
+            return x
+        
+        out = dict_apply(dd, fcn)
+        return out
 
     def forward(self, state_dict, action, options: dict = None):
+        # stack the state history
+        if self.if_stack_history:
+            state_dict = self.StackHistory(state_dict)
+            
         # combine the state and actions
         inputs_dict = state_dict
         inputs_dict["action"] = action
@@ -110,7 +127,9 @@ class DoubleCritic(nn.Module, BaseCritic):
         self.q2_model = copy.deepcopy(self.q1_model)
     
     def forward(self, state_dict, action, options: dict = None):
-        return self.q1_model(state_dict, action, options), self.q2_model(state_dict, action, options)
+        q1 = self.q1_model(state_dict, action, options)
+        q2 = self.q2_model(state_dict, action, options)
+        return q1, q2
                
     def q1(self, state_dict, action):
         return self.q1_model(state_dict, action)
@@ -118,3 +137,67 @@ class DoubleCritic(nn.Module, BaseCritic):
     def q_min(self, state_dict, action):
         q1, q2 = self.forward(state_dict, action)
         return torch.min(q1, q2)
+    
+
+def test():
+    import hydra
+    from omegaconf import OmegaConf
+    txt = """
+shape_meta:
+  action:
+    shape:
+    - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
+
+  img:
+    shape:
+    - 3
+    - 192
+    - 192
+  img2:
+    shape:
+    - 3
+    - 192
+    - 192
+  
+  state: # the name "state" came from the zarr generation script
+    shape:
+    - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
+    
+qlmodel:
+    _target_: diffusion_policy.model.diffusion_ql.critic.QLModel
+
+    obs_encoder_maker:
+        _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+
+        rgbs:
+            img:
+                shape: ${shape_meta.img.shape}
+            img2:
+                shape: ${shape_meta.img2.shape}
+            
+        ch: 184
+        cw: 184
+
+        lowdims:
+            state:
+                shape: ${shape_meta.state.shape}
+                
+            action:
+                shape: ${shape_meta.action.shape}
+    """
+    config = OmegaConf.create(txt)
+    
+    class Obj(object):
+        pass
+    
+    globals.REPLAY_BUFFER_LOADER = Obj()
+    globals.REPLAY_BUFFER_LOADER.rbs = {"test1": 1, "test2": 2}
+
+    x: DoubleCritic = hydra.utils.instantiate(config)
+    
+    
+    pass
+    
+    
+if __name__ == "__main__":
+    test()

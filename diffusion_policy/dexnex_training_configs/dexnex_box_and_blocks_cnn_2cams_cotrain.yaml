@@ -57,11 +57,11 @@ policy:
   - 1024 # 320
   - 2048 # 400
   eval_fixed_crop: true
-  horizon: 16
+  horizon: 16 # output trajectory time-length
   kernel_size: 5
-  n_action_steps: 8
+  n_action_steps: 8 # output trajectory time-length during evaluation
   n_groups: 8
-  n_obs_steps: 1
+  n_obs_steps: 1 # input time-length
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
     beta_end: 0.02

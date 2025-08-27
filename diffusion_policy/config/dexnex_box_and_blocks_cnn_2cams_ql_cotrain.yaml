@@ -1,7 +1,12 @@
 # globals
 debug: true
-action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [-15, -10, -5, 0]
+device: cuda:0
+gradient_accumulate_every: 1 # may move this to ModelandEma later
+total_num_epochs: 141
+num_train_batches: 10
+resume: false
 
 # common data
 shape_meta:
@@ -25,8 +30,16 @@ shape_meta:
     - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
 
 
-common_policy:
-  # state_length: ${shape_meta.obs.lowdim_obs.shape}
+training:
+  checkpoint_every: 20
+  max_train_steps: null
+  max_val_steps: null
+  rollout_every: 9999
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
 
 
 common_obs_encoder:
@@ -74,12 +87,12 @@ replay_buffer_loader:
 # NODE -- training entry point
 session_trainer:
   _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
-  nb_epochs: 1000
+  nb_epochs: ${total_num_epochs} # testing
   
   # children
   epoch_trainer:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
-    nb_batches: 10 # testing
+    nb_batches: ${num_train_batches}
 
     # children
     step_trainer: 
@@ -93,7 +106,8 @@ session_trainer:
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochEvaluator
-    nb_batches: 10 # testing
+    nb_batches: ${num_train_batches}
+    val_every: 2
 
     # weighted batch loss dict
     w_batch_losses:
@@ -138,7 +152,7 @@ common_dataset:
       pin_memory: true
       shuffle: true
     val:
-      num_workers: 1
+      num_workers: 0
       persistent_workers: false
       pin_memory: false
       shuffle: false
@@ -173,24 +187,35 @@ models:
     num_inference_steps: 100
 
   actor:
-    _target_: diffusion_policy.model.model.Model
+    _target_: diffusion_policy.model.model_and_ema.ModelandEMA
     use_ema: true
 
     model:
-      _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-      action_shape: ${shape_meta.action.shape}
-      noise_scheduler: ${common_noise_scheduler}
-      obs_encoder_maker: ${common_obs_encoder}
-      # leafs:
-      #   block_transfer:
+      _target_: diffusion_policy.model.model_and_optim.ModelandOptim
+      lr_scheduler: cosine
+      lr_warmup_steps: 500
+      gradient_accumulate_every: 1
+      optimizer_target: torch.optim.AdamW
+      optimizer_cfg:
+        betas:
+          - 0.95
+          - 0.999
+        eps: 1.0e-08
+        lr: 0.0001
+        weight_decay: 1.0e-06
 
-      #   bnb_1cam:
-
-      #   bnb_2cams:
-
+      # children
+      model:
+        _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+        action_shape: ${shape_meta.action.shape}
+        noise_scheduler: ${common_noise_scheduler}
+        obs_encoder_maker: ${common_obs_encoder}
+        eval_fixed_crop: true
+        obs_as_global_cond: true
+        obs_encoder_group_norm: true
+        n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
 
     ema_cfg:
-      _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
       inv_gamma: 1.0
       max_value: 0.9999
       min_value: 0.0
@@ -206,7 +231,6 @@ common_noise_scheduler:
   clip_sample: true
   num_train_timesteps: 100
   prediction_type: epsilon
-  variance_type: fixed_small
         
 override:
   session_trainer:
@@ -272,7 +296,13 @@ override:
         critic:
           qlmodel:
             obs_encoder_maker:
-              action:
-                state: ${shape_meta.action.shape}
+              lowdims:
+                # add on actions to the input
+                action:
+                  shape: ${shape_meta.action.shape}
 
-  
+    actor:
+      model:
+        model:
+          noise_scheduler:
+            variance_type: fixed_small

@@ -23,21 +23,22 @@ class DexNexDataset(BaseImageDataset):
         ):
         self.sampler = sampler
     
-    def _fix_state(self, sample):
+    def _fix_obs(self, obs):
         """
         Fix the messups in the zarr dataset. 
         """
         # Moveaxis moved to the dataset generation script to save training time
         # now I must do this to be backwards compatable with my messed up dataset order. whoops!
-        sample['img'] = np.moveaxis(sample['img'], 2, 1)
-        sample['img2'] = np.moveaxis(sample['img2'], 2, 1)
+        obs['img'] = np.moveaxis(obs['img'], 2, 1)
+        obs['img2'] = np.moveaxis(obs['img2'], 2, 1)
 
     def _sample_to_data(self, sample):
         """
         custom fix for our zarr dataset, as well as casting the data down to float32 to save space
         """
         # fix this state
-        self._fix_state(sample)
+        self._fix_obs(sample["obs"])
+        self._fix_obs(sample["obs_next"])
         
         # convert all data to float32 to save space
         def fcn(x):

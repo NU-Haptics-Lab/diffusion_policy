@@ -40,6 +40,9 @@ import torch.multiprocessing
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
+# Register the del resolver
+OmegaConf.register_new_resolver("del", lambda: None)
+
 @hydra.main(
     version_base=None,
     config_path=str(pathlib.Path(__file__).parent.joinpath(
@@ -49,6 +52,17 @@ def main(cfg: OmegaConf):
     # save config into the global config
     globals.CONFIG = cfg
     
+    # Temporarily disable strict mode to add new keys
+    OmegaConf.set_struct(globals.CONFIG, False)
+    
+    # whether we're debugging
+    if globals.CONFIG.debug:
+        globals.CONFIG.total_num_epochs = 1
+        globals.CONFIG.common_dataset.options.train.num_workers = 0
+        globals.CONFIG.common_dataset.options.train.persistent_workers = False
+        globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10
+        globals.CONFIG.models.critic.num_inference_steps = 10
+    
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
     OmegaConf.resolve(globals.CONFIG)
@@ -56,6 +70,7 @@ def main(cfg: OmegaConf):
     # apply overrides, much faster than merge
     OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override)
     print("Config merged.")
+        
     
     # spin up the replay buffer loader
     globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader)

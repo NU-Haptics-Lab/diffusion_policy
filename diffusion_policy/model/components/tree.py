@@ -15,6 +15,8 @@ class Tree(nn.Module):
             branches: dict,
             leafs: dict
             ):
+        super().__init__()
+        
         self.rootcaps = rootcaps
         self.roots = roots
         self.trunk = trunk

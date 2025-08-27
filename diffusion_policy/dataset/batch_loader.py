@@ -98,9 +98,16 @@ class NestedDataArray:
         """
         Data - a nested dict of torch.Tensors
         """
-        # works whether val is a dict or a torch.Tensor since the syntax is the same
-        for key, val in enumerate(data):
-            self.nest[key].set(data)
+        # NOTE: should be called after set_normalizers
+        for key, val in data.items():
+        #     if isinstance(val, dict):
+        #         self.nest[key] = NestedDataArray()
+                
+        #     else:
+        #         self.nest[key] = DataArray()
+            
+            # works whether val is a dict or a torch.Tensor since the syntax is the same
+            self.nest[key].set(val)
 
     def get(self):
         """
@@ -109,7 +116,7 @@ class NestedDataArray:
         out = {}
 
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
-        for key, val in enumerate(self.nest):
+        for key, val in self.nest.items():
             out[key] = val.get()
 
         return out
@@ -118,7 +125,7 @@ class NestedDataArray:
         # reset nest
         self.nest = {}
 
-        for key, val in enumerate(nested_normalizers):
+        for key, val in nested_normalizers.items():
             # leaf
             if isinstance(val, SingleFieldLinearNormalizer):
                 da = DataArray(val)
@@ -127,17 +134,18 @@ class NestedDataArray:
             # another branch
             else:
                 nda = NestedDataArray()
-                self.nest[key] = nda.set_normalizers(val)
+                nda.set_normalizers(val)
+                self.nest[key] = nda
 
 
     def normalize(self):
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
-        for key, val in enumerate(self.nest):
+        for key, val in self.nest.items():
             val.normalize()
 
     def unnormalize(self):
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
-        for key, val in enumerate(self.nest):
+        for key, val in self.nest.items():
             val.unnormalize()
 
 class Batch:
@@ -172,33 +180,39 @@ class BatchLoader:
         
         self.nested_data_array = NestedDataArray()
         
-        self.device = torch.device(globals.CONFIG.training.device)
+        self.device = torch.device(globals.CONFIG.device)
+        
+        # will make the nested data array structure
+        self.init_normalizers()
+        
+        # reset
+        self.reset()
 
-    def init_normalizer(self):
+    def init_normalizers(self):
         """
         Structure, must be same as the shape_meta structure.
 
         """
 
         obs = {
-                'lowdim_obs': get_range_normalizer_from_stat(
+                'state': get_range_normalizer_from_stat(
                     {'min': LIMITS[:, 0], 'max': LIMITS[:, 1]}
                     ),
-                'image': get_image_range_normalizer(),
-                'image2': get_image_range_normalizer(),
+                'img': get_image_range_normalizer(),
+                'img2': get_image_range_normalizer(),
             }
         
         nn = {
             'obs': obs,
-            'next_obs': obs,
+            'obs_next': obs,
             'action': get_range_normalizer_from_stat(
                 {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
                 ),
             'not_done': get_identity_normalizer_from_stat(
-                {'min', np.array([1])}
+                {'min': np.array([0], dtype=np.float32)}
             ),
             'reward': get_identity_normalizer_from_stat(
-                {'min', np.array([1])}
+                {'min': np.array([0], dtype=np.float32)}
                 )
         }
         
@@ -270,7 +284,7 @@ class BatchLoader:
     # called each for-loop
     def __next__(self):
         
-        if self.count < self.num_batches:
+        if self.count < globals.CONFIG.num_train_batches:
             # increment our count
             self.count += 1
 

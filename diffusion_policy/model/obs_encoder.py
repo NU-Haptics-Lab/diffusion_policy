@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-import hydra
-from omegaconf import OmegaConf
 
 import robomimic.models.base_nets as rmbn
 from robomimic.models.obs_nets import ObservationEncoder
@@ -52,11 +50,16 @@ class ObsEncoderMaker():
                 shape=val.shape,
             )
             
+        # finally, make it
+        self.obs_encoder.make()
+            
             
     def get(self):
         return self.obs_encoder
     
 def test():
+    import hydra
+    from omegaconf import OmegaConf
     txt = """
 _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
 rgbs:

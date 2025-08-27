@@ -39,3 +39,6 @@ MODELS: Models = None
 
 """ Epoch count """
 EPOCH = 0
+
+""" Training step count """
+STEP = 0

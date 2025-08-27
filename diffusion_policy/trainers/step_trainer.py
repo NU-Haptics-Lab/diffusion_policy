@@ -29,39 +29,14 @@ class StepTrainer:
         # calculate gradients for all datasets simultaneously
         total_loss.backward()
 
-        # step optimizer
-        if self.global_step % globals.CONFIG.training.gradient_accumulate_every == 0:
-            self.optimizer.step()
-            self.optimizer.zero_grad()
-            lr_scheduler.step()
-        
-        # update ema
-        if CONFIG.training.use_ema:
-            ema.step(self.model)
+        # now we can step all of the models
+        globals.MODELS.step()
 
         # logging
-        raw_loss_cpu = raw_loss.item()
-        tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
-        train_losses.append(raw_loss_cpu)
-        step_log = {
-            'train_loss': raw_loss_cpu,
-            'global_step': self.global_step,
-            'epoch': self.epoch,
-            'lr': lr_scheduler.get_last_lr()[0]
-        }
-
-        # do some stuff if this is the last step
-        is_last_batch = (batch_idx == (len(meta_dataset)-1))
-        if not is_last_batch:
-            # log of last step is combined with validation and rollout
-            wandb_run.log(step_log, step=self.global_step)
-            json_logger.log(step_log)
-            self.global_step += 1
-
-        # if we're done training
-        if (CONFIG.training.max_train_steps is not None) \
-            and batch_idx >= (CONFIG.training.max_train_steps-1):
-            return False
+        raw_loss_cpu = total_loss.item()
+        # tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
+        # train_losses.append(raw_loss_cpu)
         
-        # we're done
-        return True
+        step_log = {
+            'total_train_loss': raw_loss_cpu,
+        }

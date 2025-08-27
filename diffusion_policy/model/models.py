@@ -22,3 +22,7 @@ class Models:
             
     def __getitem__(self, idx):
         return self.models[idx]
+    
+    def step(self):
+        for idx, model in self.models.items():
+            model.step()

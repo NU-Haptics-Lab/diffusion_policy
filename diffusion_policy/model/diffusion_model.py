@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
@@ -24,6 +25,8 @@ from torchvision import models as vision_models
 import diffusion_policy.model.components.dexnex_layers as dexnex_layers
 from diffusion_policy.model.obs_encoder import ObsEncoderMaker
 
+import diffusion_policy.globals as globals
+
 
 
 class DiffusionModel(BaseImagePolicy):
@@ -31,10 +34,7 @@ class DiffusionModel(BaseImagePolicy):
             action_shape: dict,
             noise_scheduler: DDPMScheduler,
             obs_encoder_maker: ObsEncoderMaker,
-            horizon, 
-            n_action_steps, 
-            n_obs_steps,
-            num_inference_steps=None,
+            n_obs_steps, # input time-length
             obs_as_global_cond=True,
             diffusion_step_embed_dim=256,
             down_dims=(256,512,1024),
@@ -46,12 +46,15 @@ class DiffusionModel(BaseImagePolicy):
             # parameters passed to step
             **kwargs):
         super().__init__()
+        
+        # save from global config
+        self.action_rel_indices = globals.CONFIG.action_rel_indices
 
         # parse shape_meta
         assert len(action_shape) == 1
         action_dim = action_shape[0]
             
-        # init the obs encoder object
+        # get the obs encoder object
         self.obs_encoder = obs_encoder_maker.get()
         
         if obs_encoder_group_norm:
@@ -64,9 +67,7 @@ class DiffusionModel(BaseImagePolicy):
                     num_groups=x.num_features//16,
                     num_channels=x.num_features)
             )
-            # obs_encoder.obs_nets['agentview_image'].nets[0].nets
         
-        # obs_encoder.obs_randomizers['agentview_image']
         if eval_fixed_crop:
             replace_submodules(
                 root_module=self.obs_encoder,
@@ -82,7 +83,7 @@ class DiffusionModel(BaseImagePolicy):
             
         # print 
 
-        # create diffusion model
+        # create diffusion model. Get first/only element from list
         obs_feature_dim = self.obs_encoder.output_shape()[0]
         input_dim = action_dim + obs_feature_dim
         global_cond_dim = None
@@ -110,18 +111,12 @@ class DiffusionModel(BaseImagePolicy):
             fix_obs_steps=True,
             action_visible=False
         )
-        self.normalizer = LinearNormalizer()
-        self.horizon = horizon
+        self.horizon = len(self.action_rel_indices)
         self.obs_feature_dim = obs_feature_dim
         self.action_dim = action_dim
-        self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
-
-        if num_inference_steps is None:
-            num_inference_steps = self.noise_scheduler.config.num_train_timesteps
-        self.num_inference_steps = num_inference_steps
 
         print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
         print("Vision params: %e" % sum(p.numel() for p in self.obs_encoder.parameters()))
@@ -131,10 +126,11 @@ class DiffusionModel(BaseImagePolicy):
     
     # ========= inference  ============
     def conditional_sample(self, 
-            condition_data, condition_mask,
+            condition_data, 
+            condition_mask,
             scheduler,
-            num_inference_steps,
-            local_cond=None, global_cond=None,
+            local_cond=None, 
+            global_cond=None,
             generator=None,
             # keyword arguments to scheduler.step
             **kwargs
@@ -155,9 +151,6 @@ class DiffusionModel(BaseImagePolicy):
             generator=generator)
         
         
-    
-        # set step values
-        scheduler.set_timesteps(num_inference_steps)
 
         for t in scheduler.timesteps:
             # 1. apply conditioning
@@ -183,21 +176,23 @@ class DiffusionModel(BaseImagePolicy):
         return self.predict_action_impl(
             nobs_dict,
             self.noise_scheduler,
-            self.num_inference_steps
             )
+        
+    def denoise(self, 
+            nobs_dict,
+            noise_scheduler,
+            ):
+        """ alias for predict_action_impl """
+        return self.predict_action_impl(nobs_dict, noise_scheduler)
 
     def predict_action_impl(self, 
             nobs_dict: Dict[str, torch.Tensor],
             noise_scheduler,
-            num_inference_steps
             ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
         """
-        assert 'past_action' not in nobs_dict # not implemented yet
-        # normalizing done elsewhere
-        # nobs = self.normalizer.normalize(obs_dict)
         nobs = nobs_dict
         value = next(iter(nobs.values()))
         B = value.shape[0]
@@ -226,7 +221,7 @@ class DiffusionModel(BaseImagePolicy):
         global_cond = None
         if self.obs_as_global_cond:
             # condition through global feature
-            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(B, -1)
@@ -235,33 +230,31 @@ class DiffusionModel(BaseImagePolicy):
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
         else:
             # condition through impainting
-            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, To, Do
             nobs_features = nobs_features.reshape(B, To, -1)
             cond_data = torch.zeros(size=(B, T, Da+Do), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-            cond_data[:,:To,Da:] = nobs_features
-            cond_mask[:,:To,Da:] = True
+            cond_data[:,-To:,Da:] = nobs_features
+            cond_mask[:,-To:,Da:] = True
 
         # run sampling
         nsample = self.conditional_sample(
             cond_data, 
             cond_mask,
             noise_scheduler,
-            num_inference_steps,
             local_cond=local_cond,
             global_cond=global_cond,
             **self.kwargs)
         
         # unnormalize elsewhere
         naction_pred = nsample[...,:Da]
-        # action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
-        start = To - 1
-        end = start + self.n_action_steps
-        naction = naction_pred[:,start:end]
+        start = np.argmax(np.array(self.action_rel_indices) >= 0)
+        
+        naction = naction_pred[:, start:]
         
         nresult = {
             'naction': naction,
@@ -278,7 +271,6 @@ class DiffusionModel(BaseImagePolicy):
             y = img_xy[:,1]
             
             # # unnormalize for plotting
-            # obs = self.normalizer.unnormalize(nobs)
             # img = obs['image']
             
             import matplotlib.pyplot as plt
@@ -288,20 +280,16 @@ class DiffusionModel(BaseImagePolicy):
         return nresult
 
     # ========= training  ============
-    def set_normalizer(self, normalizer: LinearNormalizer):
-        self.normalizer.load_state_dict(normalizer.state_dict())
-
     def compute_loss(self, nbatch):
         # normalize input
         assert 'valid_mask' not in nbatch
         
         # # for cotraining, we normalize when we construct the batch
-        # nobs = self.normalizer.normalize(batch['obs'])
-        # nactions = self.normalizer['action'].normalize(batch['action'])
-        nobs = nbatch['nobs']
-        nactions = nbatch['naction']
+        nobs = nbatch['obs']
+        nactions = nbatch['action']
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
+        To = self.n_obs_steps
 
         # handle different ways of passing observation
         local_cond = None
@@ -311,7 +299,7 @@ class DiffusionModel(BaseImagePolicy):
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
-                lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
+                lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)

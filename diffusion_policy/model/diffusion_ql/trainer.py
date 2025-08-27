@@ -50,7 +50,8 @@ class DiffusionQL(object):
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
         
         # EMA
-        self.ema = EMAModel(self.critic)
+        ema_model = copy.deepcopy(self.critic)
+        self.ema = EMAModel(ema_model)
 
         if lr_decay:
             self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=lr_maxt, eta_min=0.)
@@ -71,10 +72,10 @@ class DiffusionQL(object):
         metric = {}
 
         # Sample replay buffer / batch
-        state = nbatch_dict['nobs']
-        next_state = nbatch_dict['nobs_next']
-        action = nbatch_dict['naction']
-        reward = nbatch_dict['nreward']
+        state = nbatch_dict['obs']
+        next_state = nbatch_dict['obs_next']
+        action = nbatch_dict['action']
+        reward = nbatch_dict['reward']
         not_done = nbatch_dict['not_done']
 
         """ Q Training """

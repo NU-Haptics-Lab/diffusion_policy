@@ -9,7 +9,7 @@ class EMAModel:
 
     def __init__(
         self,
-        model,
+        model=None,
         update_after_step=0,
         inv_gamma=1.0,
         power=2 / 3,
@@ -27,7 +27,6 @@ class EMAModel:
             power (float): Exponential factor of EMA warmup. Default: 2/3.
             min_value (float): The minimum EMA decay rate. Default: 0.
         """
-
         self.averaged_model = model
         self.averaged_model.eval()
         self.averaged_model.requires_grad_(False)

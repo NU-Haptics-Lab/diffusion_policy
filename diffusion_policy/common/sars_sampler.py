@@ -7,6 +7,7 @@ import diffusion_policy.globals as globals
 
 import copy
 from omegaconf import OmegaConf, open_dict
+from operator import itemgetter
 
 
 
@@ -247,13 +248,16 @@ class Indices:
         valid_indices[mask] = self.ep_length - 1
 
         # add on rb ep offset to make the indices rb-relative
-        valid_indices += self.rb_offset
+        rb_indices = valid_indices + self.rb_offset
 
         # get this key's data from the r.b.
         input_arr = self.replay_buffer[key]
+        
+        # setup the item getter, more efficient than a for loop
+        ig = itemgetter(*list(rb_indices))
 
-        # fancy index the sample
-        sequence = input_arr[valid_indices]
+        # index the sample
+        sequence = np.array(ig(input_arr))
 
         # we're done
         return sequence
@@ -418,7 +422,9 @@ class EpisodeSampler:
         # sanity check: with 2 data-points [d1, d2], len(self) = 2, => ep_idx of 0 is done ... so we add 2
         done = ep_idx + 2 == len(self)
         not_done = not done
-        # not_done = np.array(not_done)
+        
+        # convert to np array
+        not_done = np.array([not_done])
         return not_done
 
         return ep_indices
@@ -521,11 +527,11 @@ class DatasetSampler:
     def make_episodes(self):
         """ Using the replay buffer's episode_ends, make episode sampler classes  """
 
-        tr_ep_offset = 0
 
         # first ep offset
-        self.tr_ep_offsets = [tr_ep_offset]
+        self.tr_ep_offsets = []
         rb_offset = 0
+        tr_ep_offset = 0
 
         # one episode sampler per episode
         for idx, episode_end in enumerate(self.replay_buffer.episode_ends):
@@ -544,8 +550,8 @@ class DatasetSampler:
                 # add the length of the training episode
                 tr_ep_offset += len(ep_sampler)
 
-            # always add to the rb offset
-            rb_offset += episode_end
+            # set rb offset to the old episode_end
+            rb_offset = episode_end
 
 
     def get_episode_and_index(self, idx) -> tuple[EpisodeSampler, int]:
