@@ -9,33 +9,41 @@ shape_meta:
     shape:
     - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
 
+  img:
+    shape:
+    - 3
+    - 192
+    - 192
+  img2:
+    shape:
+    - 3
+    - 192
+    - 192
+  
+  state: # the name "state" came from the zarr generation script
+    shape:
+    - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
+
 
 common_policy:
   # state_length: ${shape_meta.obs.lowdim_obs.shape}
 
 
-common_img_encoder:
-  _target_: diffusion_policy.model.img_encoder.ImgEncoder
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
 
   rgbs:
     img:
-      shape:
-      - 3
-      - 192
-      - 192
+      shape: ${shape_meta.img.shape}
     img2:
-      shape:
-      - 3
-      - 192
-      - 192
+      shape: ${shape_meta.img2.shape}
       
   ch: 184
   cw: 184
 
   lowdims:
-    state: # the name "state" came from the zarr generation script
-      shape:
-      - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
+    state:
+      shape: ${shape_meta.state.shape}
 
 
 
@@ -157,8 +165,8 @@ models:
         qlmodel:
           _target_: diffusion_policy.model.diffusion_ql.critic.QLModel
 
-          img_encoder:
-            ${common_img_encoder}
+          obs_encoder_maker:
+            ${common_obs_encoder}
 
 
     noise_scheduler: ${common_noise_scheduler}
@@ -169,7 +177,10 @@ models:
     use_ema: true
 
     model:
-      _target_: diffusion_policy.model.actor.Actor
+      _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+      action_shape: ${shape_meta.action.shape}
+      noise_scheduler: ${common_noise_scheduler}
+      obs_encoder_maker: ${common_obs_encoder}
       # leafs:
       #   block_transfer:
 
@@ -257,3 +268,11 @@ override:
     critic:
       noise_scheduler:
         _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+      critic:
+        critic:
+          qlmodel:
+            obs_encoder_maker:
+              action:
+                state: ${shape_meta.action.shape}
+
+  

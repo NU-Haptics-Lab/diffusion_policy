@@ -84,7 +84,8 @@ lowdims:
     x: ObsEncoderMaker = hydra.utils.instantiate(config)
     
     obs_encoder: ObservationEncoder = x.get()
-    obs_encoder.output_shape() # no input_shape needed
+    sh = obs_encoder.output_shape() # no input_shape needed
+    print("output shape: {}".format(sh))
     
     
 if __name__ == "__main__":

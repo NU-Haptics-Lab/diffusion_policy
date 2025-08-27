@@ -22,21 +22,20 @@ import torchsummary
 from torchvision import models as vision_models
 
 import diffusion_policy.model.components.dexnex_layers as dexnex_layers
+from diffusion_policy.model.obs_encoder import ObsEncoderMaker
 
-from .obs_encoder import ObsEncoder
 
 
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
-            shape_meta: dict,
+            action_shape: dict,
             noise_scheduler: DDPMScheduler,
-            obs_encoder: ObsEncoder,
+            obs_encoder_maker: ObsEncoderMaker,
             horizon, 
             n_action_steps, 
             n_obs_steps,
             num_inference_steps=None,
             obs_as_global_cond=True,
-            crop_shape=(76, 76),
             diffusion_step_embed_dim=256,
             down_dims=(256,512,1024),
             kernel_size=5,
@@ -49,31 +48,11 @@ class DiffusionModel(BaseImagePolicy):
         super().__init__()
 
         # parse shape_meta
-        action_shape = shape_meta['action']['shape']
         assert len(action_shape) == 1
         action_dim = action_shape[0]
-        obs_shape_meta = shape_meta['obs']
-        obs_config = {
-            'low_dim': [],
-            'rgb': [],
-            'depth': [],
-            'scan': []
-        }
-        obs_key_shapes = dict()
-        for key, attr in obs_shape_meta.items():
-            shape = attr['shape']
-            obs_key_shapes[key] = list(shape)
-
-            type = attr.get('type', 'low_dim')
-            if type == 'rgb':
-                obs_config['rgb'].append(key)
-            elif type == 'low_dim':
-                obs_config['low_dim'].append(key)
-            else:
-                raise RuntimeError(f"Unsupported obs type: {type}")
             
         # init the obs encoder object
-        self.obs_encoder = obs_encoder
+        self.obs_encoder = obs_encoder_maker.get()
         
         if obs_encoder_group_norm:
             # replace batch norm with group norm
@@ -82,17 +61,15 @@ class DiffusionModel(BaseImagePolicy):
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
                 func=lambda x: 
                     nn.GroupNorm(
-                    num_groups=x.num_features//16, # optimal is 16 channels per group ... although it really didn't vary THAT much according to this blogpost: https://amaarora.github.io/posts/2020-08-09-groupnorm.html
-                    # num_groups=2, # hardcode, will run faster
+                    num_groups=x.num_features//16,
                     num_channels=x.num_features)
-                    # nn.Identity()
             )
             # obs_encoder.obs_nets['agentview_image'].nets[0].nets
         
         # obs_encoder.obs_randomizers['agentview_image']
         if eval_fixed_crop:
             replace_submodules(
-                root_module=obs_encoder,
+                root_module=self.obs_encoder,
                 predicate=lambda x: isinstance(x, rmbn.CropRandomizer),
                 func=lambda x: dmvc.CropRandomizer(
                     input_shape=x.input_shape,
@@ -106,7 +83,7 @@ class DiffusionModel(BaseImagePolicy):
         # print 
 
         # create diffusion model
-        obs_feature_dim = obs_encoder.output_shape()[0]
+        obs_feature_dim = self.obs_encoder.output_shape()[0]
         input_dim = action_dim + obs_feature_dim
         global_cond_dim = None
         if obs_as_global_cond:
@@ -124,7 +101,6 @@ class DiffusionModel(BaseImagePolicy):
             cond_predict_scale=cond_predict_scale
         )
 
-        self.obs_encoder = obs_encoder
         self.model = model
         self.noise_scheduler = noise_scheduler
         self.mask_generator = LowdimMaskGenerator(
@@ -144,7 +120,7 @@ class DiffusionModel(BaseImagePolicy):
         self.kwargs = kwargs
 
         if num_inference_steps is None:
-            num_inference_steps = noise_scheduler.config.num_train_timesteps
+            num_inference_steps = self.noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
 
         print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))

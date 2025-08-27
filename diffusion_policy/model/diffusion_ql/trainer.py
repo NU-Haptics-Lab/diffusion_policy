@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from diffusion_policy.model.diffusion.ema_model import EMAModel
+from diffusion_policy.model.diffusion_ql.critic import DoubleCritic
 
 """
 Based on this paper: https://arxiv.org/pdf/2208.06193
@@ -21,7 +22,7 @@ class DiffusionQL(object):
     https://github.com/Zhendong-Wang/Diffusion-Policies-for-Offline-RL/blob/d871f5c6b4a3a3a19a10c662a54f32d5819dfcdb/agents/ql_diffusion.py#L49 
     """
     def __init__(self,
-                 critic, # should be on device
+                 critic: DoubleCritic, # should be on device
                  discount=0.99,
                  tau=0.005,
                  max_q_backup=False,
@@ -77,7 +78,10 @@ class DiffusionQL(object):
         not_done = nbatch_dict['not_done']
 
         """ Q Training """
-        current_q1, current_q2 = self.critic(state, action, task_id)
+        # assemble options
+        options = {}
+        options['leaf'] = task_id
+        current_q1, current_q2 = self.critic(state, action, options)
 
         """ max-q-backup not yet integrated, Kumar et al. 2020 """
         # if self.max_q_backup:
