@@ -59,13 +59,16 @@ class QLModel(nn.Module):
                  if_stack_history: bool = True,
                  ):
         super().__init__()
-        
-        # get the robomimic obs-encoder
-        self.obs_encoder: ObservationEncoder = obs_encoder_maker.get()
+        self.obs_encoder_maker = obs_encoder_maker
         self.if_stack_history = if_stack_history
         
-        # calc the obs output
-        
+        # if we're stacking the history
+        if self.if_stack_history:
+            self.MakeStackObsEncoder()
+
+        # get the robomimic obs-encoder
+        self.obs_encoder: ObservationEncoder = self.obs_encoder_maker.get()
+                    
         # rootcaps
         rootcaps = {}
         
@@ -94,6 +97,30 @@ class QLModel(nn.Module):
                          trunk,
                          branches,
                          leafs)
+        
+    def MakeStackObsEncoder(self):
+        # if we're stacking the history, we must modify the shape meta 
+        # local copy
+        rgbs = copy.deepcopy(self.obs_encoder_maker.rgbs)
+        lowdims = copy.deepcopy(self.obs_encoder_maker.rgbs)
+        ch = self.obs_encoder_maker.ch
+        cw = self.obs_encoder_maker.cw
+
+        len_history = len(globals.CONFIG.obs_rel_indices)
+
+        # iterate over keys
+        for key, val in list(rgbs.items()) + list(lowdims.items()):
+            # get the shape
+            shape = val.shape
+
+            # only need to stack the first axis
+            shape[0] *= len_history
+
+        # make the obs encoder maker
+        oem = ObsEncoderMaker(rgbs, lowdims, ch, cw)
+
+        # save it 
+        self.obs_encoder_maker = oem
         
     def StackHistory(self, dd):
         def fcn(x):

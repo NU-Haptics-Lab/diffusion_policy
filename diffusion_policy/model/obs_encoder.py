@@ -28,6 +28,10 @@ class ObsEncoderMaker():
             ch,
             cw
     ):
+        self.rgbs = rgbs
+        self.lowdims = lowdims
+        self.ch = ch
+        self.cw = cw
         
         self.obs_encoder = ObservationEncoder(feature_activation=torch.nn.ReLU)
 
