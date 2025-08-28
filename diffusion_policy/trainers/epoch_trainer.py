@@ -4,6 +4,7 @@ from diffusion_policy.trainers.step_trainer import StepTrainer
 from .common import CalcSumLoss
 from diffusion_policy.utils import EveryEpoch
 import tqdm
+import numpy as np
 
 class Epoch:
     """
@@ -41,15 +42,32 @@ class EpochEvaluator(Epoch):
             # switch to eval mode
             self.models.eval()
             
+            # setup logging
+            step_log = {}
+            val_losses = []
+            val_action_mse_errors = []
+            
+            # evaluate for a nb of batches
             for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Evaluation epoch {globals.EPOCH}", leave=False):
                 # eval for one batch
                 total_loss = CalcSumLoss(self.w_batch_losses)
-
+                
                 # end of batch logging
-                pass
+                val_losses.append(total_loss)
 
-            # end of epoch stuff
-            pass
+            # finish logging
+            if len(val_losses) > 0:
+                val_loss = torch.mean(torch.tensor(val_losses)).item()
+                # log epoch average validation loss
+                step_log['val_loss'] = val_loss
+                
+            if len(val_action_mse_errors) > 0:
+                val_action_mse_error = torch.mean(torch.tensor(val_action_mse_errors)).item()
+                # log epoch average validation loss
+                step_log['val_action_mse_error'] = val_action_mse_error
+            
+            #
+            globals.LOGGER.log(step_log)
         
             # switch to training mode
             self.models.train()
@@ -74,12 +92,24 @@ class EpochTrainer(Epoch):
         Train for one epoch. 
         Done once we've gone through the entire dataset...? Doesn't quite work with co-training off multiple datasets
         """
+        losses = []
+        
         for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Training epoch {globals.EPOCH}", leave=False):
-            # train for one batch
+            # train for one step
             self.step_trainer.train()
 
-            # end of batch logging
-            pass
+            # update the global step count
+            globals.STEP += 1
+            
+            ## end of step logging
+            losses.append(self.step_trainer.raw_loss_cpu)
+            log = {
+                "global_step": globals.STEP,
+            }
+            globals.LOGGER.log(log)
 
         # end of epoch stuff
-        pass
+        log = {
+            "avg_loss": np.mean(losses),
+        }
+        globals.LOGGER.log(log)

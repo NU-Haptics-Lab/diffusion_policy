@@ -74,6 +74,9 @@ def main(cfg: OmegaConf):
     OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override)
     print("Config merged.")
         
+    # spin up the logger
+    globals.LOGGER = hydra.utils.instantiate(globals.CONFIG.logging)
+    print("Logger spun.")
     
     # spin up the replay buffer loader
     globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader)

@@ -278,13 +278,39 @@ class DiffusionModel(BaseImagePolicy):
             plt.plot(x, y, '*')
             
         return nresult
+    
+    def loss(self, nbatch):
+        # in training mode
+        if self.training:
+            return self.compute_loss(nbatch)
+        
+        # in evaluation mode
+        else:
+            self.get_val_action_mse_error(nbatch)
+            
+    def get_val_action_mse_error(self, nbatch):
+        # ground truth action
+        nobs = nbatch['obs']
+        gt_action = nbatch['action']
+        
+        # denoise
+        result = self.predict_action(nobs)
+        
+        # extract the predicted action
+        pred_action = result['action_pred']
+        
+        # calc mse
+        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+        
+        # move to cpu
+        action_mse_error = mse.item()
 
     # ========= training  ============
     def compute_loss(self, nbatch):
         # normalize input
         assert 'valid_mask' not in nbatch
         
-        # # for cotraining, we normalize when we construct the batch
+        # for cotraining, we normalize when we construct the batch
         nobs = nbatch['obs']
         nactions = nbatch['action']
         batch_size = nactions.shape[0]

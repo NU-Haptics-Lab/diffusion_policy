@@ -40,7 +40,21 @@ training:
   tqdm_interval_sec: 1.0
 
 
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
 
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online
+    name: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_box_and_blocks_image
+    project: diffusion_policy_debug
+    resume: true
+    tags:
+    - train_diffusion_unet_hybrid
+    - box_and_blocks_image
+    - default
 
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker

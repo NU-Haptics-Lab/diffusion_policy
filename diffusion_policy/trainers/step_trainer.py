@@ -33,10 +33,9 @@ class StepTrainer:
         globals.MODELS.Step()
 
         # logging
-        raw_loss_cpu = total_loss.item()
-        # tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
-        # train_losses.append(raw_loss_cpu)
+        self.raw_loss_cpu = total_loss.item()
         
-        step_log = {
-            'total_train_loss': raw_loss_cpu,
+        log = {
+            'total_train_loss': self.raw_loss_cpu,
         }
+        globals.LOGGER.log(log)

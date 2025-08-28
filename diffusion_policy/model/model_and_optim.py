@@ -45,9 +45,9 @@ class ModelandOptim:
             last_epoch=globals.STEP-1
         )
         
-    def compute_loss(self, nbatch):
+    def loss(self, nbatch):
         # compute loss for the model
-        raw_loss = self.model.compute_loss(nbatch)
+        raw_loss = self.model.loss(nbatch)
         loss = raw_loss / self.gradient_accumulate_every
         
         # for logging

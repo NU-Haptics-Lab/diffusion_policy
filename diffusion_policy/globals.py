@@ -35,10 +35,11 @@ Contains all models used in training
 """
 MODELS: Models = None
 
-
-
 """ Epoch count """
 EPOCH = 0
 
 """ Training step count """
 STEP = 0
+
+""" Logger """
+LOGGER = None

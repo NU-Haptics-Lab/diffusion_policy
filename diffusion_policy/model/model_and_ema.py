@@ -40,13 +40,10 @@ class ModelandEMA:
         
         # init in train mode
         self.train()
-        
-    def compute_loss(self, nbatch):
-        return self.model.compute_loss(nbatch)
-    
+            
     def loss(self, nbatch, task_id):
         """ alias for compute_loss """
-        return self.compute_loss(nbatch)
+        return self.model.loss(nbatch)
     
     def update_ema(self):
         if self.use_ema:
