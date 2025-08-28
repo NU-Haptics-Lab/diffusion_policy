@@ -3,6 +3,7 @@ import diffusion_policy.globals as globals
 from diffusion_policy.trainers.step_trainer import StepTrainer
 from .common import CalcSumLoss
 from diffusion_policy.utils import EveryEpoch
+import tqdm
 
 class Epoch:
     """
@@ -37,9 +38,10 @@ class EpochEvaluator(Epoch):
         eval for one epoch.
         """
         if EveryEpoch(self.val_every):
+            # switch to eval mode
             self.models.eval()
             
-            for nb in range(self.nb_batches):
+            for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Evaluation epoch {globals.EPOCH}", leave=False):
                 # eval for one batch
                 total_loss = CalcSumLoss(self.w_batch_losses)
 
@@ -49,6 +51,7 @@ class EpochEvaluator(Epoch):
             # end of epoch stuff
             pass
         
+            # switch to training mode
             self.models.train()
     
     
@@ -71,7 +74,7 @@ class EpochTrainer(Epoch):
         Train for one epoch. 
         Done once we've gone through the entire dataset...? Doesn't quite work with co-training off multiple datasets
         """
-        for nb in range(self.nb_batches):
+        for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Training epoch {globals.EPOCH}", leave=False):
             # train for one batch
             self.step_trainer.train()
 

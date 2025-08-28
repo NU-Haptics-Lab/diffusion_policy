@@ -106,7 +106,7 @@ session_trainer:
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochEvaluator
-    nb_batches: ${num_train_batches}
+    nb_batches: 2
     val_every: 2
 
     # weighted batch loss dict

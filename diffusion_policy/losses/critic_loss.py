@@ -81,3 +81,6 @@ class CriticLoss:
         
     def eval(self):
         self.critic.eval()
+        
+    def train(self):
+        self.critic.train()

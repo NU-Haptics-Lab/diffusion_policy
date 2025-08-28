@@ -58,7 +58,8 @@ def main(cfg: OmegaConf):
     # whether we're debugging
     if globals.CONFIG.debug:
         globals.CONFIG.common_dataset.options.common.batch_size = 4
-        globals.CONFIG.total_num_epochs = 1
+        globals.CONFIG.total_num_epochs = 4
+        globals.CONFIG.num_train_batches = 4
         globals.CONFIG.common_dataset.options.train.num_workers = 0
         globals.CONFIG.common_dataset.options.train.persistent_workers = False
         globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10

@@ -1,4 +1,4 @@
-import diffusion_policy.globals
+import diffusion_policy.globals as globals
 from diffusion_policy.trainers.epoch_trainer import EpochTrainer, EpochEvaluator
 
 class SessionTrainer:

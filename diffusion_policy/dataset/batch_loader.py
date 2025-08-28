@@ -272,8 +272,8 @@ class BatchLoader:
             print("next(iterator) except: ")
             print(e)
             
-            # reshuffle this iterator
-            self.iterator = iter(self.dataloader)
+            # reset
+            self.reset()
             
             # get a new batch
             batch = next(self.iterator) # output: dict
@@ -287,19 +287,19 @@ class BatchLoader:
     
     # called each for-loop
     def __next__(self):
-        
-        if self.count < globals.CONFIG.num_train_batches:
-            # increment our count
-            self.count += 1
+        nbatch = self.get_batch()
 
-            nbatch = self.get_batch()
-
-            return nbatch
+        return nbatch
         
-        else:
-            # we've done num_batches
-            # print("Iteration done. Count: {}".format(self.count))
-            raise StopIteration
+        # if self.count < globals.CONFIG.num_train_batches:
+        #     # increment our count
+        #     self.count += 1
+
+        
+        # else:
+        #     # we've done num_batches
+        #     # print("Iteration done. Count: {}".format(self.count))
+        #     raise StopIteration
 
 class NestedBatchLoader(dict):
     """
