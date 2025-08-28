@@ -327,11 +327,15 @@ class CascadingCNNSpatialSoftmax(rmbn.ConvBase):
     """
     Similar to ResNet, but bleeds off spatial softmax arrays at each layer
     """
-    def __init__(self):
+    def __init__(self,
+                 input_channels = 3
+                 ):
         super().__init__()
         
         # params
         self.nb_keypoints = 32
+        
+        # TODO[tobyb] replace this with an input
         input_shape = 184
         
         # make the resnet
@@ -345,8 +349,13 @@ class CascadingCNNSpatialSoftmax(rmbn.ConvBase):
             nn.Sequential(*children[6:7]), # layer3
             nn.Sequential(*children[7:8]), # layer4
         ])
+        
         resnet_channels = [64, 64, 128, 256, 512]
         shapes = [92, 46, 23, 12, 6]
+        
+        # might have to replace the conv1
+        if input_channels != 3:
+            self.resnet_layers[0][0] = nn.Conv2d(input_channels, resnet_channels[0], kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         
         spatial_softmaxs = []
         

@@ -1,3 +1,4 @@
+import torch
 from typing import Any
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 import hydra
@@ -70,7 +71,13 @@ class CriticLoss:
         action_next = self.Denoise(nbatch['obs_next'])
         
         # returns loss, metric
-        loss, metric = self.critic.Step(nbatch, action, action_next, task_id)
+        loss = self.critic.Loss(nbatch, action, action_next, task_id)
         
-        return loss, metric
+        return loss
         
+    def Step(self):
+        # I'm only in charge of the critic
+        self.critic.Step()
+        
+    def eval(self):
+        self.critic.eval()

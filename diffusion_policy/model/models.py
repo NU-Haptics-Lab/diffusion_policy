@@ -20,9 +20,16 @@ class Models:
         for idx, model in self.models.items():
             model.train()
             
-    def __getitem__(self, idx):
-        return self.models[idx]
+    def __getitem__(self, key):
+        return self.models[key]
     
-    def step(self):
+    def Step(self):
         for idx, model in self.models.items():
-            model.step()
+            model.Step()
+            
+            
+# if __name__ == "__main__":
+#     models = {"a": object(), "b": object()}
+    
+#     m = Models(models)
+#     pass

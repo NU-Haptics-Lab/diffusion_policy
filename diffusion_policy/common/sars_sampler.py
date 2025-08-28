@@ -423,9 +423,16 @@ class EpisodeSampler:
         done = ep_idx + 2 == len(self)
         not_done = not done
         
-        # convert to np array
+        # convert to np array, must add a dimension
         not_done = np.array([not_done])
         return not_done
+    
+    def get_reward(self, ep_idx):
+        reward = self.get_key_sample("reward", ep_idx)
+        
+        # convert to np array, must add a dimension
+        reward = np.array([reward])
+        return reward
 
         return ep_indices
 
@@ -486,7 +493,7 @@ class EpisodeSampler:
 
         sample["action"] = self.get_action_sample(ep_idx)
 
-        sample["reward"] = self.get_key_sample("reward", ep_idx)
+        sample["reward"] = self.get_reward(ep_idx)
 
         sample["not_done"] = self.get_not_done(ep_idx)
 

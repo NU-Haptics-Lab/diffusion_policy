@@ -9,11 +9,11 @@ class Tree(nn.Module):
     a Tree-style nn module, where it has a common trunk and separate leafs (a.k.a. heads) for each dataset.
     """
     def __init__(self,
-            rootcaps: dict,
-            roots: dict,
+            rootcaps: nn.ModuleDict,
+            roots: nn.ModuleDict,
             trunk: nn.Module,
-            branches: dict,
-            leafs: dict
+            branches: nn.ModuleDict,
+            leafs: nn.ModuleDict,
             ):
         super().__init__()
         

@@ -32,7 +32,7 @@ class BatchLoss:
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
 
-        # get the actor loss
+        # get the actor los\
         actor_loss = self.actor.loss(nbatch, self.rb_id)
 
         # get the critic loss

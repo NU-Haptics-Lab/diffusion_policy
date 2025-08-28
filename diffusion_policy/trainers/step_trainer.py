@@ -30,7 +30,7 @@ class StepTrainer:
         total_loss.backward()
 
         # now we can step all of the models
-        globals.MODELS.step()
+        globals.MODELS.Step()
 
         # logging
         raw_loss_cpu = total_loss.item()

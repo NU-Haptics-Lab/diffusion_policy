@@ -10,6 +10,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.diffusion_ql.critic import DoubleCritic
+from diffusion_policy.common.pytorch_util import optimizer_to
+
+import diffusion_policy.globals as globals
 
 """
 Based on this paper: https://arxiv.org/pdf/2208.06193
@@ -49,9 +52,18 @@ class DiffusionQL(object):
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
         
+        # device transfer members, since I own it
+        device = torch.device(globals.CONFIG.device)
+        self.critic.to(device)
+        self.critic_target.to(device)
+        optimizer_to(self.critic_optimizer, device)
+        
         # EMA
         ema_model = copy.deepcopy(self.critic)
         self.ema = EMAModel(ema_model)
+        
+        # device transfer of the ema, since I own it
+        ema_model.to(device)
 
         if lr_decay:
             self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=lr_maxt, eta_min=0.)
@@ -61,7 +73,12 @@ class DiffusionQL(object):
         self.eta = eta  # q_learning weight
         self.max_q_backup = max_q_backup
         
-    def StepCritic(self, nbatch_dict, next_action, task_id):
+    def MakeOptions(self, task_id):
+        options = {}
+        options['leaf'] = task_id
+        return options
+        
+    def LossCritic(self, nbatch_dict, next_action, options):
         """
         samples - must be the same noised trajectories that were passed through the actor model (fcn: policy.compute_loss)
         new_action - should be the action calculated by using the predicted noise from the actor model.
@@ -79,9 +96,6 @@ class DiffusionQL(object):
         not_done = nbatch_dict['not_done']
 
         """ Q Training """
-        # assemble options
-        options = {}
-        options['leaf'] = task_id
         current_q1, current_q2 = self.critic(state, action, options)
 
         """ max-q-backup not yet integrated, Kumar et al. 2020 """
@@ -93,19 +107,33 @@ class DiffusionQL(object):
         #     target_q2 = target_q2.view(batch_size, 10).max(dim=1, keepdim=True)[0]
         #     target_q = torch.min(target_q1, target_q2)
         # else:
-        target_q1, target_q2 = self.critic_target(next_state, next_action)
-        target_q = torch.min(target_q1, target_q2)
+        
+        # TODO [tobyb] small optimization: only calc target_qm if not_done is True
+        target_q1, target_q2 = self.critic_target(next_state, next_action, options)
+        target_qm = torch.min(target_q1, target_q2)
 
-        target_q = (reward + not_done * self.discount * target_q).detach()
+        target_q = (reward + not_done * self.discount * target_qm).detach()
 
         critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        
+        metric['critic_loss'] = critic_loss.item()
+        metric['Target_Q Mean'] = target_q.mean().item()
+        
+        return critic_loss
 
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
+    def Step(self):
+        """
+        steps the critic network
+        """
+        metric = {}
+        
         if self.grad_norm > 0:
             critic_grad_norms = nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=self.grad_norm, norm_type=2)
             metric['Critic Grad Norm'] = critic_grad_norms.max().item()
+            
+        # update critic weights
         self.critic_optimizer.step()
+        self.critic_optimizer.zero_grad()
 
         """ Step Target network """
         for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
@@ -113,21 +141,21 @@ class DiffusionQL(object):
 
         self.step += 1
 
-        metric['critic_loss'] = critic_loss.item()
-        metric['Target_Q Mean'] = target_q.mean().item()
 
         if self.lr_decay: 
             self.critic_lr_scheduler.step()
 
         return metric
     
-    def StepActor(self, state, new_action):
+    def LossActor(self, state, new_action, options):
         """
         Use the uncorrupted state and the denoise action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
         """
         metric = {}
 
-        q1_new_action, q2_new_action = self.critic(state, new_action)
+        q1_new_action, q2_new_action = self.critic(state, new_action, options)
+        
+        # flip a coin, randomly use q1 or q2
         if np.random.uniform() > 0.5:
             q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
         else:
@@ -139,19 +167,23 @@ class DiffusionQL(object):
         
         return loss, metric
         
-    def Step(self, nbatch_dict, new_action, next_action, task_id):
+    def Loss(self, nbatch_dict, new_action, next_action, task_id):
+        
+        options = self.MakeOptions(task_id)
+        
         # train the critic, using (s, a, r, s') & a'
-        metric = self.StepCritic(nbatch_dict, next_action, task_id)
+        critic_loss = self.LossCritic(nbatch_dict, next_action, options)
         
         # extract the state
-        state = nbatch_dict['nobs']
+        state = nbatch_dict['obs']
         
-        # train the actor using (s, a)
-        loss, ametric = self.StepActor(state, new_action)
+        # get the actor loss using (s, a)
+        actor_loss, ametric = self.LossActor(state, new_action, options)
         
-        metric.update(ametric)
+        # metric.update(ametric)
+        loss = critic_loss + actor_loss
         
-        return loss, metric
+        return loss
 
     def save_model(self, dir, id=None):
         if id is not None:
@@ -164,3 +196,6 @@ class DiffusionQL(object):
             self.critic.load_state_dict(torch.load(f'{dir}/critic_{id}.pth'))
         else:
             self.critic.load_state_dict(torch.load(f'{dir}/critic.pth'))
+            
+    def eval(self):
+        self.critic.eval()

@@ -29,6 +29,10 @@ class ModelandOptim:
         # transfer to GPU
         optimizer_to(self.optimizer, globals.CONFIG.device)
         
+        # device transfer of the model, since I own it
+        device = torch.device(globals.CONFIG.device)
+        self.model.to(device)
+        
         # make the LR scheduler
         self.lr_scheduler = get_scheduler(
             lr_scheduler,
@@ -51,7 +55,7 @@ class ModelandOptim:
 
         return loss
     
-    def step(self):
+    def Step(self):
         if globals.STEP % self.gradient_accumulate_every == 0:
             self.optimizer.step()
             self.optimizer.zero_grad()

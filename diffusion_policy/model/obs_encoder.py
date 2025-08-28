@@ -13,8 +13,10 @@ def make_ob(
         cw
 ):
     image_randomizer = rmbn.CropRandomizer(input_shape=shape, crop_height=ch, crop_width=cw)
+    
+    nb_channels = shape[0]
 
-    net = CascadingCNNSpatialSoftmax()
+    net = CascadingCNNSpatialSoftmax(nb_channels)
 
     return image_randomizer, net
 

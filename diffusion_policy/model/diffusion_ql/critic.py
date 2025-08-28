@@ -45,9 +45,9 @@ class QLDenser(nn.Module):
                     nn.Mish(),
                     )
         
-    def forward(self, image_features, non_image_features):
-        x = torch.cat([image_features, non_image_features])
-        x = self.model(input)
+    def forward(self, inputs):
+        # x = torch.cat([image_features, non_image_features])
+        x = self.model(inputs)
         return x
     
     def output_shape(self, input_shape=None):
@@ -70,25 +70,26 @@ class QLModel(nn.Module):
         self.obs_encoder: ObservationEncoder = self.obs_encoder_maker.get()
                     
         # rootcaps
-        rootcaps = {}
+        rootcaps = nn.ModuleDict()
         
         # roots
-        roots = {}
+        roots = nn.ModuleDict()
 
         # trunk
         # MLP based off obs encoder output shape. Output is a list, should be 1 long, so extract the first and only element
-        self.trunk_denser = QLDenser(self.obs_encoder.output_shape()[0])
-        trunk = nn.Sequential(
-            self.obs_encoder,
-            self.trunk_denser
-        )
+        dense_input = self.obs_encoder.output_shape()[0] + len(globals.CONFIG.action_rel_indices) * globals.CONFIG.shape_meta.action.shape[0]
+        self.trunk_denser = QLDenser(dense_input)
+        trunk = self.trunk_denser
         
-        branches = {}
+        branches = nn.ModuleDict()
 
         # leafs
-        leafs = {}
-        for key, val in enumerate(globals.REPLAY_BUFFER_LOADER.rbs.items()):
-            leafs[key] = QLDenser(self.trunk_denser.output_shape())
+        leafs = nn.ModuleDict()
+        for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
+            leafs[key] = nn.Sequential(
+                QLDenser(self.trunk_denser.output_shape()),
+                nn.Linear(256, 1) # critic must output a single q-value
+            )
 
         # tree
         self.tree = Tree(
@@ -102,7 +103,7 @@ class QLModel(nn.Module):
         # if we're stacking the history, we must modify the shape meta 
         # local copy
         rgbs = copy.deepcopy(self.obs_encoder_maker.rgbs)
-        lowdims = copy.deepcopy(self.obs_encoder_maker.rgbs)
+        lowdims = copy.deepcopy(self.obs_encoder_maker.lowdims)
         ch = self.obs_encoder_maker.ch
         cw = self.obs_encoder_maker.cw
 
@@ -130,17 +131,29 @@ class QLModel(nn.Module):
         
         out = dict_apply(dd, fcn)
         return out
+    
+    def forward_obs(self, state, action):
+        s = self.obs_encoder(state)
+        
+        # stack the actions
+        a = torch.flatten(action, start_dim=1, end_dim=2)
+        
+        # concat along last dimension
+        x = torch.concat([s, a], dim=-1)
+        
+        return x
 
     def forward(self, state_dict, action, options: dict = None):
         # stack the state history
         if self.if_stack_history:
             state_dict = self.StackHistory(state_dict)
             
-        # combine the state and actions
-        inputs_dict = state_dict
-        inputs_dict["action"] = action
+        # encode the inputs
+        x = self.forward_obs(state_dict, action)
 
-        self.tree.forward_options(inputs_dict, options)
+        x = self.tree.forward_options(x, options)
+        
+        return x
             
         
 

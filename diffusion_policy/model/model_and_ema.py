@@ -50,7 +50,7 @@ class ModelandEMA:
     
     def update_ema(self):
         if self.use_ema:
-            self.ema_model.step(self.model)
+            self.ema.step(self.model.get_model())
             
     def eval(self):
         """
@@ -65,8 +65,8 @@ class ModelandEMA:
         """
         self.run_model = self.model
         
-    def step(self):
-        self.model.step()
+    def Step(self):
+        self.model.Step()
         self.update_ema()
         
     def denoise(self, 

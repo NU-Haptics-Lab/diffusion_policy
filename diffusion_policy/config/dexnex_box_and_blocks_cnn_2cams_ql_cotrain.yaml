@@ -166,61 +166,68 @@ common_dataset:
 
 # models node
 models:
-  critic:
-    _target_: diffusion_policy.losses.critic_loss.CriticLoss
+  _target_: diffusion_policy.model.models.Models
 
-    # children
+  models:
     critic:
-      _target_: diffusion_policy.model.diffusion_ql.trainer.DiffusionQL
-
-      critic:
-        _target_: diffusion_policy.model.diffusion_ql.critic.DoubleCritic
-
-        qlmodel:
-          _target_: diffusion_policy.model.diffusion_ql.critic.QLModel
-
-          obs_encoder_maker:
-            ${common_obs_encoder}
-
-
-    noise_scheduler: ${common_noise_scheduler}
-    num_inference_steps: 100
-
-  actor:
-    _target_: diffusion_policy.model.model_and_ema.ModelandEMA
-    use_ema: true
-
-    model:
-      _target_: diffusion_policy.model.model_and_optim.ModelandOptim
-      lr_scheduler: cosine
-      lr_warmup_steps: 500
-      gradient_accumulate_every: 1
-      optimizer_target: torch.optim.AdamW
-      optimizer_cfg:
-        betas:
-          - 0.95
-          - 0.999
-        eps: 1.0e-08
-        lr: 0.0001
-        weight_decay: 1.0e-06
+      _target_: diffusion_policy.losses.critic_loss.CriticLoss
 
       # children
-      model:
-        _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-        action_shape: ${shape_meta.action.shape}
-        noise_scheduler: ${common_noise_scheduler}
-        obs_encoder_maker: ${common_obs_encoder}
-        eval_fixed_crop: true
-        obs_as_global_cond: true
-        obs_encoder_group_norm: true
-        n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+      critic:
+        _target_: diffusion_policy.model.diffusion_ql.trainer.DiffusionQL
 
-    ema_cfg:
-      inv_gamma: 1.0
-      max_value: 0.9999
-      min_value: 0.0
-      power: 0.75
-      update_after_step: 0
+        critic:
+          _target_: diffusion_policy.model.diffusion_ql.critic.DoubleCritic
+
+          qlmodel:
+            _target_: diffusion_policy.model.diffusion_ql.critic.QLModel
+
+            obs_encoder_maker:
+              ${common_obs_encoder}
+
+
+      noise_scheduler: ${common_noise_scheduler}
+      num_inference_steps: 10
+
+    actor:
+      _target_: diffusion_policy.model.model_and_ema.ModelandEMA
+      use_ema: true
+
+      model:
+        _target_: diffusion_policy.model.model_and_optim.ModelandOptim
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 0.0001
+          weight_decay: 1.0e-06
+
+        # children
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: true
+          obs_as_global_cond: true
+          obs_encoder_group_norm: true
+          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+          down_dims: 
+            - 256
+            - 512
+            - 1024
+
+      ema_cfg:
+        inv_gamma: 1.0
+        max_value: 0.9999
+        min_value: 0.0
+        power: 0.75
+        update_after_step: 0
 
 
 common_noise_scheduler:
@@ -289,20 +296,21 @@ override:
         rb_id: bnb_2cams
 
   models:
-    critic:
-      noise_scheduler:
-        _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    models:
       critic:
-        critic:
-          qlmodel:
-            obs_encoder_maker:
-              lowdims:
-                # add on actions to the input
-                action:
-                  shape: ${shape_meta.action.shape}
+        noise_scheduler:
+          _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+        # critic:
+        #   critic:
+        #     qlmodel:
+        #       obs_encoder_maker:
+        #         lowdims:
+                  # add on actions to the input
+                  # action:
+                  #   shape: ${shape_meta.action.shape}
 
-    actor:
-      model:
+      actor:
         model:
-          noise_scheduler:
-            variance_type: fixed_small
+          model:
+            noise_scheduler:
+              variance_type: fixed_small

@@ -62,6 +62,10 @@ class DataArray:
                  ):
         self.datapoint = None
         self.normalizer = normalizer
+        
+        # transfer to device, since I own normalizer
+        device = torch.device(globals.CONFIG.device)
+        self.normalizer.to(device)
 
     def set(self, dp: torch.Tensor):
         self.datapoint = dp
