@@ -1,7 +1,7 @@
 import torch
 import diffusion_policy.globals as globals
 from diffusion_policy.trainers.step_trainer import StepTrainer
-from .common import CalcSumLoss
+from .common import CalcSumLoss, CalcSumEval
 from diffusion_policy.utils import EveryEpoch
 import tqdm
 import numpy as np
@@ -50,10 +50,11 @@ class EpochEvaluator(Epoch):
             # evaluate for a nb of batches
             for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Evaluation epoch {globals.EPOCH}", leave=False):
                 # eval for one batch
-                total_loss = CalcSumLoss(self.w_batch_losses)
+                total_evals = CalcSumEval(self.w_batch_losses)
                 
                 # end of batch logging
-                val_losses.append(total_loss)
+                val_losses.append(total_evals[0])
+                val_action_mse_errors.append(total_evals[1])
 
             # finish logging
             if len(val_losses) > 0:

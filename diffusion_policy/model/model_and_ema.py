@@ -71,6 +71,9 @@ class ModelandEMA:
             noise_scheduler,
             ):
         return self.model.denoise(nobs_dict, noise_scheduler)
+    
+    def get_model(self):
+        return self.model.get_model()
         
 
 def test():
