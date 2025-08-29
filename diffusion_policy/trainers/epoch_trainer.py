@@ -111,6 +111,6 @@ class EpochTrainer(Epoch):
 
         # end of epoch stuff
         log = {
-            "avg_loss": np.mean(losses),
+            "epoch_avg_loss": np.mean(losses),
         }
         globals.LOGGER.log(log)

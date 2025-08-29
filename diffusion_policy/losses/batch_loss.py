@@ -6,6 +6,8 @@ from diffusion_policy.dataset.batch_loader import BatchLoader
 from diffusion_policy.losses.actor_loss import ActorLoss
 from diffusion_policy.losses.critic_loss import CriticLoss
 
+from diffusion_policy.common.pytorch_util import dict_apply
+
 
 class BatchLoss:
     """
@@ -35,10 +37,10 @@ class BatchLoss:
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
 
-        # get the actor loss
+        # get the BC loss
         actor_loss = self.actor.loss(nbatch, self.rb_id)
 
-        # get the critic loss
+        # get the DQL loss
         critic_loss = self.critic.loss(nbatch, self.rb_id)
 
         # weighted sum them
@@ -57,7 +59,36 @@ class BatchLoss:
         # get the action mse error
         action_mse_error = self.actor_model.get_val_action_mse_error(nbatch)
 
-        return actor_loss, action_mse_error
+        return actor_loss.cpu(), action_mse_error
+    
+class DQLBatchLoss(BatchLoss):
+    def compute_loss(self):
+        """
+        compute loss for one batch.
+        """
+        # get the batch from the batch loader
+        nbatch = next(self.batch_loader)
+
+        # get the BC loss
+        bc_loss = self.actor.loss(nbatch, self.rb_id)
+
+        # get the DQL loss
+        dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
+        
+        # summed actor loss
+        actor_loss = bc_loss + self.eta * dql_actor_loss
+
+        # summed critic loss
+        critic_loss = dql_critic_loss
+        
+        losses = {
+            'actor': actor_loss,
+            'critic': critic_loss
+        }
+
+        # we're done
+        return losses
+        
 
     
 class WeightedBatchLoss:
@@ -72,7 +103,10 @@ class WeightedBatchLoss:
         self.weight = weight
 
     def compute_weighted_loss(self):
-        wloss = self.weight * self.batch_loss.compute_loss()
+        losses = self.batch_loss.compute_loss()
+        
+        # apply the weighting to each loss
+        wloss = dict_apply(losses, lambda x: self.weight * x)
         return wloss
     
     def compute_weighted_eval(self):

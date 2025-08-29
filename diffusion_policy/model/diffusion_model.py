@@ -280,13 +280,13 @@ class DiffusionModel(BaseImagePolicy):
         return nresult
     
     def loss(self, nbatch):
-        # in training mode
-        if self.training:
-            return self.compute_loss(nbatch)
+        loss2 = self.compute_loss(nbatch)
         
-        # in evaluation mode
-        else:
-            self.get_val_action_mse_error(nbatch)
+        # logging
+        dd = {"bc_actor_loss": loss2}
+        globals.LOGGER.log(dd)
+        
+        return loss2
             
     def get_val_action_mse_error(self, nbatch):
         # ground truth action
@@ -294,16 +294,18 @@ class DiffusionModel(BaseImagePolicy):
         gt_action = nbatch['action']
         
         # denoise
-        result = self.predict_action(nobs)
+        nresult = self.predict_action(nobs)
         
         # extract the predicted action
-        pred_action = result['action_pred']
+        pred_action = nresult['naction_pred']
         
         # calc mse
         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
         
         # move to cpu
         action_mse_error = mse.item()
+        
+        return action_mse_error
 
     # ========= training  ============
     def compute_loss(self, nbatch):

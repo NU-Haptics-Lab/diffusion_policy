@@ -40,6 +40,10 @@ class Tree(nn.Module):
 
         if len(self.leafs) != 0:
             x = self.leafs[leaf](x)
+            
+            if x._version == 1:
+                print("hi")
+                pass
 
         return x
     

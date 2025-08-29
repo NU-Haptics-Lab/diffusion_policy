@@ -5,7 +5,7 @@ obs_rel_indices: [-15, -10, -5, 0]
 device: cuda:0
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 total_num_epochs: 141
-num_train_batches: 10
+batches_per_epoch: 100
 resume: false
 
 # common data
@@ -48,12 +48,12 @@ logging:
     group: null
     id: null
     mode: online
-    name: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_box_and_blocks_image
-    project: diffusion_policy_debug
-    resume: true
+    name: aug29.2025.diffusion_ql
+    project: dexnex_diffusion
+    resume: true # wandb automatic resume
     tags:
-    - train_diffusion_unet_hybrid
-    - box_and_blocks_image
+    - diffusion_ql
+    - cotrain
     - default
 
 common_obs_encoder:
@@ -106,7 +106,7 @@ session_trainer:
   # children
   epoch_trainer:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
-    nb_batches: ${num_train_batches}
+    nb_batches: ${batches_per_epoch}
 
     # children
     step_trainer: 
@@ -120,8 +120,8 @@ session_trainer:
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochEvaluator
-    nb_batches: 2
-    val_every: 2
+    nb_batches: 10
+    val_every: 4
 
     # weighted batch loss dict
     w_batch_losses:
@@ -136,8 +136,8 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.BatchLoss
-    eta: 0.5 # weight of the critic loss
+    _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
+    eta: 0.0 # weight of the dql actor loss
 
     # children
     batch_loader:
@@ -158,10 +158,10 @@ common_dataset:
 
   options:
     common:
-      batch_size: 64
+      batch_size: 16
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 4
+      num_workers: 1
       persistent_workers: true
       pin_memory: true
       shuffle: true
@@ -169,7 +169,7 @@ common_dataset:
       num_workers: 0
       persistent_workers: false
       pin_memory: false
-      shuffle: false
+      shuffle: true
 
   # child
   sampler:
@@ -232,9 +232,9 @@ models:
           obs_encoder_group_norm: true
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: 
+            - 128
             - 256
             - 512
-            - 1024
 
       ema_cfg:
         inv_gamma: 1.0

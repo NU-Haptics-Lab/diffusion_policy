@@ -62,8 +62,8 @@ class ModelandEMA:
         """
         self.run_model = self.model
         
-    def Step(self):
-        self.model.Step()
+    def step(self):
+        self.model.step()
         self.update_ema()
         
     def denoise(self, 
@@ -74,6 +74,9 @@ class ModelandEMA:
     
     def get_model(self):
         return self.model.get_model()
+    
+    def reset(self):
+        self.model.reset()
         
 
 def test():

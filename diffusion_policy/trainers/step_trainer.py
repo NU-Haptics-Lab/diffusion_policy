@@ -3,6 +3,7 @@ import torch
 import diffusion_policy.globals as globals
 
 from diffusion_policy.losses.batch_loss import WeightedBatchLoss
+from diffusion_policy.losses.losses import Losses
 
 from .common import CalcSumLoss
 
@@ -24,18 +25,34 @@ class StepTrainer:
 
     def train(self):
         # initialize a zero loss variable
-        total_loss = CalcSumLoss(self.w_batch_losses)
+        total_losses = CalcSumLoss(self.w_batch_losses)
+        # fjskdl = Losses(total_losses)
+        
+        # do one at a time
+        for key, val in total_losses.items():
+            # reset gradients
+            globals.MODELS.reset() 
+            
+            # back propagation
+            val.backward()
+            
+            # step
+            globals.MODELS[key].step()
+        
+        # reset gradients
+        globals.MODELS.reset() 
 
-        # calculate gradients for all datasets simultaneously
-        total_loss.backward()
+        # # calculate gradients for all losses and for all datasets simultaneously
+        # fjskdl.backward()
 
-        # now we can step all of the models
-        globals.MODELS.Step()
+        # # now we can step all of the models
+        # globals.MODELS.Step()
 
         # logging
-        self.raw_loss_cpu = total_loss.item()
+        # self.raw_loss_cpu = total_loss.item()
         
-        log = {
-            'total_train_loss': self.raw_loss_cpu,
-        }
-        globals.LOGGER.log(log)
+        # not very helpful for tracking training progress
+        # log = {
+        #     'total_train_loss': self.raw_loss_cpu,
+        # }
+        # globals.LOGGER.log(log)

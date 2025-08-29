@@ -44,7 +44,6 @@ class DiffusionQL(object):
         self.lr_decay = lr_decay
         self.grad_norm = grad_norm
 
-        self.step = 0
         self.step_start_ema = step_start_ema
         self.update_ema_every = update_ema_every
 
@@ -121,7 +120,7 @@ class DiffusionQL(object):
         
         return critic_loss
 
-    def Step(self):
+    def step(self):
         """
         steps the critic network
         """
@@ -133,15 +132,12 @@ class DiffusionQL(object):
             
         # update critic weights
         self.critic_optimizer.step()
-        self.critic_optimizer.zero_grad()
 
-        """ Step Target network """
+        # update critic target weights
         for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
             target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        self.step += 1
-
-
+        # step the lr scheduler
         if self.lr_decay: 
             self.critic_lr_scheduler.step()
 
@@ -149,10 +145,8 @@ class DiffusionQL(object):
     
     def LossActor(self, state, new_action, options):
         """
-        Use the uncorrupted state and the denoise action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
+        Use the uncorrupted (a.k.a. ground truth) state and the denoised action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
         """
-        metric = {}
-
         q1_new_action, q2_new_action = self.critic(state, new_action, options)
         
         # flip a coin, randomly use q1 or q2
@@ -162,10 +156,7 @@ class DiffusionQL(object):
             q_loss = - q2_new_action.mean() / q1_new_action.abs().mean().detach()
         loss = self.eta * q_loss
         
-        # metrics
-        metric['ql_loss'] = q_loss.item()
-        
-        return loss, metric
+        return loss
         
     def Loss(self, nbatch_dict, new_action, next_action, task_id):
         
@@ -178,12 +169,16 @@ class DiffusionQL(object):
         state = nbatch_dict['obs']
         
         # get the actor loss using (s, a)
-        actor_loss, ametric = self.LossActor(state, new_action, options)
+        actor_loss = self.LossActor(state, new_action, options)
+                
+        # logging
+        dd = {
+            "dql_critic_loss": critic_loss,
+            "dql_actor_loss": actor_loss  
+              }
+        globals.LOGGER.log(dd)
         
-        # metric.update(ametric)
-        loss = critic_loss + actor_loss
-        
-        return loss
+        return actor_loss, critic_loss
 
     def save_model(self, dir, id=None):
         if id is not None:
@@ -202,3 +197,6 @@ class DiffusionQL(object):
         
     def train(self):
         self.critic.train()
+        
+    def reset(self):
+        self.critic_optimizer.zero_grad()

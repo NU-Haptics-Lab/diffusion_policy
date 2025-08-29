@@ -35,6 +35,7 @@ import diffusion_policy.globals as globals
 from diffusion_policy.trainers.session_trainer import SessionTrainer
 
 # to combat dataloader deadlock
+import torch
 import torch.multiprocessing
 
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
@@ -59,12 +60,14 @@ def main(cfg: OmegaConf):
     if globals.CONFIG.debug:
         globals.CONFIG.common_dataset.options.common.batch_size = 4
         globals.CONFIG.total_num_epochs = 4
-        globals.CONFIG.num_train_batches = 4
+        globals.CONFIG.batches_per_epoch = 1
         globals.CONFIG.common_dataset.options.train.num_workers = 0
         globals.CONFIG.common_dataset.options.train.persistent_workers = False
         globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10
         globals.CONFIG.models.models.critic.num_inference_steps = 1
         globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
+        
+        torch.autograd.set_detect_anomaly(True)
     
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.

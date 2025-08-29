@@ -55,10 +55,9 @@ class ModelandOptim:
 
         return loss
     
-    def Step(self):
+    def step(self):
         if globals.STEP % self.gradient_accumulate_every == 0:
             self.optimizer.step()
-            self.optimizer.zero_grad()
             self.lr_scheduler.step()
             
     def step_log(self):
@@ -70,6 +69,9 @@ class ModelandOptim:
     
     def get_model(self):
         return self.model
+    
+    def reset(self):
+        self.optimizer.zero_grad()
     
     def denoise(self, 
             nobs_dict,

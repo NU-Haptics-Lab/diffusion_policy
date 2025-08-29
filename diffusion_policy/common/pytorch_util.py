@@ -15,6 +15,9 @@ def dict_apply(
             result[key] = func(value)
     return result
 
+def dict_tensor_to(batch, device):
+    return dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+
 def pad_remaining_dims(x, target):
     assert x.shape == target.shape[:len(x.shape)]
     return x.reshape(x.shape + (1,)*(len(target.shape) - len(x.shape)))

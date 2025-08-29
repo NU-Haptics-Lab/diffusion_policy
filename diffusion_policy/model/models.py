@@ -23,9 +23,13 @@ class Models:
     def __getitem__(self, key):
         return self.models[key]
     
-    def Step(self):
+    def step(self):
         for idx, model in self.models.items():
-            model.Step()
+            model.step()
+            
+    def reset(self):
+        for idx, model in self.models.items():
+            model.step()
             
             
 # if __name__ == "__main__":

@@ -7,6 +7,9 @@ import diffusion_policy.globals as globals
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
+
+import diffusion_policy.globals as globals
+
 """
 reference paper: https://arxiv.org/pdf/2208.06193
 
@@ -67,17 +70,22 @@ class CriticLoss:
         """
         action = self.Denoise(nbatch['obs'])
         
-        # get the next action from the ema model, same as the Diffusion-QL repo
-        action_next = self.Denoise(nbatch['obs_next'])
+        # TODO: get the next action from the ema model, same as the Diffusion-QL repo
+        # no grad because this is only used in the dql critic update
+        with torch.no_grad():
+            action_next = self.Denoise(nbatch['obs_next'])
         
         # returns loss, metric
-        loss = self.critic.Loss(nbatch, action, action_next, task_id)
+        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, action, action_next, task_id)
         
-        return loss
+        return dql_actor_loss, dql_critic_loss
         
-    def Step(self):
+    def step(self):
         # I'm only in charge of the critic
-        self.critic.Step()
+        self.critic.step()
+        
+    def reset(self):
+        self.critic.reset()
         
     def eval(self):
         self.critic.eval()

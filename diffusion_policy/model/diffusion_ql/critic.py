@@ -48,6 +48,9 @@ class QLDenser(nn.Module):
     def forward(self, inputs):
         # x = torch.cat([image_features, non_image_features])
         x = self.model(inputs)
+        if x._version == 1:
+            print("hi")
+            pass
         return x
     
     def output_shape(self, input_shape=None):
