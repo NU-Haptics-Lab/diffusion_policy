@@ -16,6 +16,9 @@ from diffusion_policy.common.pytorch_util import dict_apply
 
 import diffusion_policy.globals as globals
 
+from diffusion_policy.utils import print_nb_params
+
+
 # example, from https://github.com/NU-Haptics-Lab/Diffusion-Policies-for-Offline-RL#
 
 class BaseCritic:
@@ -168,6 +171,8 @@ class DoubleCritic(nn.Module, BaseCritic):
         
         self.q1_model = qlmodel
         self.q2_model = copy.deepcopy(self.q1_model)
+
+        print_nb_params(self.q1_model, "Critic params")
     
     def forward(self, state_dict, action, options: dict = None):
         q1 = self.q1_model(state_dict, action, options)

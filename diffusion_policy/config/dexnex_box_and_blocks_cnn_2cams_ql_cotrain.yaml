@@ -56,6 +56,16 @@ logging:
     - cotrain
     - default
 
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt
+  k: 20 # how often, in epochs
+  mode: max
+  monitor_key: epoch
+
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
 

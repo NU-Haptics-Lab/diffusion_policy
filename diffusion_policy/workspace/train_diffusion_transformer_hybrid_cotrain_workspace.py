@@ -24,7 +24,7 @@ from diffusion_policy.policy.diffusion_transformer_hybrid_image_policy import Di
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.dexnex_meta_dataset import MetaDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
-from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
+from diffusion_policy.common.checkpointer import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel

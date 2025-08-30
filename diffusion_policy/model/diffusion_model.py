@@ -26,6 +26,7 @@ import diffusion_policy.model.components.dexnex_layers as dexnex_layers
 from diffusion_policy.model.obs_encoder import ObsEncoderMaker
 
 import diffusion_policy.globals as globals
+from diffusion_policy.utils import print_nb_params
 
 
 
@@ -118,8 +119,8 @@ class DiffusionModel(BaseImagePolicy):
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
 
-        print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
-        print("Vision params: %e" % sum(p.numel() for p in self.obs_encoder.parameters()))
+        print_nb_params(self.model, "Diffusion params")
+        print_nb_params(self.obs_encoder, "Vision params")
         
         ### TEST
         self.random_noise = None
