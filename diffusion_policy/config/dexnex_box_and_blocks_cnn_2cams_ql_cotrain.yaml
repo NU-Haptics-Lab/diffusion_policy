@@ -214,37 +214,8 @@ models:
       num_inference_steps: 10
 
     actor:
-      _target_: diffusion_policy.model.model_and_ema.ModelandEMA
+      _target_: diffusion_policy.model.model.ModelEmaOptim
       use_ema: true
-
-      model:
-        _target_: diffusion_policy.model.model_and_optim.ModelandOptim
-        lr_scheduler: cosine
-        lr_warmup_steps: 500
-        gradient_accumulate_every: 1
-        optimizer_target: torch.optim.AdamW
-        optimizer_cfg:
-          betas:
-            - 0.95
-            - 0.999
-          eps: 1.0e-08
-          lr: 0.0001
-          weight_decay: 1.0e-06
-
-        # children
-        model:
-          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-          action_shape: ${shape_meta.action.shape}
-          noise_scheduler: ${common_noise_scheduler}
-          obs_encoder_maker: ${common_obs_encoder}
-          eval_fixed_crop: true
-          obs_as_global_cond: true
-          obs_encoder_group_norm: true
-          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
-          down_dims: 
-            - 128
-            - 256
-            - 512
 
       ema_cfg:
         inv_gamma: 1.0
@@ -252,6 +223,33 @@ models:
         min_value: 0.0
         power: 0.75
         update_after_step: 0
+
+      lr_scheduler: cosine
+      lr_warmup_steps: 500
+      gradient_accumulate_every: 1
+      optimizer_target: torch.optim.AdamW
+      optimizer_cfg:
+        betas:
+          - 0.95
+          - 0.999
+        eps: 1.0e-08
+        lr: 0.0001
+        weight_decay: 1.0e-06
+
+      # children
+      model:
+        _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+        action_shape: ${shape_meta.action.shape}
+        noise_scheduler: ${common_noise_scheduler}
+        obs_encoder_maker: ${common_obs_encoder}
+        eval_fixed_crop: true
+        obs_as_global_cond: true
+        obs_encoder_group_norm: true
+        n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+        down_dims: 
+          - 128
+          - 256
+          - 512
 
 
 common_noise_scheduler:
