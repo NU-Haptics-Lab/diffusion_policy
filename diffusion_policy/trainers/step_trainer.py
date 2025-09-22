@@ -26,27 +26,21 @@ class StepTrainer:
     def train(self):
         # initialize a zero loss variable
         total_losses = CalcSumLoss(self.w_batch_losses)
-        # fjskdl = Losses(total_losses)
         
         # do one at a time
-        for key, val in total_losses.items():
-            # reset gradients
-            globals.MODELS.reset() 
-            
+        for key, loss in total_losses.items():
             # back propagation
-            val.backward()
+            loss.backward()
             
             # step
             globals.MODELS[key].step()
+            
+            # logging
+            dd = {key + ": weighted sum loss": loss}
+            globals.LOGGER.log(dd)
         
-        # reset gradients
+        # reset optimizer gradients
         globals.MODELS.reset() 
-
-        # # calculate gradients for all losses and for all datasets simultaneously
-        # fjskdl.backward()
-
-        # # now we can step all of the models
-        # globals.MODELS.Step()
 
         # logging
         # self.raw_loss_cpu = total_loss.item()

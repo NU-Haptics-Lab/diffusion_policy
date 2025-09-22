@@ -103,14 +103,13 @@ class EpochTrainer(Epoch):
             globals.STEP += 1
             
             ## end of step logging
-            losses.append(self.step_trainer.raw_loss_cpu)
             log = {
                 "global_step": globals.STEP,
             }
             globals.LOGGER.log(log)
 
         # end of epoch stuff
-        log = {
-            "epoch_avg_loss": np.mean(losses),
-        }
-        globals.LOGGER.log(log)
+        # log = {
+        #     "epoch_avg_loss": np.mean(losses),
+        # }
+        # globals.LOGGER.log(log)

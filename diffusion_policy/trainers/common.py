@@ -7,14 +7,14 @@ from diffusion_policy.losses.batch_loss import WeightedBatchLoss
 from diffusion_policy.common.pytorch_util import dict_tensor_to
 
 def CalcSumLoss(w_batch_losses):
-    # initialize a zero loss variable
+    # initialize a zero loss torch tensor
     # TODO: make the shape not hard coded
     total_losses = {
         'actor': torch.tensor([0.0], requires_grad=True),
         'critic': torch.tensor([0.0], requires_grad=True),
     }
     
-    # move to device
+    # move total_losses to device
     device = torch.device(globals.CONFIG.device)
     total_losses = dict_tensor_to(total_losses, device)
 

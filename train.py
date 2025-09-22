@@ -60,12 +60,13 @@ def main(cfg: OmegaConf):
     if globals.CONFIG.debug:
         globals.CONFIG.common_dataset.options.common.batch_size = 4
         globals.CONFIG.total_num_epochs = 4
-        globals.CONFIG.batches_per_epoch = 1
+        globals.CONFIG.batches_per_epoch = 2
         globals.CONFIG.common_dataset.options.train.num_workers = 0
         globals.CONFIG.common_dataset.options.train.persistent_workers = False
         globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10
         globals.CONFIG.models.models.critic.num_inference_steps = 1
         globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
+        globals.CONFIG.logging.use_wandb = False
         
         torch.autograd.set_detect_anomaly(True)
     

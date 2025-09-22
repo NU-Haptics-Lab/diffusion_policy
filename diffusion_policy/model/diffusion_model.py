@@ -280,11 +280,11 @@ class DiffusionModel(BaseImagePolicy):
             
         return nresult
     
-    def loss(self, nbatch):
+    def loss(self, nbatch, task_id):
         loss2 = self.compute_loss(nbatch)
         
         # logging
-        dd = {"bc_actor_loss": loss2}
+        dd = {task_id + ": bc_actor_loss": loss2}
         globals.LOGGER.log(dd)
         
         return loss2

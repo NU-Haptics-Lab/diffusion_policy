@@ -4,7 +4,7 @@ import diffusion_policy.globals as globals
 
 from diffusion_policy.dataset.batch_loader import BatchLoader
 from diffusion_policy.losses.actor_loss import ActorLoss
-from diffusion_policy.losses.critic_loss import CriticLoss
+from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 from diffusion_policy.common.pytorch_util import dict_apply
 
@@ -34,17 +34,17 @@ class BatchLoss:
         """
         Train for one batch.
         """
-        # get the batch from the batch loader
-        nbatch = next(self.batch_loader)
+        # # get the batch from the batch loader
+        # nbatch = next(self.batch_loader)
 
-        # get the BC loss
-        actor_loss = self.actor.loss(nbatch, self.rb_id)
+        # # get the BC loss
+        # actor_loss = self.actor.loss(nbatch, self.rb_id)
 
-        # get the DQL loss
-        critic_loss = self.critic.loss(nbatch, self.rb_id)
+        # # get the DQL loss
+        # critic_loss = self.critic.loss(nbatch, self.rb_id)
 
-        # weighted sum them
-        loss = actor_loss + self.eta * critic_loss
+        # # weighted sum them
+        # loss = actor_loss + self.eta * critic_loss
 
         # we're done
         return loss
@@ -62,6 +62,10 @@ class BatchLoss:
         return actor_loss.cpu(), action_mse_error
     
 class DQLBatchLoss(BatchLoss):
+    """
+    Compute actor and critic loss and return them in a dictionary
+    """
+    
     def compute_loss(self):
         """
         compute loss for one batch.
@@ -72,7 +76,7 @@ class DQLBatchLoss(BatchLoss):
         # get the BC loss
         bc_loss = self.actor.loss(nbatch, self.rb_id)
 
-        # get the DQL loss
+        # get the DQL losses
         dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
         
         # summed actor loss
@@ -85,7 +89,7 @@ class DQLBatchLoss(BatchLoss):
             'actor': actor_loss,
             'critic': critic_loss
         }
-
+        
         # we're done
         return losses
         

@@ -1,5 +1,5 @@
 # globals
-debug: true
+debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [-15, -10, -5, 0]
 device: cuda:0
@@ -147,7 +147,7 @@ common_wbatch_loss:
   # children
   batch_loss:
     _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
-    eta: 0.0 # weight of the dql actor loss
+    eta: 0.001 # weight of the dql actor loss
 
     # children
     batch_loader:
@@ -194,17 +194,17 @@ models:
 
   models:
     critic:
-      _target_: diffusion_policy.losses.critic_loss.CriticLoss
+      _target_: diffusion_policy.model.diffusion_ql.diffusion_ql_loss.CriticLoss
 
       # children
       critic:
-        _target_: diffusion_policy.model.diffusion_ql.trainer.DiffusionQL
+        _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
 
         critic:
-          _target_: diffusion_policy.model.diffusion_ql.critic.DoubleCritic
+          _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic
 
           qlmodel:
-            _target_: diffusion_policy.model.diffusion_ql.critic.QLModel
+            _target_: diffusion_policy.model.diffusion_ql.critic_arch.QLModel
 
             obs_encoder_maker:
               ${common_obs_encoder}
@@ -215,41 +215,46 @@ models:
 
     actor:
       _target_: diffusion_policy.model.model.ModelEmaOptim
-      use_ema: true
 
-      ema_cfg:
-        inv_gamma: 1.0
-        max_value: 0.9999
-        min_value: 0.0
-        power: 0.75
-        update_after_step: 0
-
-      lr_scheduler: cosine
-      lr_warmup_steps: 500
-      gradient_accumulate_every: 1
-      optimizer_target: torch.optim.AdamW
-      optimizer_cfg:
-        betas:
-          - 0.95
-          - 0.999
-        eps: 1.0e-08
-        lr: 0.0001
-        weight_decay: 1.0e-06
-
-      # children
       model:
-        _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-        action_shape: ${shape_meta.action.shape}
-        noise_scheduler: ${common_noise_scheduler}
-        obs_encoder_maker: ${common_obs_encoder}
-        eval_fixed_crop: true
-        obs_as_global_cond: true
-        obs_encoder_group_norm: true
-        n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
-        down_dims: 
-          - 128
-          - 256
-          - 512
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: true
+          obs_as_global_cond: true
+          obs_encoder_group_norm: true
+          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+          down_dims: 
+            - 128
+            - 256
+            - 512
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 0.0001
+          weight_decay: 1.0e-06
 
 
 common_noise_scheduler:

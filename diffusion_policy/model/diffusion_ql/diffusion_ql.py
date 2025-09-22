@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from diffusion_policy.model.diffusion.ema_model import EMAModel
-from diffusion_policy.model.diffusion_ql.critic import DoubleCritic
+from diffusion_policy.model.diffusion_ql.critic_arch import DoubleCritic
 from diffusion_policy.common.pytorch_util import optimizer_to
 
 import diffusion_policy.globals as globals
@@ -29,7 +29,6 @@ class DiffusionQL(object):
                  discount=0.99,
                  tau=0.005,
                  max_q_backup=False,
-                 eta=1.0,
                  beta_schedule='linear',
                  n_timesteps=100,
                  ema_decay=0.995,
@@ -69,7 +68,6 @@ class DiffusionQL(object):
 
         self.discount = discount
         self.tau = tau
-        self.eta = eta  # q_learning weight
         self.max_q_backup = max_q_backup
         
     def MakeOptions(self, task_id):
@@ -79,10 +77,11 @@ class DiffusionQL(object):
         
     def LossCritic(self, nbatch_dict, next_action, options):
         """
-        samples - must be the same noised trajectories that were passed through the actor model (fcn: policy.compute_loss)
-        new_action - should be the action calculated by using the predicted noise from the actor model.
+        We need the g.t. state, action, reward, and next_state for QL training. 
         
-        We need the g.t. state, action, reward, and next_state for QL training. We then get the predicted next_action as a fcn of next_state, and use that (next_action, next_state) tuple to get the predicted next_Q. We then add reward and next_Q to get the target, and we compare it to the Q-value to get a loss. This loss is used to train the Q-network.
+        We then get the predicted next_action as a fcn of next_state, and use that (next_action, next_state) tuple to get the predicted next_Q. 
+        
+        We then add reward and next_Q to get the target (standard q-learning), and we compare it to the Q-value to get a loss. This loss is used to train the Q-network.
         """
 
         metric = {}
@@ -119,6 +118,13 @@ class DiffusionQL(object):
         metric['Target_Q Mean'] = target_q.mean().item()
         
         return critic_loss
+    
+    def step_ema(self):
+        # NOT NEEDED BECAUSE THIS IS ONLY FOR THE ACTOR, WHICH WE DO ELSEWHERE
+        
+        # if self.step % self.update_ema_every == 0 and self.step >= self.step_start_ema:
+        #     self.ema.update_model_average(self.ema_model, self.actor)
+        pass
 
     def step(self):
         """
@@ -154,15 +160,25 @@ class DiffusionQL(object):
             q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
         else:
             q_loss = - q2_new_action.mean() / q1_new_action.abs().mean().detach()
-        loss = self.eta * q_loss
+            
+        # weighted loss
+        loss = q_loss
         
         return loss
         
     def Loss(self, nbatch_dict, new_action, next_action, task_id):
+        """
+        new_action - grad-full denoised observation using the actor
+        next_action - grad-free denoised next observation using the actor
+        task_id - task identifier
+        
+        new_action should be used to compute the DQL actor loss
+        next_action should be used to compute the DQL critic loss
+        """
         
         options = self.MakeOptions(task_id)
         
-        # train the critic, using (s, a, r, s') & a'
+        # calc loss for the critic, using (s, a, r, s') & a'
         critic_loss = self.LossCritic(nbatch_dict, next_action, options)
         
         # extract the state
@@ -173,8 +189,8 @@ class DiffusionQL(object):
                 
         # logging
         dd = {
-            "dql_critic_loss": critic_loss,
-            "dql_actor_loss": actor_loss  
+            task_id + ": dql_critic_loss": critic_loss,
+            task_id + ": dql_actor_loss": actor_loss  
               }
         globals.LOGGER.log(dd)
         

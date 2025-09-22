@@ -2,7 +2,7 @@ import torch
 from typing import Any
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 import hydra
-from diffusion_policy.model.diffusion_ql.trainer import DiffusionQL
+from diffusion_policy.model.diffusion_ql.diffusion_ql import DiffusionQL
 import diffusion_policy.globals as globals
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
@@ -52,7 +52,7 @@ class CriticLoss:
         actor = globals.MODELS["actor"]
         
         # use actor or ema actor? idk
-        nresult = actor.denoise(
+        nresult = actor.get_model().denoise(
             nobs_dict, 
             self.noise_scheduler, 
             )
@@ -68,15 +68,17 @@ class CriticLoss:
         [TODO]
         This is exactly the same as the Diffusion-QL repo, the downside however is that we have to do denoising twice per step, once on this state and once on the next state. If this proves to be very slow to train, then a potential optimization is to do critic training on the previous state & this state so we only have to denoise once per step.
         """
-        action = self.Denoise(nbatch['obs'])
+        new_action = self.Denoise(nbatch['obs'])
         
         # TODO: get the next action from the ema model, same as the Diffusion-QL repo
-        # no grad because this is only used in the dql critic update
-        with torch.no_grad():
-            action_next = self.Denoise(nbatch['obs_next'])
         
+        # no grad because this is only used in the dql critic update which won't be back-propagated to the actor
+        with torch.no_grad():
+            # TODO: next_action is computed from the ema-model in the original DQL code
+            next_action = self.Denoise(nbatch['obs_next'])
+                    
         # returns loss, metric
-        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, action, action_next, task_id)
+        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, next_action, task_id)
         
         return dql_actor_loss, dql_critic_loss
         

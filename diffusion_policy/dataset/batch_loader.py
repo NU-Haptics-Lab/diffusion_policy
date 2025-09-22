@@ -141,12 +141,15 @@ class NestedDataArray:
                 nda.set_normalizers(val)
                 self.nest[key] = nda
 
-
+    # no grads wanted
+    @torch.no_grad()
     def normalize(self):
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
         for key, val in self.nest.items():
             val.normalize()
 
+    # no grads wanted
+    @torch.no_grad()
     def unnormalize(self):
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
         for key, val in self.nest.items():

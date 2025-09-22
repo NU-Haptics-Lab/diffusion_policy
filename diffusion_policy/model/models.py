@@ -29,7 +29,7 @@ class Models:
             
     def reset(self):
         for idx, model in self.models.items():
-            model.step()
+            model.reset()
             
             
 # if __name__ == "__main__":

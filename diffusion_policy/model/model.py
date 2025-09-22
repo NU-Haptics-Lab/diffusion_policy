@@ -5,27 +5,39 @@ import hydra
 import diffusion_policy.globals as globals
 from diffusion_policy.common.pytorch_util import optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from diffusion_policy.model.diffusion.ema_model import EMAModel
 
-from .ema import Ema
-from .optim import Optim
+class Base:
+    def reset(self):
+        pass
+    
+    def step(self):
+        pass
+    
+    def eval(self):
+        pass
+    
+    def train(self):
+        pass
 
-class Ema:
+class Ema(Base):
     """
     Ema model mixin
     """
     def __init__(self,
-            model,
             use_ema: bool,
             ema_cfg,
             ):
         # configure model
-        self.model = model
         self.use_ema = use_ema
         self.ema_cfg = ema_cfg
+            
+    def setup(self, model):
+        self.model = model
 
         self.ema_model = None
         if self.use_ema:
-            self.ema_model = copy.deepcopy(self.model.get_model())
+            self.ema_model = copy.deepcopy(self.model)
 
         # configure ema
         self.ema: EMAModel = None
@@ -41,31 +53,38 @@ class Ema:
         device = torch.device(globals.CONFIG.device)
         if self.ema_model is not None:
             self.ema_model.to(device)
+        
     
     def update_ema(self):
         if self.use_ema:
-            self.ema.step(self.model.get_model())
+            self.ema.step(self.model)
+            
+    def step(self):
+        self.update_ema()
 
-class Optim:
+class Optim(Base):
     """
     Torch optimizer and learning rate scheduler mixin
     """
     def __init__(self,
-                 model: torch.nn.Module = None,
                  optimizer_target: str = None,
                  optimizer_cfg: dict = None,
                  lr_scheduler = "cosine",
                  lr_warmup_steps = 500,
                  gradient_accumulate_every = 1,
                  ):
-        self.model = model
         self.gradient_accumulate_every = gradient_accumulate_every
+        self.optimizer_target = optimizer_target
+        self.optimizer_cfg = optimizer_cfg
+        self.lr_scheduler = lr_scheduler
+        self.lr_warmup_steps = lr_warmup_steps
         
+    def setup(self, model):
         # make the optimizer class
-        cls = hydra.utils.get_class(optimizer_target)
+        cls = hydra.utils.get_class(self.optimizer_target)
         self.optimizer = cls(
-                **optimizer_cfg, 
-                params=self.model.parameters()
+                **self.optimizer_cfg, 
+                params = model.parameters()
                 )
         
         # transfer to GPU
@@ -73,16 +92,17 @@ class Optim:
         
         # make the LR scheduler
         self.lr_scheduler = get_scheduler(
-            lr_scheduler,
+            self.lr_scheduler,
             optimizer=self.optimizer,
-            num_warmup_steps=lr_warmup_steps,
+            num_warmup_steps = self.lr_warmup_steps,
             num_training_steps=(
-                globals.CONFIG.session_trainer.epoch_trainer.nb_batches * globals.CONFIG.total_num_epochs) // gradient_accumulate_every,
+                globals.CONFIG.session_trainer.epoch_trainer.nb_batches * globals.CONFIG.total_num_epochs) // self.gradient_accumulate_every,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
             last_epoch=globals.STEP-1
         )
-    
+        
+        
     def step(self):
         if globals.STEP % self.gradient_accumulate_every == 0:
             self.optimizer.step()
@@ -97,7 +117,7 @@ class Optim:
     def reset(self):
         self.optimizer.zero_grad()
 
-class Model():
+class Model(Base):
         
     def __init__(self,
                  model):
@@ -110,10 +130,7 @@ class Model():
             
     def loss(self, nbatch, task_id):
         """ alias for compute_loss """
-        return self.model.loss(nbatch)
-        
-    def step(self):
-        self.model.step()
+        return self.model.loss(nbatch, task_id)
         
     def denoise(self, 
             nobs_dict,
@@ -122,14 +139,42 @@ class Model():
         return self.model.denoise(nobs_dict, noise_scheduler)
     
     def get_model(self):
-        return self.model.get_model()
+        # model should be a diffusion model
+        return self.model
     
     def reset(self):
         self.model.reset()
 
-class ModelEmaOptim(Model, Ema, Optim):
+class ModelEmaOptim(Base):
     """
     Mixin class with a model, an ema model, and an optimizer
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self,
+            model: Model,
+            ema: Ema,
+            optim: Optim
+    ):
+        self.model = model
+        self.ema = ema
+        self.optim = optim
+        
+        # setup
+        self.ema.setup(self.model.get_model())
+        self.optim.setup(self.model.get_model())
+            
+    def loss(self, nbatch, task_id):
+        return self.model.loss(nbatch, task_id)
+    
+    def get_model(self):
+        return self.model.get_model()
+    
+    def step(self):
+        self.model.step()
+        self.ema.step()
+        self.optim.step()
+        
+    def reset(self):
+        self.model.reset()
+        self.ema.reset()
+        self.optim.reset()
+        
