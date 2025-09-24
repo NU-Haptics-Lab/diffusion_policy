@@ -92,6 +92,32 @@ class DQLBatchLoss(BatchLoss):
         
         # we're done
         return losses
+    
+
+class CriticBatchLoss(BatchLoss):
+    """
+    Compute actor and critic loss and return them in a dictionary
+    """
+    
+    def compute_loss(self):
+        """
+        compute loss for one batch.
+        """
+        # get the batch from the batch loader
+        nbatch = next(self.batch_loader)
+
+        # get the DQL losses
+        dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
+        
+        # summed critic loss
+        critic_loss = dql_critic_loss
+        
+        losses = {
+            'critic': critic_loss
+        }
+        
+        # we're done
+        return losses
         
 
     

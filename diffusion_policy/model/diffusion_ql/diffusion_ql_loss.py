@@ -47,12 +47,17 @@ class CriticLoss:
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         
         
-    def Denoise(self, nobs_dict):
+    def Denoise(self, nobs_dict, use_ema=False):
         # save handles to nodes
         actor = globals.MODELS["actor"]
         
+        if use_ema:
+            m = actor.get_ema_model()
+        else:
+            m = actor.get_model()
+        
         # use actor or ema actor? idk
-        nresult = actor.get_model().denoise(
+        nresult = m.denoise(
             nobs_dict, 
             self.noise_scheduler, 
             )
@@ -68,17 +73,18 @@ class CriticLoss:
         [TODO]
         This is exactly the same as the Diffusion-QL repo, the downside however is that we have to do denoising twice per step, once on this state and once on the next state. If this proves to be very slow to train, then a potential optimization is to do critic training on the previous state & this state so we only have to denoise once per step.
         """
-        new_action = self.Denoise(nbatch['obs'])
+        # TODO: add feature for training the critic separately, so no denoising is needed
         
-        # TODO: get the next action from the ema model, same as the Diffusion-QL repo
-        
-        # no grad because this is only used in the dql critic update which won't be back-propagated to the actor
-        with torch.no_grad():
-            # TODO: next_action is computed from the ema-model in the original DQL code
-            next_action = self.Denoise(nbatch['obs_next'])
+        if False:
+            # want gradients on this one so we can back-prop from the critic through to the actor
+            new_action = self.Denoise(nbatch['obs'])
+                    
+            # no grad because this is only used in the dql critic update which won't be back-propagated to the actor
+            with torch.no_grad():
+                next_action = self.Denoise(nbatch['obs_next'], use_ema=True)
                     
         # returns loss, metric
-        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, next_action, task_id)
+        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, None, None, task_id)
         
         return dql_actor_loss, dql_critic_loss
         
@@ -94,3 +100,6 @@ class CriticLoss:
         
     def train(self):
         self.critic.train()
+        
+    def get_model(self):
+        return self.critic.get_model()

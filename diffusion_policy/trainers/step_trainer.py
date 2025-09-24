@@ -1,5 +1,6 @@
 
 import torch
+import torch.nn as nn
 import diffusion_policy.globals as globals
 
 from diffusion_policy.losses.batch_loss import WeightedBatchLoss
@@ -18,10 +19,12 @@ class StepTrainer:
     """
 
     def __init__(self,
-                 w_batch_losses: dict
+                 w_batch_losses: dict,
+                 grad_norm = 1.0
         ):
         # handle to node
         self.w_batch_losses = w_batch_losses
+        self.grad_norm = grad_norm
 
     def train(self):
         # initialize a zero loss variable
@@ -29,14 +32,27 @@ class StepTrainer:
         
         # do one at a time
         for key, loss in total_losses.items():
+            # TESTING
+            if key == "actor":
+                continue
+            
+            dd = {}
+            model = globals.MODELS[key]
+            
             # back propagation
             loss.backward()
             
+            # if clipping the gradients
+            if self.grad_norm > 0: 
+                norms = nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=self.grad_norm, norm_type=2)
+                dd[key + ": Grad Norm"] = norms.max().item()
+            
+            
             # step
-            globals.MODELS[key].step()
+            model.step()
             
             # logging
-            dd = {key + ": weighted sum loss": loss}
+            dd[key + ": weighted sum loss"] = loss
             globals.LOGGER.log(dd)
         
         # reset optimizer gradients

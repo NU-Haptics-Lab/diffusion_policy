@@ -32,8 +32,6 @@ class DiffusionQL(object):
                  beta_schedule='linear',
                  n_timesteps=100,
                  ema_decay=0.995,
-                 step_start_ema=1000,
-                 update_ema_every=5,
                  lr=3e-4,
                  lr_decay=False,
                  lr_maxt=1000,
@@ -43,14 +41,11 @@ class DiffusionQL(object):
         self.lr_decay = lr_decay
         self.grad_norm = grad_norm
 
-        self.step_start_ema = step_start_ema
-        self.update_ema_every = update_ema_every
-
         self.critic = critic
         self.critic_target = copy.deepcopy(self.critic)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
         
-        # device transfer members, since I own it
+        # device transfer members, since I own them
         device = torch.device(globals.CONFIG.device)
         self.critic.to(device)
         self.critic_target.to(device)
@@ -75,7 +70,7 @@ class DiffusionQL(object):
         options['leaf'] = task_id
         return options
         
-    def LossCritic(self, nbatch_dict, next_action, options):
+    def LossCritic(self, nbatch_dict, next_action_TEST_UNUSED, options):
         """
         We need the g.t. state, action, reward, and next_state for QL training. 
         
@@ -83,13 +78,11 @@ class DiffusionQL(object):
         
         We then add reward and next_Q to get the target (standard q-learning), and we compare it to the Q-value to get a loss. This loss is used to train the Q-network.
         """
-
-        metric = {}
-
         # Sample replay buffer / batch
         state = nbatch_dict['obs']
         next_state = nbatch_dict['obs_next']
         action = nbatch_dict['action']
+        next_action = nbatch_dict['action_next']
         reward = nbatch_dict['reward']
         not_done = nbatch_dict['not_done']
 
@@ -106,7 +99,7 @@ class DiffusionQL(object):
         #     target_q = torch.min(target_q1, target_q2)
         # else:
         
-        # TODO [tobyb] small optimization: only calc target_qm if not_done is True
+        # TODO [tobyb] small optimization: only calc target_qm if not_done is True -- nvm because recall, these are all tensors of vectors (recall the batch dimension)
         target_q1, target_q2 = self.critic_target(next_state, next_action, options)
         target_qm = torch.min(target_q1, target_q2)
 
@@ -114,8 +107,9 @@ class DiffusionQL(object):
 
         critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
         
-        metric['critic_loss'] = critic_loss.item()
-        metric['Target_Q Mean'] = target_q.mean().item()
+        # TESTING
+        # if reward.detach().to('cpu').numpy() > 0.0:
+        #     pass
         
         return critic_loss
     
@@ -132,9 +126,11 @@ class DiffusionQL(object):
         """
         metric = {}
         
-        if self.grad_norm > 0:
-            critic_grad_norms = nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=self.grad_norm, norm_type=2)
-            metric['Critic Grad Norm'] = critic_grad_norms.max().item()
+        # done in step_trainer now
+        # if self.grad_norm > 0:
+        #     # clips the gradients. the trailing _ indicates an in-place operation
+        #     critic_grad_norms = nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=self.grad_norm, norm_type=2)
+        #     metric['Critic Grad Norm'] = critic_grad_norms.max().item()
             
         # update critic weights
         self.critic_optimizer.step()
@@ -185,7 +181,7 @@ class DiffusionQL(object):
         state = nbatch_dict['obs']
         
         # get the actor loss using (s, a)
-        actor_loss = self.LossActor(state, new_action, options)
+        actor_loss = 0.0 # self.LossActor(state, new_action, options)
                 
         # logging
         dd = {
@@ -216,3 +212,6 @@ class DiffusionQL(object):
         
     def reset(self):
         self.critic_optimizer.zero_grad()
+        
+    def get_model(self):
+        return self.critic

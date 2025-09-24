@@ -120,7 +120,7 @@ class QLModel(nn.Module):
             # get the shape
             shape = val.shape
 
-            # only need to stack the first axis
+            # only need to stack the first axis (the channels)
             shape[0] *= len_history
 
         # make the obs encoder maker

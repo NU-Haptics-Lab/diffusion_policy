@@ -1,7 +1,7 @@
 # globals
 debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
-obs_rel_indices: [-15, -10, -5, 0]
+obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate resnet's for each image
 device: cuda:0
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 total_num_epochs: 141
@@ -14,12 +14,12 @@ shape_meta:
     shape:
     - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
 
-  img:
-    shape:
-    - 3
-    - 192
-    - 192
-  img2:
+  # img: # overhead cam
+  #   shape:
+  #   - 3
+  #   - 192
+  #   - 192
+  img2: # wrist cam
     shape:
     - 3
     - 192
@@ -70,8 +70,8 @@ common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
 
   rgbs:
-    img:
-      shape: ${shape_meta.img.shape}
+    # img:
+    #   shape: ${shape_meta.img.shape}
     img2:
       shape: ${shape_meta.img2.shape}
       
@@ -85,7 +85,7 @@ common_obs_encoder:
 
 
 common_indices:
-  _target_: diffusion_policy.common.sars_sampler.Indices
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
   rb_id: default
   rb_offset: 0
   episode_end: 0
@@ -146,7 +146,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
+    _target_: diffusion_policy.losses.batch_loss.CriticBatchLoss
     eta: 0.0 # weight of the dql actor loss
 
     # children
@@ -168,10 +168,10 @@ common_dataset:
 
   options:
     common:
-      batch_size: 16
+      batch_size: 64
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 1
+      num_workers: 8
       persistent_workers: true
       pin_memory: true
       shuffle: true
@@ -183,7 +183,7 @@ common_dataset:
 
   # child
   sampler:
-    _target_: diffusion_policy.common.sars_sampler.DatasetSampler
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
     # child
@@ -199,6 +199,8 @@ models:
       # children
       critic:
         _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
+        discount: 0.99
+        lr: 3e-4
 
         critic:
           _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic

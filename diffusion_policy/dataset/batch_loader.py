@@ -208,13 +208,15 @@ class BatchLoader:
                 'img': get_image_range_normalizer(),
                 'img2': get_image_range_normalizer(),
             }
+        act = get_range_normalizer_from_stat(
+                {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
+                )
         
         nn = {
             'obs': obs,
             'obs_next': obs,
-            'action': get_range_normalizer_from_stat(
-                {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
-                ),
+            'action': act,
+            'action_next': act,
             'not_done': get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
             ),

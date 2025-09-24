@@ -1,5 +1,6 @@
 import copy
 import torch
+import torch.nn as nn
 import hydra
 
 import diffusion_policy.globals as globals
@@ -61,6 +62,9 @@ class Ema(Base):
             
     def step(self):
         self.update_ema()
+        
+    def get_model(self):
+        return self.ema_model
 
 class Optim(Base):
     """
@@ -72,19 +76,23 @@ class Optim(Base):
                  lr_scheduler = "cosine",
                  lr_warmup_steps = 500,
                  gradient_accumulate_every = 1,
+                 grad_norm = 1.0
                  ):
         self.gradient_accumulate_every = gradient_accumulate_every
         self.optimizer_target = optimizer_target
         self.optimizer_cfg = optimizer_cfg
         self.lr_scheduler = lr_scheduler
         self.lr_warmup_steps = lr_warmup_steps
+        self.grad_norm = grad_norm
         
     def setup(self, model):
+        self.model = model
+        
         # make the optimizer class
         cls = hydra.utils.get_class(self.optimizer_target)
         self.optimizer = cls(
                 **self.optimizer_cfg, 
-                params = model.parameters()
+                params = self.model.parameters()
                 )
         
         # transfer to GPU
@@ -167,6 +175,9 @@ class ModelEmaOptim(Base):
     
     def get_model(self):
         return self.model.get_model()
+    
+    def get_ema_model(self):
+        return self.ema.get_model()
     
     def step(self):
         self.model.step()
