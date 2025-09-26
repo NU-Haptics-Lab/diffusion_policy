@@ -14,6 +14,7 @@ from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.replay_buffer_loader import ReplayBufferLoader
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.model.models import Models
+from diffusion_policy.common.checkpointer import TopKCheckpointManager
 
 """
 Global config access
@@ -43,3 +44,6 @@ STEP = 0
 
 """ Logger """
 LOGGER = None
+
+""" Checkpointer """
+CHECKPOINTER: TopKCheckpointManager = None

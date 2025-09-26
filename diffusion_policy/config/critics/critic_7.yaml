@@ -1,8 +1,11 @@
-# globals
-debug: false
+###################################################
+###################################################
+###################################################
+###################################################
+# global controls
+debug: true
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0, 5] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate resnet's for each image
-device: cuda:0
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 total_num_epochs: 501
 batches_per_epoch: 100
@@ -21,6 +24,13 @@ obs_keys_to_use:
   - state
   - img2 # wrist cam
   # - img
+
+
+###################################################
+###################################################
+###################################################
+###################################################
+device: cuda:0
 
 # common data
 shape_meta:
@@ -45,7 +55,6 @@ shape_meta:
 
 
 training:
-  checkpoint_every: 20
   max_train_steps: null
   max_val_steps: null
   rollout_every: 9999
@@ -62,7 +71,7 @@ logging:
     group: null
     id: null
     mode: online
-    name: aug29.2025.diffusion_ql
+    name: 2025.diffusion_ql
     project: dexnex_diffusion
     resume: true # wandb automatic resume
     tags:
@@ -76,9 +85,12 @@ checkpoint:
   save_last_snapshot: false
 
   format_str: epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt
-  k: 20 # how often, in epochs
+  k: 5 # nb checkpoints to keep
+  checkpoint_every: 20 # how often, in epochs
   mode: max
   monitor_key: epoch
+  resume: false
+  output_dir: ""
 
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker

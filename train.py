@@ -67,6 +67,7 @@ def main(cfg: OmegaConf):
         globals.CONFIG.models.models.critic.num_inference_steps = 1
         globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
         globals.CONFIG.logging.use_wandb = False
+        globals.CONFIG.checkpoint.checkpoint_every: 1
         
         torch.autograd.set_detect_anomaly(True)
     
@@ -93,11 +94,18 @@ def main(cfg: OmegaConf):
     # spin up the models
     globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models)
     print("Models spun.")
+    
+    # spin up the checkpointer
+    globals.CHECKPOINTER = hydra.utils.instantiate(globals.CONFIG.checkpoint)
+    print("Checkpointer spun.")
 
     # spin up the session trainer
     # cls = hydra.utils.get_class(cfg._target_)
     session_trainer: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer)
     print("Session Trainer spun.")
+    
+    # if resuming, load
+    globals.CHECKPOINTER.load()
 
     # run it
     print("Begin training.")

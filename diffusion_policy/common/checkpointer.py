@@ -8,22 +8,34 @@ import threading
 import diffusion_policy.globals as globals
 from diffusion_policy.utils import EveryEpoch
 from diffusion_policy.utils import _copy_to_cpu
+from hydra.core.hydra_config import HydraConfig
 
 class TopKCheckpointManager:
     def __init__(self,
-            save_dir,
             monitor_key: str,
+            rel_save_dir = "checkpoints",
+            output_dir = "",
             mode='min',
             k=1,
             format_str='epoch={epoch:03d}-train_loss={train_loss:.3f}.ckpt',
             checkpoint_every = 1,
             save_last_ckpt = False,
-            save_last_snapshot = False
+            save_last_snapshot = False,
+            resume = False
         ):
         assert mode in ['max', 'min']
         assert k >= 0
+        
+        # old
+        if self.resume:
+            self.output_dir = output_dir
+            
+        # new 
+        else:
+            self.output_dir = HydraConfig.get().runtime.output_dir
 
-        self.save_dir = save_dir
+        self.rel_save_dir = rel_save_dir
+        self.save_dir = os.path.join(self.output_dir, rel_save_dir)
         self.monitor_key = monitor_key
         self.mode = mode
         self.k = k
@@ -32,6 +44,7 @@ class TopKCheckpointManager:
         self.checkpoint_every = checkpoint_every
         self.save_last_ckpt = save_last_ckpt
         self.save_last_snapshot = save_last_snapshot
+        self.resume = resume
     
     def get_ckpt_path(self, data: Dict[str, float]) -> Optional[str]:
         if self.k == 0:
@@ -71,6 +84,9 @@ class TopKCheckpointManager:
             if os.path.exists(delete_path):
                 os.remove(delete_path)
             return ckpt_path
+        
+    def get_checkpoint_path(self, tag='latest'):
+        return pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
 
     def save(self):
         if EveryEpoch(self.checkpoint_every):
@@ -78,7 +94,9 @@ class TopKCheckpointManager:
             if self.save_last_ckpt:
                 self.save_checkpoint()
             if self.save_last_snapshot:
-                self.save_snapshot()
+                # NOT IMPLEMENTED / TESTED
+                # self.save_snapshot()
+                pass
 
             # sanitize metric names
             metric_dict = dict()
@@ -99,9 +117,10 @@ class TopKCheckpointManager:
             include_keys=None,
             use_thread=True):
         if path is None:
-            path = pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
+            path = pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
         else:
             path = pathlib.Path(path)
+            
         if exclude_keys is None:
             exclude_keys = tuple(self.exclude_keys)
         if include_keys is None:
@@ -159,14 +178,22 @@ class TopKCheckpointManager:
             include_keys=include_keys)
         return payload 
     
-    def save_snapshot(self, tag='latest'):
-        """
-        Quick loading and saving for reserach, saves full state of the workspace.
+    def load(self):
+        if self.resume:
+            lastest_ckpt_path = self.get_checkpoint_path()
+            if lastest_ckpt_path.is_file():
+                print(f"Resuming from checkpoint: {lastest_ckpt_path}")
+                self.load_checkpoint(path=lastest_ckpt_path)
+    
+    # NOT IMPLEMENTED / TESTED
+    # def save_snapshot(self, tag='latest'):
+    #     """
+    #     Quick loading and saving for reserach, saves full state of the workspace.
 
-        However, loading a snapshot assumes the code stays exactly the same.
-        Use save_checkpoint for long-term storage.
-        """
-        path = pathlib.Path(self.output_dir).joinpath('snapshots', f'{tag}.pkl')
-        path.parent.mkdir(parents=False, exist_ok=True)
-        torch.save(self, path.open('wb'), pickle_module=dill)
-        return str(path.absolute())
+    #     However, loading a snapshot assumes the code stays exactly the same.
+    #     Use save_checkpoint for long-term storage.
+    #     """
+    #     path = pathlib.Path(self.output_dir).joinpath('snapshots', f'{tag}.pkl')
+    #     path.parent.mkdir(parents=False, exist_ok=True)
+    #     torch.save(self, path.open('wb'), pickle_module=dill)
+    #     return str(path.absolute())
