@@ -200,14 +200,18 @@ class BatchLoader:
         Structure, must be same as the shape_meta structure.
 
         """
+        obs = {}
+        if "state" in globals.CONFIG.obs_keys_to_use:
+            obs['state'] = get_range_normalizer_from_stat(
+                    {'min': LIMITS[:, 0], 'max': LIMITS[:, 1]})
+            
+        if "img" in globals.CONFIG.obs_keys_to_use:
+            obs['img'] = get_image_range_normalizer()
+            
+        if "img2" in globals.CONFIG.obs_keys_to_use:
+            obs['img2'] = get_image_range_normalizer()
 
-        obs = {
-                'state': get_range_normalizer_from_stat(
-                    {'min': LIMITS[:, 0], 'max': LIMITS[:, 1]}
-                    ),
-                'img': get_image_range_normalizer(),
-                'img2': get_image_range_normalizer(),
-            }
+        
         act = get_range_normalizer_from_stat(
                 {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
                 )

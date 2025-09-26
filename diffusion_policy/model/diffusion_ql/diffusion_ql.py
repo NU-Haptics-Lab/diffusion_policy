@@ -25,30 +25,40 @@ class DiffusionQL(object):
     https://github.com/Zhendong-Wang/Diffusion-Policies-for-Offline-RL/blob/d871f5c6b4a3a3a19a10c662a54f32d5819dfcdb/agents/ql_diffusion.py#L49 
     """
     def __init__(self,
-                 critic: DoubleCritic, # should be on device
+                 critic: DoubleCritic,
                  discount=0.99,
                  tau=0.005,
                  max_q_backup=False,
-                 beta_schedule='linear',
-                 n_timesteps=100,
-                 ema_decay=0.995,
                  lr=3e-4,
-                 lr_decay=False,
-                 lr_maxt=1000,
+                 use_lr_decay=False,
+                 lr_min = 1e-5,
+                 lr_maxt=10000, # nb steps (NOT EPOCHS)
                  grad_norm=1.0,
+                 use_target_network = True,
+                 use_double_q = True,
+                 use_actor = True
                  ):
         
-        self.lr_decay = lr_decay
+        self.use_lr_decay = use_lr_decay
         self.grad_norm = grad_norm
+        self.use_target_network = use_target_network
+        self.use_double_q = use_double_q
+        self.use_actor = use_actor
 
         self.critic = critic
-        self.critic_target = copy.deepcopy(self.critic)
+        
+        if self.use_target_network:
+            self.critic_target = copy.deepcopy(self.critic)
+            
+        # set up the optimizer
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
         
         # device transfer members, since I own them
         device = torch.device(globals.CONFIG.device)
         self.critic.to(device)
-        self.critic_target.to(device)
+        
+        if self.use_target_network:
+            self.critic_target.to(device)
         optimizer_to(self.critic_optimizer, device)
         
         # EMA
@@ -58,8 +68,8 @@ class DiffusionQL(object):
         # device transfer of the ema, since I own it
         ema_model.to(device)
 
-        if lr_decay:
-            self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=lr_maxt, eta_min=0.)
+        if self.use_lr_decay:
+            self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=lr_maxt, eta_min=lr_min)
 
         self.discount = discount
         self.tau = tau
@@ -100,16 +110,39 @@ class DiffusionQL(object):
         # else:
         
         # TODO [tobyb] small optimization: only calc target_qm if not_done is True -- nvm because recall, these are all tensors of vectors (recall the batch dimension)
-        target_q1, target_q2 = self.critic_target(next_state, next_action, options)
-        target_qm = torch.min(target_q1, target_q2)
+        # if using a target network
+        if self.use_target_network:
+            target_network = self.critic_target
+        else:
+            target_network = self.critic
+            
+        # get the next q-value, Q(s', a')
+        target_q1, target_q2 = target_network(next_state, next_action, options)
+        
+        # if using double-q learning
+        if self.use_double_q:
+            target_qm = torch.min(target_q1, target_q2)
+        else:
+            target_qm = target_q1
 
+        # compute the bellman equation
         target_q = (reward + not_done * self.discount * target_qm).detach()
 
-        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        # compute the loss
+        critic_loss = F.mse_loss(current_q1, target_q)
+        
+        # if using double-q learning
+        if self.use_double_q:
+            critic_loss = critic_loss + F.mse_loss(current_q2, target_q)
         
         # TESTING
         # if reward.detach().to('cpu').numpy() > 0.0:
         #     pass
+        
+        # logging
+        dd = {}
+        dd[options['leaf'] + ": avg q-value"] = current_q1.mean()
+        globals.LOGGER.log(dd)
         
         return critic_loss
     
@@ -136,11 +169,12 @@ class DiffusionQL(object):
         self.critic_optimizer.step()
 
         # update critic target weights
-        for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        if self.use_target_network:
+            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
         # step the lr scheduler
-        if self.lr_decay: 
+        if self.use_lr_decay: 
             self.critic_lr_scheduler.step()
 
         return metric
@@ -150,6 +184,8 @@ class DiffusionQL(object):
         Use the uncorrupted (a.k.a. ground truth) state and the denoised action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
         """
         q1_new_action, q2_new_action = self.critic(state, new_action, options)
+        
+        # TODO: implement use_double_q flag
         
         # flip a coin, randomly use q1 or q2
         if np.random.uniform() > 0.5:
@@ -171,23 +207,25 @@ class DiffusionQL(object):
         new_action should be used to compute the DQL actor loss
         next_action should be used to compute the DQL critic loss
         """
+        dd = {}
         
         options = self.MakeOptions(task_id)
         
         # calc loss for the critic, using (s, a, r, s') & a'
         critic_loss = self.LossCritic(nbatch_dict, next_action, options)
+        dd[task_id + ": dql_critic_loss"] = critic_loss
         
         # extract the state
         state = nbatch_dict['obs']
         
         # get the actor loss using (s, a)
-        actor_loss = 0.0 # self.LossActor(state, new_action, options)
+        if self.use_actor:
+            actor_loss = self.LossActor(state, new_action, options)
+            dd[task_id + ": dql_actor_loss"] = actor_loss
+        else:
+            actor_loss = None
                 
         # logging
-        dd = {
-            task_id + ": dql_critic_loss": critic_loss,
-            task_id + ": dql_actor_loss": actor_loss  
-              }
         globals.LOGGER.log(dd)
         
         return actor_loss, critic_loss

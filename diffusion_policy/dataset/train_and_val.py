@@ -29,8 +29,9 @@ class DexNexDataset(BaseImageDataset):
         """
         # Moveaxis moved to the dataset generation script to save training time
         # now I must do this to be backwards compatable with my messed up dataset order. whoops!
-        obs['img'] = np.moveaxis(obs['img'], 2, 1)
-        obs['img2'] = np.moveaxis(obs['img2'], 2, 1)
+        for key in globals.CONFIG.obs_keys_to_use:
+            if "img" in key:
+                obs[key] = np.moveaxis(obs[key], 2, 1)
 
     def _sample_to_data(self, sample):
         """

@@ -1,0 +1,372 @@
+# globals
+debug: false
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
+obs_rel_indices: [0, 5] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate resnet's for each image
+device: cuda:0
+gradient_accumulate_every: 1 # may move this to ModelandEma later
+total_num_epochs: 501
+batches_per_epoch: 100
+batch_size: 64
+val_every: 999
+resume: false
+
+# global toggle
+tasks_to_train_from:
+  - bnb_2cams
+  # - bnb_1cam
+  # - block_transfer
+
+# global toggle
+obs_keys_to_use:
+  - state
+  - img2 # wrist cam
+  # - img
+
+# common data
+shape_meta:
+  action:
+    shape:
+    - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
+
+  img: # overhead cam
+    shape:
+    - 3
+    - 192
+    - 192
+  img2: # wrist cam
+    shape:
+    - 3
+    - 192
+    - 192
+  
+  state: # the name "state" came from the zarr generation script
+    shape:
+    - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
+
+
+training:
+  checkpoint_every: 20
+  max_train_steps: null
+  max_val_steps: null
+  rollout_every: 9999
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online
+    name: aug29.2025.diffusion_ql
+    project: dexnex_diffusion
+    resume: true # wandb automatic resume
+    tags:
+    - diffusion_ql
+    - cotrain
+    - default
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt
+  k: 20 # how often, in epochs
+  mode: max
+  monitor_key: epoch
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+
+  rgbs:
+    img:
+      shape: ${shape_meta.img.shape}
+    img2:
+      shape: ${shape_meta.img2.shape}
+      
+  ch: 184
+  cw: 184
+
+  lowdims:
+    state:
+      shape: ${shape_meta.state.shape}
+
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_offset: 0
+  episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: ${debug}
+
+
+data_directory: /media/dexnex_ssd/data/bnb/
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
+  rb_paths:
+    block_transfer: ${data_directory}bt.reward.zarr
+    bnb_1cam: ${data_directory}1cam.reward.zarr
+    bnb_2cams: ${data_directory}2cams.reward.zarr
+
+
+
+# NODE -- training entry point
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs} # testing
+  
+  # children
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    # children
+    step_trainer: 
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+    
+      # weighted batch loss dict
+      w_batch_losses:
+        block_transfer: ${common_wbatch_loss}
+        bnb_1cam: ${common_wbatch_loss}
+        bnb_2cams: ${common_wbatch_loss}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochEvaluator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    # weighted batch loss dict
+    w_batch_losses:
+      block_transfer: ${common_wbatch_loss}
+      bnb_1cam: ${common_wbatch_loss}
+      bnb_2cams: ${common_wbatch_loss}
+
+
+common_wbatch_loss:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  # children
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.CriticBatchLoss
+    eta: 0.0 # weight of the dql actor loss
+
+    # children
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.BatchLoader
+      rb_id: default
+      train_or_val: train
+
+dataloaders:
+  block_transfer: ${common_dataset}
+  bnb_1cam: ${common_dataset}
+  bnb_2cams: ${common_dataset}
+
+common_dataset:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null
+
+  options:
+    common:
+      batch_size: ${batch_size}
+      timeout: 0 # 0 means no timeout
+    train:
+      num_workers: 8
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  # child
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: default
+
+    # child
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    critic:
+      _target_: diffusion_policy.model.diffusion_ql.diffusion_ql_loss.CriticLoss
+
+      # children
+      critic:
+        _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
+        discount: 0.99
+        lr: 2.5e-4
+        tau: 0.01 # 0.01 -> 200 steps ~= 87% new values
+        use_target_network: true
+        use_double_q: true
+        use_actor: false
+
+        # lr decay
+        use_lr_decay: true
+        lr_maxt: 50000
+        lr_min: 1e-5
+
+        critic:
+          _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic
+          use_double_q: ${..use_double_q}
+
+          qlmodel:
+            _target_: diffusion_policy.model.diffusion_ql.critic_arch.QLModel
+            trunk_hidden_dim: 256
+            leaf_hidden_dim: 64
+
+            obs_encoder_maker:
+              ${common_obs_encoder}
+
+
+      noise_scheduler: ${common_noise_scheduler}
+      num_inference_steps: 10
+
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: true
+          obs_as_global_cond: true
+          obs_encoder_group_norm: true
+          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+          down_dims: 
+            - 128
+            - 256
+            - 512
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 0.0001 # 1e-4
+          weight_decay: 1.0e-06
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  num_train_timesteps: 100
+  prediction_type: epsilon
+        
+override:
+  session_trainer:
+    epoch_trainer:
+      step_trainer: 
+        w_batch_losses:
+          block_transfer: 
+            weight: 0.25
+            batch_loss: 
+              batch_loader:
+                rb_id: block_transfer
+
+          bnb_1cam:
+            weight: 0.25
+            batch_loss:
+              batch_loader:
+                rb_id: bnb_1cam
+
+          bnb_2cams:
+            weight: 0.5
+            batch_loss: 
+              batch_loader:
+                rb_id: bnb_2cams
+    epoch_evaluator:
+      w_batch_losses:
+        block_transfer: 
+          weight: 0.25
+          batch_loss: 
+            batch_loader:
+              rb_id: block_transfer
+              train_or_val: val
+
+        bnb_1cam:
+          weight: 0.25
+          batch_loss:
+            batch_loader:
+              rb_id: bnb_1cam
+              train_or_val: val
+
+        bnb_2cams:
+          weight: 0.5
+          batch_loss: 
+            batch_loader:
+              rb_id: bnb_2cams
+              train_or_val: val
+
+  dataloaders:
+    block_transfer:
+      sampler:
+        rb_id: block_transfer
+    bnb_1cam:
+      sampler:
+        rb_id: bnb_1cam
+    bnb_2cams:
+      sampler:
+        rb_id: bnb_2cams
+
+  models:
+    models:
+      critic:
+        noise_scheduler:
+          _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+          # num_inference_steps set elsewhere
+        # critic:
+        #   critic:
+        #     qlmodel:
+        #       obs_encoder_maker:
+        #         lowdims:
+                  # add on actions to the input
+                  # action:
+                  #   shape: ${shape_meta.action.shape}
+
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small

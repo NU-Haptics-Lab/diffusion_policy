@@ -21,6 +21,10 @@ def CalcSumLoss(w_batch_losses):
     batch_loss: WeightedBatchLoss
     # iterate over the batch losses and get the total loss
     for key, batch_loss in w_batch_losses.items():
+        # task toggle check
+        if key not in globals.CONFIG.tasks_to_train_from:
+            continue
+        
         losses = batch_loss.compute_weighted_loss()
         
         for key, val in losses.items():

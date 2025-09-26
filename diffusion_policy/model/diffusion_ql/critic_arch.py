@@ -63,6 +63,8 @@ class QLModel(nn.Module):
     def __init__(self,
                  obs_encoder_maker: ObsEncoderMaker,
                  if_stack_history: bool = True,
+                 trunk_hidden_dim = 256,
+                 leaf_hidden_dim = 128
                  ):
         super().__init__()
         self.obs_encoder_maker = obs_encoder_maker
@@ -84,7 +86,7 @@ class QLModel(nn.Module):
         # trunk
         # MLP based off obs encoder output shape. Output is a list, should be 1 long, so extract the first and only element
         dense_input = self.obs_encoder.output_shape()[0] + len(globals.CONFIG.action_rel_indices) * globals.CONFIG.shape_meta.action.shape[0]
-        self.trunk_denser = QLDenser(dense_input)
+        self.trunk_denser = QLDenser(dense_input, hidden_dim=trunk_hidden_dim)
         trunk = self.trunk_denser
         
         branches = nn.ModuleDict()
@@ -93,8 +95,8 @@ class QLModel(nn.Module):
         leafs = nn.ModuleDict()
         for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
             leafs[key] = nn.Sequential(
-                QLDenser(self.trunk_denser.output_shape()),
-                nn.Linear(256, 1) # critic must output a single q-value
+                QLDenser(self.trunk_denser.output_shape(), hidden_dim=leaf_hidden_dim),
+                nn.Linear(leaf_hidden_dim, 1) # critic must output a single q-value
             )
 
         # tree
@@ -160,23 +162,62 @@ class QLModel(nn.Module):
         x = self.tree.forward_options(x, options)
         
         return x
+    
+class QLModelSimple(QLModel):
+    def __init__(self,
+                 obs_encoder_maker: ObsEncoderMaker,
+                 hidden_dim = 256
+                 ):
+        nn.Module.__init__(self)
+        
+        self.obs_encoder_maker = obs_encoder_maker
+
+        # get the robomimic obs-encoder
+        self.obs_encoder: ObservationEncoder = self.obs_encoder_maker.get()
+        
+        # just the observation, no actions
+        dense_input = self.obs_encoder.output_shape()[0]
+        
+        self.dense = nn.Sequential(
+                QLDenser(dense_input, hidden_dim = hidden_dim),
+                nn.Linear(hidden_dim, 1) # critic must output a single q-value
+            )
+        
+    def forward(self, state_dict, action, options: dict = None):
+            
+        # encode the inputs
+        x = self.obs_encoder(state_dict)
+
+        x = self.dense(x)
+        
+        return x
+    
             
         
 
 class DoubleCritic(nn.Module, BaseCritic):
     def __init__(self,
-                 qlmodel: QLModel
+                 qlmodel: QLModel,
+                 use_double_q = True
                  ):
-        super().__init__()
+        nn.Module.__init__(self)
+        self.use_double_q = use_double_q
         
         self.q1_model = qlmodel
-        self.q2_model = copy.deepcopy(self.q1_model)
+        
+        if self.use_double_q:
+            self.q2_model = copy.deepcopy(self.q1_model)
 
         print_nb_params(self.q1_model, "Critic params")
     
     def forward(self, state_dict, action, options: dict = None):
         q1 = self.q1_model(state_dict, action, options)
-        q2 = self.q2_model(state_dict, action, options)
+        
+        if self.use_double_q:
+            q2 = self.q2_model(state_dict, action, options)
+        else:
+            q2 = None
+            
         return q1, q2
                
     def q1(self, state_dict, action):
@@ -184,7 +225,14 @@ class DoubleCritic(nn.Module, BaseCritic):
     
     def q_min(self, state_dict, action):
         q1, q2 = self.forward(state_dict, action)
-        return torch.min(q1, q2)
+        
+        
+        if self.use_double_q:
+            out = torch.min(q1, q2)
+        else:
+            out = q1
+            
+        return out
     
 
 def test():

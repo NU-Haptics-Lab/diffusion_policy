@@ -36,7 +36,7 @@ Contains all models used in training
 MODELS: Models = None
 
 """ Epoch count """
-EPOCH = 0
+EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoch
 
 """ Training step count """
 STEP = 0

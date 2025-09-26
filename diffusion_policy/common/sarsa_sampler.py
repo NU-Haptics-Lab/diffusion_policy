@@ -9,6 +9,8 @@ import copy
 from omegaconf import OmegaConf, open_dict
 from operator import itemgetter
 
+import diffusion_policy.globals as globals
+
 
 
 def get_lower_bound_idx(sorted_array, value):
@@ -408,11 +410,7 @@ class EpisodeSampler:
         self.indices.create_indices()
 
         # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
-        self.obs_keys = [
-            "img",
-            "img2",
-            "state",
-        ]
+        self.obs_keys = globals.CONFIG.obs_keys_to_use
 
         self.action_key = "action"
         self.reward_key = "reward"
@@ -433,6 +431,9 @@ class EpisodeSampler:
     
     def get_reward(self, ep_idx):
         reward = self.get_key_sample("reward", ep_idx) # adds a dimension
+        
+        # TESTING -- reduce the existence penalty so I don't have to regen the dataset
+        reward[ reward < 0.0] = -0.01
         
         # convert to np array
         reward = np.array(reward)
