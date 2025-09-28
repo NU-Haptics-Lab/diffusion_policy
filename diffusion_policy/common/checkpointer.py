@@ -93,6 +93,8 @@ class TopKCheckpointManager:
             # checkpointing
             if self.save_last_ckpt:
                 self.save_checkpoint()
+
+            # snapshotting
             if self.save_last_snapshot:
                 # NOT IMPLEMENTED / TESTED
                 # self.save_snapshot()
@@ -112,69 +114,9 @@ class TopKCheckpointManager:
             if topk_ckpt_path is not None:
                 self.save_checkpoint(path=topk_ckpt_path)
 
-    def save_checkpoint_OLD(self, path=None, tag='latest', 
-            exclude_keys=None,
-            include_keys=None,
-            use_thread=True):
-        
-        # default path
-        if path is None:
-            path = pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
-        else:
-            path = pathlib.Path(path)
-            
-        # default include / exclude keys
-        if exclude_keys is None:
-            exclude_keys = tuple(self.exclude_keys)
-        if include_keys is None:
-            include_keys = tuple(self.include_keys) + ('_output_dir',)
-
-        path.parent.mkdir(parents=False, exist_ok=True)
-        payload = {
-            'cfg': globals.CONFIG,
-            'state_dicts': dict(),
-            'pickles': dict()
-        }
-
-        # iterate over all children (obtained via __dict__)
-        for key, value in self.__dict__.items():
-            # child class has a state-dict
-            # https://docs.pytorch.org/tutorials/recipes/recipes/what_is_state_dict.html
-            if hasattr(value, 'state_dict') and hasattr(value, 'load_state_dict'):
-                # modules, optimizers and samplers etc
-                if key not in exclude_keys:
-                    if use_thread:
-                        payload['state_dicts'][key] = _copy_to_cpu(value.state_dict())
-                    else:
-                        payload['state_dicts'][key] = value.state_dict()
-
-            # not explicitly a state-dict-having child, but explicitly included in include_keys
-            elif key in include_keys:
-                payload['pickles'][key] = dill.dumps(value)
-
-        # use multiple threads
-        if use_thread:
-            # setup the multi-threading w/fcn
-            self._saving_thread = threading.Thread(
-                target = lambda _: torch.save(payload, path.open('wb'), pickle_module=dill)
-            )
-            
-            # start multi-threading
-            self._saving_thread.start()
-
-        # single-threaded
-        else:
-            torch.save(payload, path.open('wb'), pickle_module=dill)
-
-        # return the checkpoint path
-        return str(path.absolute())
-    
-
     def save_checkpoint(self, 
             path=None, 
             tag='latest', 
-            include_keys=None,
-            use_thread=True
             ):
         """
         Simplify: no script uses exclude_keys, so I'm going to exclude it from the function
@@ -196,7 +138,6 @@ class TopKCheckpointManager:
             'step': globals.STEP,
             'epoch': globals.EPOCH,
             'state_dicts': dict(),
-            'pickles': dict()
         }
 
         # add select state dicts
@@ -207,31 +148,27 @@ class TopKCheckpointManager:
         # return the checkpoint path
         return str(path.absolute())
     
-    def load_payload(self, payload, exclude_keys=None, include_keys=None, **kwargs):
-        if exclude_keys is None:
-            exclude_keys = tuple()
-        if include_keys is None:
-            include_keys = payload['pickles'].keys()
+    def load_payload(self, payload, **kwargs):
+        # hard-coded for now
+        globals.STEP = payload['step']
+        globals.EPOCH = payload['epoch']
 
-        for key, value in payload['state_dicts'].items():
-            if key not in exclude_keys:
-                self.__dict__[key].load_state_dict(value, **kwargs)
-        for key in include_keys:
-            if key in payload['pickles']:
-                self.__dict__[key] = dill.loads(payload['pickles'][key])
+        # modules
+        globals.MODELS.load_state_dict(payload['state_dicts']['models'])
+
 
     def load_checkpoint(self, path=None, tag='latest',
-            exclude_keys=None, 
-            include_keys=None, 
             **kwargs):
         if path is None:
             path = self.get_checkpoint_path(tag=tag)
         else:
             path = pathlib.Path(path)
+
+        # load from disk
         payload = torch.load(path.open('rb'), pickle_module=dill, **kwargs)
-        self.load_payload(payload, 
-            exclude_keys=exclude_keys, 
-            include_keys=include_keys)
+
+        # load into classes
+        self.load_payload(payload)
         return payload 
     
     def load(self):
