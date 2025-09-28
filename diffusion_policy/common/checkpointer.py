@@ -112,15 +112,18 @@ class TopKCheckpointManager:
             if topk_ckpt_path is not None:
                 self.save_checkpoint(path=topk_ckpt_path)
 
-    def save_checkpoint(self, path=None, tag='latest', 
+    def save_checkpoint_OLD(self, path=None, tag='latest', 
             exclude_keys=None,
             include_keys=None,
             use_thread=True):
+        
+        # default path
         if path is None:
             path = pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
         else:
             path = pathlib.Path(path)
             
+        # default include / exclude keys
         if exclude_keys is None:
             exclude_keys = tuple(self.exclude_keys)
         if include_keys is None:
@@ -128,12 +131,15 @@ class TopKCheckpointManager:
 
         path.parent.mkdir(parents=False, exist_ok=True)
         payload = {
-            'cfg': self.cfg,
+            'cfg': globals.CONFIG,
             'state_dicts': dict(),
             'pickles': dict()
-        } 
+        }
 
+        # iterate over all children (obtained via __dict__)
         for key, value in self.__dict__.items():
+            # child class has a state-dict
+            # https://docs.pytorch.org/tutorials/recipes/recipes/what_is_state_dict.html
             if hasattr(value, 'state_dict') and hasattr(value, 'load_state_dict'):
                 # modules, optimizers and samplers etc
                 if key not in exclude_keys:
@@ -141,14 +147,64 @@ class TopKCheckpointManager:
                         payload['state_dicts'][key] = _copy_to_cpu(value.state_dict())
                     else:
                         payload['state_dicts'][key] = value.state_dict()
+
+            # not explicitly a state-dict-having child, but explicitly included in include_keys
             elif key in include_keys:
                 payload['pickles'][key] = dill.dumps(value)
+
+        # use multiple threads
         if use_thread:
+            # setup the multi-threading w/fcn
             self._saving_thread = threading.Thread(
-                target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
+                target = lambda _: torch.save(payload, path.open('wb'), pickle_module=dill)
+            )
+            
+            # start multi-threading
             self._saving_thread.start()
+
+        # single-threaded
         else:
             torch.save(payload, path.open('wb'), pickle_module=dill)
+
+        # return the checkpoint path
+        return str(path.absolute())
+    
+
+    def save_checkpoint(self, 
+            path=None, 
+            tag='latest', 
+            include_keys=None,
+            use_thread=True
+            ):
+        """
+        Simplify: no script uses exclude_keys, so I'm going to exclude it from the function
+        only include_keys used are ['global_step', 'epoch'], so just add them explicitly
+        """
+        
+        # default path
+        if path is None:
+            path = pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
+        else:
+            path = pathlib.Path(path)
+            
+        # ensure directory exists, make it if it doesn't
+        path.parent.mkdir(parents=False, exist_ok=True)
+
+        # saving payload
+        payload = {
+            'cfg': globals.CONFIG,
+            'step': globals.STEP,
+            'epoch': globals.EPOCH,
+            'state_dicts': dict(),
+            'pickles': dict()
+        }
+
+        # add select state dicts
+        payload['state_dicts']['models'] = globals.MODELS
+        
+        torch.save(payload, path.open('wb'), pickle_module=dill)
+
+        # return the checkpoint path
         return str(path.absolute())
     
     def load_payload(self, payload, exclude_keys=None, include_keys=None, **kwargs):

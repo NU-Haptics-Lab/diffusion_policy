@@ -1,24 +1,27 @@
+from torch import nn
 
 
 
-
-class Models:
+class Models(nn.Module):
     """
-    A container class for however many models are being used.
+    A container class for however many models are being used. Inherit from nn.Module so checkpointing works properly
     """
     
     def __init__(self,
             models: dict
         ):
-        self.models = models
+        self.models = nn.ModuleDict()
+
+        for key in models:
+            self.models[key] = models[key]
         
-    def eval(self):
-        for idx, model in self.models.items():
-            model.eval()
+    # def eval(self):
+    #     for idx, model in self.models.items():
+    #         model.eval()
             
-    def train(self):
-        for idx, model in self.models.items():
-            model.train()
+    # def train(self):
+    #     for idx, model in self.models.items():
+    #         model.train()
             
     def __getitem__(self, key):
         return self.models[key]

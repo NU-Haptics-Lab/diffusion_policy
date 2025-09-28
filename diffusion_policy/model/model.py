@@ -8,18 +8,18 @@ from diffusion_policy.common.pytorch_util import optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 
-class Base:
+class Base(nn.Module):
     def reset(self):
         pass
     
     def step(self):
         pass
     
-    def eval(self):
-        pass
+    # def eval(self):
+    #     pass
     
-    def train(self):
-        pass
+    # def train(self):
+    #     pass
 
 class Ema(Base):
     """
