@@ -10,6 +10,10 @@ class Models(nn.Module):
     def __init__(self,
             models: dict
         ):
+        # must init nn.Module
+        super().__init__()
+        
+        # 
         self.models = nn.ModuleDict()
 
         for key in models:

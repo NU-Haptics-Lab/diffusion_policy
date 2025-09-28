@@ -27,12 +27,15 @@ class SessionTrainer:
             
             # eval for one epoch
             self.epoch_evaluator.eval()
-            
-            # checkpoints
-            globals.CHECKPOINTER.save()
 
             # end of epoch logging
             globals.EPOCH += 1
+            globals.LOGGER.log_one("epoch", globals.EPOCH)
+            
+            # checkpoints
+            globals.CHECKPOINTER.save()
+            
+            
 
         # end of session stuff
         pass

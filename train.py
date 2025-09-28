@@ -67,7 +67,7 @@ def main(cfg: OmegaConf):
         globals.CONFIG.models.models.critic.num_inference_steps = 1
         globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
         globals.CONFIG.logging.use_wandb = False
-        globals.CONFIG.checkpoint.checkpoint_every: 1
+        globals.CONFIG.checkpoint.checkpoint_every = 1
         
         torch.autograd.set_detect_anomaly(True)
     

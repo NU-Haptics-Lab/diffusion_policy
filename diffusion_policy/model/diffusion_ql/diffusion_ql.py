@@ -19,7 +19,7 @@ Based on this paper: https://arxiv.org/pdf/2208.06193
 and this associated repo: https://github.com/Zhendong-Wang/Diffusion-Policies-for-Offline-RL 
 """
 
-class DiffusionQL(object):
+class DiffusionQL(nn.Module):
     """
     default values taken from the diffusion-ql repo.
     https://github.com/Zhendong-Wang/Diffusion-Policies-for-Offline-RL/blob/d871f5c6b4a3a3a19a10c662a54f32d5819dfcdb/agents/ql_diffusion.py#L49 
@@ -38,6 +38,7 @@ class DiffusionQL(object):
                  use_double_q = True,
                  use_actor = True
                  ):
+        nn.Module.__init__(self)
         
         self.use_lr_decay = use_lr_decay
         self.grad_norm = grad_norm

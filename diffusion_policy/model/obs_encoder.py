@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 
+import diffusion_policy.globals as globals
 import robomimic.models.base_nets as rmbn
 from robomimic.models.obs_nets import ObservationEncoder
 from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialSoftmax
@@ -39,6 +40,10 @@ class ObsEncoderMaker():
 
         # rgb image inputs
         for key, val in rgbs.items():
+            # check with global control
+            if key not in globals.CONFIG.obs_keys_to_use:
+                continue
+            
             image_randomizer, net = make_ob(val.shape, ch, cw)
 
             # register the network for processing the modality
@@ -51,6 +56,10 @@ class ObsEncoderMaker():
             
         # flat inputs aka lowdim or low_dim inputs
         for key, val in lowdims.items():
+            # check with global control
+            if key not in globals.CONFIG.obs_keys_to_use:
+                continue
+            
             self.obs_encoder.register_obs_key(
                 name=key,
                 shape=val.shape,

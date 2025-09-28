@@ -4,6 +4,7 @@ import pathlib
 import torch
 import dill
 import threading
+from torch import nn
 
 import diffusion_policy.globals as globals
 from diffusion_policy.utils import EveryEpoch
@@ -21,13 +22,14 @@ class TopKCheckpointManager:
             checkpoint_every = 1,
             save_last_ckpt = False,
             save_last_snapshot = False,
-            resume = False
+            resume = False,
+            resume_tag = "latest"
         ):
         assert mode in ['max', 'min']
         assert k >= 0
         
         # old
-        if self.resume:
+        if resume:
             self.output_dir = output_dir
             
         # new 
@@ -45,6 +47,7 @@ class TopKCheckpointManager:
         self.save_last_ckpt = save_last_ckpt
         self.save_last_snapshot = save_last_snapshot
         self.resume = resume
+        self.resume_tag = resume_tag
     
     def get_ckpt_path(self, data: Dict[str, float]) -> Optional[str]:
         if self.k == 0:
@@ -90,6 +93,9 @@ class TopKCheckpointManager:
 
     def save(self):
         if EveryEpoch(self.checkpoint_every):
+            print("Saving...")
+            
+            # save the current state as `latest`
             # checkpointing
             if self.save_last_ckpt:
                 self.save_checkpoint()
@@ -102,10 +108,11 @@ class TopKCheckpointManager:
 
             # sanitize metric names
             metric_dict = dict()
-            for key, value in step_log.items():
+            for key, value in globals.LOGGER.data.items():
                 new_key = key.replace('/', '_')
                 metric_dict[new_key] = value
             
+            # Now, save a top-k checkpoint
             # We can't copy the last checkpoint here
             # since save_checkpoint uses threads.
             # therefore at this point the file might have been empty!
@@ -113,6 +120,25 @@ class TopKCheckpointManager:
 
             if topk_ckpt_path is not None:
                 self.save_checkpoint(path=topk_ckpt_path)
+                
+            print("Saved.")
+            
+    def get_state_dicts(self, dd):
+        """
+        Get non-nn.Module state dicts, like optimizers and lr-schedulers
+        """
+        # TODO
+        
+        for key, value in self.__dict__.items():
+            # modules are captured elsewhere
+            if not isinstance(value, nn.Module):
+                # make sure it has a state_dict and load_state_dict
+                if hasattr(value, 'state_dict') and hasattr(value, 'load_state_dict'):
+                    dd[key] = value.state_dict()
+                
+            # recurse
+            self.get_state_dicts(value)
+        
 
     def save_checkpoint(self, 
             path=None, 
@@ -137,11 +163,11 @@ class TopKCheckpointManager:
             'cfg': globals.CONFIG,
             'step': globals.STEP,
             'epoch': globals.EPOCH,
-            'state_dicts': dict(),
+            'models_state_dict': globals.MODELS.state_dict(),
+            'non_models_state_dicts': {}
         }
-
-        # add select state dicts
-        payload['state_dicts']['models'] = globals.MODELS
+        
+        # self.get_state_dicts(payload['non_models_state_dicts'])
         
         torch.save(payload, path.open('wb'), pickle_module=dill)
 
@@ -154,7 +180,7 @@ class TopKCheckpointManager:
         globals.EPOCH = payload['epoch']
 
         # modules
-        globals.MODELS.load_state_dict(payload['state_dicts']['models'])
+        globals.MODELS.load_state_dict(payload['models_state_dict'])
 
 
     def load_checkpoint(self, path=None, tag='latest',
@@ -173,20 +199,11 @@ class TopKCheckpointManager:
     
     def load(self):
         if self.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
+            lastest_ckpt_path = self.get_checkpoint_path(self.resume_tag)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint: {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
-    
-    # NOT IMPLEMENTED / TESTED
-    # def save_snapshot(self, tag='latest'):
-    #     """
-    #     Quick loading and saving for reserach, saves full state of the workspace.
-
-    #     However, loading a snapshot assumes the code stays exactly the same.
-    #     Use save_checkpoint for long-term storage.
-    #     """
-    #     path = pathlib.Path(self.output_dir).joinpath('snapshots', f'{tag}.pkl')
-    #     path.parent.mkdir(parents=False, exist_ok=True)
-    #     torch.save(self, path.open('wb'), pickle_module=dill)
-    #     return str(path.absolute())
+                
+            else:
+                print("Checkpointer::load: lastest_ckpt_path wasn't a file.")
+                raise

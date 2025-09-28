@@ -15,6 +15,7 @@ from diffusion_policy.common.replay_buffer_loader import ReplayBufferLoader
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.model.models import Models
 from diffusion_policy.common.checkpointer import TopKCheckpointManager
+from diffusion_policy.common.logging import Logging
 
 """
 Global config access
@@ -43,7 +44,7 @@ EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoc
 STEP = 0
 
 """ Logger """
-LOGGER = None
+LOGGER: Logging = None
 
 """ Checkpointer """
 CHECKPOINTER: TopKCheckpointManager = None

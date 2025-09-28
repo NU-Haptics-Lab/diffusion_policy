@@ -9,6 +9,10 @@ from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 
 class Base(nn.Module):
+    def __init__(self) -> None:
+        # must init nn.Module
+        super().__init__()
+        
     def reset(self):
         pass
     
@@ -29,6 +33,8 @@ class Ema(Base):
             use_ema: bool,
             ema_cfg,
             ):
+        super().__init__()
+        
         # configure model
         self.use_ema = use_ema
         self.ema_cfg = ema_cfg
@@ -78,6 +84,8 @@ class Optim(Base):
                  gradient_accumulate_every = 1,
                  grad_norm = 1.0
                  ):
+        super().__init__()
+        
         self.gradient_accumulate_every = gradient_accumulate_every
         self.optimizer_target = optimizer_target
         self.optimizer_cfg = optimizer_cfg
@@ -129,6 +137,8 @@ class Model(Base):
         
     def __init__(self,
                  model):
+        super().__init__()
+        
         # configure model
         self.model = model
 
@@ -162,6 +172,8 @@ class ModelEmaOptim(Base):
             ema: Ema,
             optim: Optim
     ):
+        super().__init__()
+        
         self.model = model
         self.ema = ema
         self.optim = optim

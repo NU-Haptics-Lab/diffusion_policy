@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 from typing import Any
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 import hydra
@@ -29,12 +30,13 @@ another decision to make: which action to start with. We pass partially noised a
 
 """
 
-class CriticLoss:
+class CriticLoss(nn.Module):
     def __init__(self,
                  critic: DiffusionQL,
                  noise_scheduler: DDIMScheduler,
                  num_inference_steps: int
                  ) -> None:
+        nn.Module.__init__(self)
         """
         actor - an actor policy
         critic - a critic policy
