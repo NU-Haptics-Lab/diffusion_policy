@@ -1,24 +1,46 @@
-# globals
+###################################################
+###################################################
+###################################################
+###################################################
+# global controls
 debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate resnet's for each image
-device: cuda:0
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 501
+total_num_epochs: 4004
 batches_per_epoch: 100
-batch_size: 256
-val_every: 999
-resume: false
+batch_size: 64
+val_every: 10
+resume: true
 
-# global toggle
+# global control
 tasks_to_use:
   - bnb_2cams
-  - bnb_1cam
-  - block_transfer
+  # - bnb_1cam
+  # - block_transfer
 
-# global toggle
+# global control
 obs_keys_to_use:
-  - "state"
+  - state
+  - img2 # wrist cam
+  # - img
+
+# global control
+models_to_train:
+  - critic
+  # - actor
+
+# global control -- irrelevant when using CriticBatchLoss
+models_to_eval:
+  - critic
+  # - actor
+
+
+###################################################
+###################################################
+###################################################
+###################################################
+device: cuda:0
 
 # common data
 shape_meta:
@@ -26,16 +48,16 @@ shape_meta:
     shape:
     - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
 
-  # img: # overhead cam
-  #   shape:
-  #   - 3
-  #   - 192
-  #   - 192
-  # img2: # wrist cam
-  #   shape:
-  #   - 3
-  #   - 192
-  #   - 192
+  img: # overhead cam
+    shape:
+    - 3
+    - 192
+    - 192
+  img2: # wrist cam
+    shape:
+    - 3
+    - 192
+    - 192
   
   state: # the name "state" came from the zarr generation script
     shape:
@@ -43,7 +65,6 @@ shape_meta:
 
 
 training:
-  checkpoint_every: 20
   max_train_steps: null
   max_val_steps: null
   rollout_every: 9999
@@ -60,7 +81,7 @@ logging:
     group: null
     id: null
     mode: online
-    name: aug29.2025.diffusion_ql
+    name: 2025.diffusion_ql
     project: dexnex_diffusion
     resume: true # wandb automatic resume
     tags:
@@ -73,19 +94,25 @@ checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
 
-  format_str: epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt
-  k: 20 # how often, in epochs
+  format_str: step={global_step:07d}.ckpt
+  k: 10 # nb checkpoints to keep
+  checkpoint_every: 100 # how often, in epochs
   mode: max
   monitor_key: epoch
+
+  # required if resuming
+  resume: ${resume}
+  resume_tag: step=0179900
+  output_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/"
 
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
 
-  rgbs: {}
-    # img:
-    #   shape: ${shape_meta.img.shape}
-    # img2:
-    #   shape: ${shape_meta.img2.shape}
+  rgbs:
+    img:
+      shape: ${shape_meta.img.shape}
+    img2:
+      shape: ${shape_meta.img2.shape}
       
   ch: 184
   cw: 184
@@ -183,7 +210,7 @@ common_dataset:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 8
+      num_workers: 12
       persistent_workers: true
       pin_memory: true
       shuffle: true
@@ -212,8 +239,8 @@ models:
       critic:
         _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
         discount: 0.99
-        lr: 5e-4
-        tau: 0.005
+        lr: 2.5e-5
+        tau: 0.01 # 0.01 -> 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
         use_actor: false
@@ -221,7 +248,7 @@ models:
         # lr decay
         use_lr_decay: true
         lr_maxt: 50000
-        lr_min: 1e-5
+        lr_min: 2.5e-5
 
         critic:
           _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic

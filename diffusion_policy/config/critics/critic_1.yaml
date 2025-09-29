@@ -129,7 +129,7 @@ session_trainer:
         bnb_2cams: ${common_wbatch_loss}
 
   epoch_evaluator:
-    _target_: diffusion_policy.trainers.epoch_trainer.EpochEvaluator
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
     nb_batches: 4
     val_every: 4
 

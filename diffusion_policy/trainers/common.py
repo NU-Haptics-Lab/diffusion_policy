@@ -9,10 +9,10 @@ from diffusion_policy.common.pytorch_util import dict_tensor_to
 def CalcSumLoss(w_batch_losses):
     # initialize a zero loss torch tensor
     # TODO: make the shape not hard coded
-    total_losses = {
-        'actor': torch.tensor([0.0], requires_grad=True),
-        'critic': torch.tensor([0.0], requires_grad=True),
-    }
+    total_losses = {}
+    
+    for key in globals.CONFIG.models_to_train:
+        total_losses[key] = torch.tensor([0.0], requires_grad=True)
     
     # move total_losses to device
     device = torch.device(globals.CONFIG.device)
@@ -22,7 +22,7 @@ def CalcSumLoss(w_batch_losses):
     # iterate over the batch losses and get the total loss
     for key, batch_loss in w_batch_losses.items():
         # task toggle check
-        if key not in globals.CONFIG.tasks_to_train_from:
+        if key not in globals.CONFIG.tasks_to_use:
             continue
         
         losses = batch_loss.compute_weighted_loss()
@@ -40,6 +40,10 @@ def CalcSumEval(w_batch_losses):
     batch_loss: WeightedBatchLoss
     # iterate over the batch losses and get the total loss
     for key, batch_loss in w_batch_losses.items():
+        # task toggle check
+        if key not in globals.CONFIG.tasks_to_use:
+            continue
+        
         wevals = batch_loss.compute_weighted_eval()
 
         total_evals += wevals

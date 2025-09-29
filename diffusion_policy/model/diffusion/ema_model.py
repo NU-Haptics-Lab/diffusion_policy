@@ -1,20 +1,24 @@
 import copy
 import torch
+from torch import nn
 from torch.nn.modules.batchnorm import _BatchNorm
 
-class EMAModel:
+from typing import TypeVar
+T = TypeVar('T', bound='nn.Module')
+
+class EMAModel(nn.Module):
     """
-    Exponential Moving Average of models weights
+    Exponential Moving Average of models weights. Inherit from nn.Module so saving/loading weights happens automatically
     """
 
     def __init__(
         self,
-        model=None,
-        update_after_step=0,
-        inv_gamma=1.0,
-        power=2 / 3,
-        min_value=0.0,
-        max_value=0.9999
+        model: nn.Module = None,
+        update_after_step = 0,
+        inv_gamma = 1.0,
+        power = 2.0 / 3.0,
+        min_value = 0.0,
+        max_value = 0.9999
     ):
         """
         @crowsonkb's notes on EMA Warmup:
@@ -27,7 +31,9 @@ class EMAModel:
             power (float): Exponential factor of EMA warmup. Default: 2/3.
             min_value (float): The minimum EMA decay rate. Default: 0.
         """
-        self.averaged_model = model
+        self.averaged_model: nn.Module = model
+        
+        # explicitly set to eval mode, and disallow gradients
         self.averaged_model.eval()
         self.averaged_model.requires_grad_(False)
 
@@ -39,6 +45,13 @@ class EMAModel:
 
         self.decay = 0.0
         self.optimization_step = 0
+        
+    def train(self: T, mode: bool = True) -> T:
+        """
+        override nn.Module.train so we always stay in eval mode
+        """
+        self.training = False
+        return self
 
     def get_decay(self, optimization_step):
         """

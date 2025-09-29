@@ -16,9 +16,9 @@ class Epoch:
             ):
         self.nb_batches = nb_batches
 
-class EpochEvaluator(Epoch):
+class EpochValidator(Epoch):
     """
-    Responsible for evaluating for one epoch.
+    Responsible for validating for one epoch.
     """
 
     def __init__(self,
@@ -34,9 +34,9 @@ class EpochEvaluator(Epoch):
         self.models = globals.MODELS
 
     @torch.no_grad()
-    def eval(self):
+    def validate(self):
         """
-        eval for one epoch.
+        validate for one epoch.
         """
         if EveryEpoch(self.val_every):
             # switch to eval mode

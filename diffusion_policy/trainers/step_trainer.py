@@ -32,8 +32,7 @@ class StepTrainer:
         
         # do one at a time
         for key, loss in total_losses.items():
-            # TESTING
-            if key == "actor":
+            if key not in globals.CONFIG.models_to_train:
                 continue
             
             dd = {}

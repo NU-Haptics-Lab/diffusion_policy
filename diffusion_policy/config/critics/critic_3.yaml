@@ -11,7 +11,7 @@ val_every: 999
 resume: false
 
 # global toggle
-tasks_to_train_from:
+tasks_to_use:
   - bnb_2cams
 
 # global toggle
@@ -139,7 +139,7 @@ session_trainer:
         bnb_2cams: ${common_wbatch_loss}
 
   epoch_evaluator:
-    _target_: diffusion_policy.trainers.epoch_trainer.EpochEvaluator
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
     nb_batches: 4
     val_every: ${val_every}
 

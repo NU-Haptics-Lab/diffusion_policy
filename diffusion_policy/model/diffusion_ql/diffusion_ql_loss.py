@@ -97,11 +97,5 @@ class CriticLoss(nn.Module):
     def reset(self):
         self.critic.reset()
         
-    def eval(self):
-        self.critic.eval()
-        
-    def train(self):
-        self.critic.train()
-        
     def get_model(self):
         return self.critic.get_model()

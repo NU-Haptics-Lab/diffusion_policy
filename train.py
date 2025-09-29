@@ -67,7 +67,12 @@ def main(cfg: OmegaConf):
         globals.CONFIG.models.models.critic.num_inference_steps = 1
         globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
         globals.CONFIG.logging.use_wandb = False
+        
+        # testing checkpointing
         globals.CONFIG.checkpoint.checkpoint_every = 1
+        
+        # testing validation
+        globals.CONFIG.val_every = 1
         
         torch.autograd.set_detect_anomaly(True)
     
@@ -108,8 +113,8 @@ def main(cfg: OmegaConf):
     globals.CHECKPOINTER.load()
 
     # run it
-    print("Begin training.")
-    session_trainer.train()
+    print("Begin running.")
+    session_trainer.run()
 
 if __name__ == "__main__":
     # only need the following if using my meta dataset

@@ -70,25 +70,24 @@ class DQLBatchLoss(BatchLoss):
         """
         compute loss for one batch.
         """
+        losses = {}
+        
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
-
-        # get the BC loss
-        bc_loss = self.actor.loss(nbatch, self.rb_id)
-
-        # get the DQL losses
-        dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
         
-        # summed actor loss
-        actor_loss = bc_loss + self.eta * dql_actor_loss
-
-        # summed critic loss
-        critic_loss = dql_critic_loss
+        if "actor" in globals.CONFIG.models_to_train:
+            # get the BC loss
+            bc_loss = self.actor.loss(nbatch, self.rb_id)
+            losses['actor'] = bc_loss
         
-        losses = {
-            'actor': actor_loss,
-            'critic': critic_loss
-        }
+        if "critic" in globals.CONFIG.models_to_train:
+            # get the DQL losses
+            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
+            losses['critic'] = dql_critic_loss
+            
+        # # TODO: if train actor and use dql
+        # if True:
+        #     losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
         
         # we're done
         return losses
@@ -118,6 +117,16 @@ class CriticBatchLoss(BatchLoss):
         
         # we're done
         return losses
+    
+    # TODO: rename all eval to validate
+    def eval(self):
+        # get batch, batch_loader handles train vs val mode
+        nbatch = next(self.batch_loader)
+
+        # get the critic loss
+        dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
+    
+        return dql_critic_loss.cpu()
         
 
     
@@ -139,6 +148,8 @@ class WeightedBatchLoss:
         wloss = dict_apply(losses, lambda x: self.weight * x)
         return wloss
     
+    # TODO: rename eval to validate
     def compute_weighted_eval(self):
+        # this batch_loss should already be in val mode
         wevals = self.weight * np.array(self.batch_loss.eval())
         return wevals

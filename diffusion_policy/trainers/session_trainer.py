@@ -1,5 +1,5 @@
 import diffusion_policy.globals as globals
-from diffusion_policy.trainers.epoch_trainer import EpochTrainer, EpochEvaluator
+from diffusion_policy.trainers.epoch_trainer import EpochTrainer, EpochValidator
 
 class SessionTrainer:
     """
@@ -9,7 +9,7 @@ class SessionTrainer:
     """
     def __init__(self,
         epoch_trainer: EpochTrainer,
-        epoch_evaluator: EpochEvaluator,
+        epoch_evaluator: EpochValidator,
         nb_epochs: int
         ):
         # 
@@ -17,16 +17,16 @@ class SessionTrainer:
         self.epoch_evaluator = epoch_evaluator
         self.nb_epochs = nb_epochs
 
-    def train(self):
+    def run(self):
         """
-        Train for one session
+        Run for one session
         """
         for nb_epoch in range(self.nb_epochs):
             # train for one epoch
             self.epoch_trainer.train()
             
             # eval for one epoch
-            self.epoch_evaluator.eval()
+            self.epoch_evaluator.validate()
 
             # end of epoch logging
             globals.EPOCH += 1

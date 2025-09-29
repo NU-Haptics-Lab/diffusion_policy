@@ -80,6 +80,12 @@ class DiffusionQL(nn.Module):
         options = {}
         options['leaf'] = task_id
         return options
+    
+    def ForwardCritic(self, *args, **kwargs):
+        if self.training:
+            return self.critic(*args, **kwargs)
+        else:
+            return self.ema.averaged_model(*args, **kwargs)
         
     def LossCritic(self, nbatch_dict, next_action_TEST_UNUSED, options):
         """
@@ -142,7 +148,7 @@ class DiffusionQL(nn.Module):
         
         # logging
         dd = {}
-        dd[options['leaf'] + ": avg q-value"] = current_q1.mean()
+        dd[self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
         globals.LOGGER.log(dd)
         
         return critic_loss
@@ -214,7 +220,9 @@ class DiffusionQL(nn.Module):
         
         # calc loss for the critic, using (s, a, r, s') & a'
         critic_loss = self.LossCritic(nbatch_dict, next_action, options)
-        dd[task_id + ": dql_critic_loss"] = critic_loss
+        
+        # logging
+        dd[self.get_mode_string() + " mode. " + task_id + ": dql_critic_loss"] = critic_loss
         
         # extract the state
         state = nbatch_dict['obs']
@@ -222,7 +230,9 @@ class DiffusionQL(nn.Module):
         # get the actor loss using (s, a)
         if self.use_actor:
             actor_loss = self.LossActor(state, new_action, options)
-            dd[task_id + ": dql_actor_loss"] = actor_loss
+            
+            # logging
+            dd[self.get_mode_string() + " mode. " + task_id + ": dql_actor_loss"] = actor_loss
         else:
             actor_loss = None
                 
@@ -230,6 +240,10 @@ class DiffusionQL(nn.Module):
         globals.LOGGER.log(dd)
         
         return actor_loss, critic_loss
+    
+    def get_mode_string(self):
+        mode = "Training" if self.training else "Validation"
+        return mode
 
     def save_model(self, dir, id=None):
         if id is not None:
@@ -242,12 +256,6 @@ class DiffusionQL(nn.Module):
             self.critic.load_state_dict(torch.load(f'{dir}/critic_{id}.pth'))
         else:
             self.critic.load_state_dict(torch.load(f'{dir}/critic.pth'))
-            
-    def eval(self):
-        self.critic.eval()
-        
-    def train(self):
-        self.critic.train()
         
     def reset(self):
         self.critic_optimizer.zero_grad()
