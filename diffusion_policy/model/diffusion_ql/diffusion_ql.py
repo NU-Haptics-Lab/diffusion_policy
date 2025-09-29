@@ -221,17 +221,17 @@ class DiffusionQL(nn.Module):
         # calc loss for the critic, using (s, a, r, s') & a'
         critic_loss = self.LossCritic(nbatch_dict, next_action, options)
         
-        # logging
+        # critic logging
         dd[self.get_mode_string() + " mode. " + task_id + ": dql_critic_loss"] = critic_loss
         
         # extract the state
         state = nbatch_dict['obs']
         
         # get the actor loss using (s, a)
-        if self.use_actor:
+        if "actor" in globals.CONFIG.models_to_train:
             actor_loss = self.LossActor(state, new_action, options)
             
-            # logging
+            # actor logging
             dd[self.get_mode_string() + " mode. " + task_id + ": dql_actor_loss"] = actor_loss
         else:
             actor_loss = None

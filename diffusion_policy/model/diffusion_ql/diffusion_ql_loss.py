@@ -77,16 +77,21 @@ class CriticLoss(nn.Module):
         """
         # TODO: add feature for training the critic separately, so no denoising is needed
         
-        if False:
+        # training the actor, so we need to use the actor to denoise an observation
+        if "actor" in globals.CONFIG.models_to_train:
             # want gradients on this one so we can back-prop from the critic through to the actor
             new_action = self.Denoise(nbatch['obs'])
-                    
+        else:
+            new_action = None
+            
+        # only need to denoise obs_next if we're using a SARS setup instead of SARSA
+        if False:
             # no grad because this is only used in the dql critic update which won't be back-propagated to the actor
             with torch.no_grad():
                 next_action = self.Denoise(nbatch['obs_next'], use_ema=True)
                     
         # returns loss, metric
-        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, None, None, task_id)
+        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, None, task_id)
         
         return dql_actor_loss, dql_critic_loss
         

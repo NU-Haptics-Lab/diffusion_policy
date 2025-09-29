@@ -72,22 +72,29 @@ class DQLBatchLoss(BatchLoss):
         """
         losses = {}
         
+        # flags
+        train_actor = "actor" in globals.CONFIG.models_to_train
+        train_critic = "critic" in globals.CONFIG.models_to_train
+        need_dql_actor_loss = train_actor and globals.CONFIG.use_dql
+        
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
         
-        if "actor" in globals.CONFIG.models_to_train:
+        if train_actor:
             # get the BC loss
             bc_loss = self.actor.loss(nbatch, self.rb_id)
             losses['actor'] = bc_loss
         
-        if "critic" in globals.CONFIG.models_to_train:
+        # need critic loss if we're training critic, need actor loss if we're using dql
+        if train_critic or need_dql_actor_loss:
             # get the DQL losses
             dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
-            losses['critic'] = dql_critic_loss
             
-        # # TODO: if train actor and use dql
-        # if True:
-        #     losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
+            if train_critic:
+                losses['critic'] = dql_critic_loss
+            
+        if need_dql_actor_loss:
+            losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
         
         # we're done
         return losses

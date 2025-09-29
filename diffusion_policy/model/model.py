@@ -7,17 +7,29 @@ import diffusion_policy.globals as globals
 from diffusion_policy.common.pytorch_util import optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.ema_model import EMAModel
+from diffusion_policy.common.checkpointer import TopKCheckpointManager
 
 class Base(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self,
+                 checkpointer: TopKCheckpointManager
+                 ) -> None:
         # must init nn.Module
         super().__init__()
+        
+        self.checkpointer = checkpointer
         
     def reset(self):
         pass
     
     def step(self):
         pass
+    
+    def save(self):
+        self.checkpointer.save()
+        
+    def load(self):
+        self.checkpointer.load()
+        
     
     # def eval(self):
     #     pass

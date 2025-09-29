@@ -38,6 +38,11 @@ class Models(nn.Module):
         for idx, model in self.models.items():
             model.reset()
             
+    def save(self):
+        for idx, model in self.models.items():
+            model.save()
+        
+            
             
 # if __name__ == "__main__":
 #     models = {"a": object(), "b": object()}
