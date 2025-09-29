@@ -20,6 +20,7 @@ class EMAModel(nn.Module):
         min_value = 0.0,
         max_value = 0.9999
     ):
+        nn.Module.__init__(self)
         """
         @crowsonkb's notes on EMA Warmup:
             If gamma=1 and power=1, implements a simple average. gamma=1, power=2/3 are good values for models you plan

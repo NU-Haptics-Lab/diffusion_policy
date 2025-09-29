@@ -11,12 +11,12 @@ from diffusion_policy.common.checkpointer import TopKCheckpointManager
 
 class Base(nn.Module):
     def __init__(self,
-                 checkpointer: TopKCheckpointManager
+                #  checkpointer: TopKCheckpointManager
                  ) -> None:
         # must init nn.Module
         super().__init__()
         
-        self.checkpointer = checkpointer
+        # self.checkpointer = checkpointer
         
     def reset(self):
         pass
@@ -24,11 +24,11 @@ class Base(nn.Module):
     def step(self):
         pass
     
-    def save(self):
-        self.checkpointer.save()
+    # def save(self):
+    #     self.checkpointer.save()
         
-    def load(self):
-        self.checkpointer.load()
+    # def load(self):
+    #     self.checkpointer.load()
         
     
     # def eval(self):

@@ -11,43 +11,43 @@ from diffusion_policy.utils import EveryEpoch
 from diffusion_policy.utils import _copy_to_cpu
 from hydra.core.hydra_config import HydraConfig
 
-class Checkpointer:
-    def __init__(self,
-                 output_dir = "",
-                 rel_save_dir = "",
-                 resume = False
-                 ):
+# class Checkpointer:
+#     def __init__(self,
+#                  output_dir = "",
+#                  rel_save_dir = "",
+#                  resume = False
+#                  ):
         
-        # old
-        if resume:
-            self.output_dir = output_dir
+#         # old
+#         if resume:
+#             self.output_dir = output_dir
             
-        # new 
-        else:
-            self.output_dir = HydraConfig.get().runtime.output_dir
+#         # new 
+#         else:
+#             self.output_dir = HydraConfig.get().runtime.output_dir
 
-        self.rel_save_dir = rel_save_dir
-        self.save_dir = os.path.join(self.output_dir, rel_save_dir)
+#         self.rel_save_dir = rel_save_dir
+#         self.save_dir = os.path.join(self.output_dir, rel_save_dir)
         
-    def get_full_path(self,
-            path=None, 
-            tag='latest'):
+#     def get_full_path(self,
+#             path=None, 
+#             tag='latest'):
         
-        # default path
-        if path is None:
-            path = pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
-        else:
-            path = pathlib.Path(path)
+#         # default path
+#         if path is None:
+#             path = pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
+#         else:
+#             path = pathlib.Path(path)
             
-        return path
+#         return path
         
-    def make_dir(self):
+#     def make_dir(self):
             
-        # ensure directory exists, make it if it doesn't
-        path.parent.mkdir(parents=False, exist_ok=True)
+#         # ensure directory exists, make it if it doesn't
+#         path.parent.mkdir(parents=False, exist_ok=True)
     
 
-class TopKCheckpointManager(Checkpointer):
+class TopKCheckpointManager:
     def __init__(self,
             monitor_key: str,
             rel_save_dir = "checkpoints",
@@ -210,9 +210,20 @@ class TopKCheckpointManager(Checkpointer):
         # return the checkpoint path
         return str(path.absolute())
     
+    def load_globals(self, payload):
+        # hard-coded for now
+        globals.STEP = payload['step']
+        globals.EPOCH = payload['epoch']
+    
     def load_payload(self, payload, **kwargs):
         # modules
-        globals.MODELS.load_state_dict(payload['models_state_dict'])
+        if "critic" in globals.CONFIG.load:
+            # hack for backwards compat.
+            # TODO: fix
+            globals.MODELS.load_state_dict(payload['models_state_dict'], strict=False)
+        
+        if "globals" in globals.CONFIG.load:
+            self.load_globals(payload)
 
 
     def load_checkpoint(self, path=None, tag='latest',
@@ -230,7 +241,8 @@ class TopKCheckpointManager(Checkpointer):
         return payload 
     
     def load(self):
-        if self.resume:
+        # hacky, works for now
+        if "critic" in globals.CONFIG.load:
             lastest_ckpt_path = self.get_checkpoint_path(self.resume_tag)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint: {lastest_ckpt_path}")
@@ -240,33 +252,35 @@ class TopKCheckpointManager(Checkpointer):
                 print("Checkpointer::load: lastest_ckpt_path wasn't a file.")
                 raise
             
-class GlobalCheckpointer(TopKCheckpointManager):
-        
+# class GlobalCheckpointer(TopKCheckpointManager):
+#     """
+#     Saves global params
+#     """
 
-    def save_checkpoint(self, 
-            path=None, 
-            tag='latest', 
-            ):
-        """
-        Simplify: no script uses exclude_keys, so I'm going to exclude it from the function
-        only include_keys used are ['global_step', 'epoch'], so just add them explicitly
-        """
+#     def save_checkpoint(self, 
+#             path=None, 
+#             tag='latest', 
+#             ):
+#         """
+#         Simplify: no script uses exclude_keys, so I'm going to exclude it from the function
+#         only include_keys used are ['global_step', 'epoch'], so just add them explicitly
+#         """
 
-        # saving payload
-        payload = {
-            'cfg': globals.CONFIG,
-            'step': globals.STEP,
-            'epoch': globals.EPOCH,
-        }
+#         # saving payload
+#         payload = {
+#             'cfg': globals.CONFIG,
+#             'step': globals.STEP,
+#             'epoch': globals.EPOCH,
+#         }
         
-        # self.get_state_dicts(payload['non_models_state_dicts'])
+#         # self.get_state_dicts(payload['non_models_state_dicts'])
         
-        torch.save(payload, path.open('wb'), pickle_module=dill)
+#         torch.save(payload, path.open('wb'), pickle_module=dill)
 
-        # return the checkpoint path
-        return str(path.absolute())
+#         # return the checkpoint path
+#         return str(path.absolute())
     
-    def load_payload(self, payload, **kwargs):
-        # hard-coded for now
-        globals.STEP = payload['step']
-        globals.EPOCH = payload['epoch']
+#     def load_payload(self, payload, **kwargs):
+#         # hard-coded for now
+#         globals.STEP = payload['step']
+#         globals.EPOCH = payload['epoch']

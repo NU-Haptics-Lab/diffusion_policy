@@ -142,10 +142,6 @@ class DiffusionQL(nn.Module):
         if self.use_double_q:
             critic_loss = critic_loss + F.mse_loss(current_q2, target_q)
         
-        # TESTING
-        # if reward.detach().to('cpu').numpy() > 0.0:
-        #     pass
-        
         # logging
         dd = {}
         dd[self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
@@ -218,17 +214,22 @@ class DiffusionQL(nn.Module):
         
         options = self.MakeOptions(task_id)
         
-        # calc loss for the critic, using (s, a, r, s') & a'
-        critic_loss = self.LossCritic(nbatch_dict, next_action, options)
-        
-        # critic logging
-        dd[self.get_mode_string() + " mode. " + task_id + ": dql_critic_loss"] = critic_loss
+        # training the critic
+        if "critic" in globals.CONFIG.models_to_train:
+            # calc loss for the critic, using (s, a, r, s') & a'
+            critic_loss = self.LossCritic(nbatch_dict, next_action, options)
+            
+            # critic logging
+            dd[self.get_mode_string() + " mode. " + task_id + ": dql_critic_loss"] = critic_loss
+        else:
+            critic_loss = None
         
         # extract the state
         state = nbatch_dict['obs']
         
-        # get the actor loss using (s, a)
+        # training the actor
         if "actor" in globals.CONFIG.models_to_train:
+            # get the actor loss using (s, a)
             actor_loss = self.LossActor(state, new_action, options)
             
             # actor logging

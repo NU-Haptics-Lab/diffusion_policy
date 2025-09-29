@@ -65,7 +65,11 @@ def main(cfg: OmegaConf):
         globals.CONFIG.common_dataset.options.train.persistent_workers = False
         globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10
         globals.CONFIG.models.models.critic.num_inference_steps = 1
-        globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
+        
+        # test small network
+        # globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
+        
+        # no online logging
         globals.CONFIG.logging.use_wandb = False
         
         # testing checkpointing

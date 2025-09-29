@@ -52,6 +52,8 @@ class EpochValidator(Epoch):
                 # eval for one batch
                 total_evals = CalcSumEval(self.w_batch_losses)
                 
+                # TODO: this is specific to actor eval, doesn't consider the critic eval. Must fix.
+                
                 # end of batch logging
                 val_losses.append(total_evals[0])
                 val_action_mse_errors.append(total_evals[1])
