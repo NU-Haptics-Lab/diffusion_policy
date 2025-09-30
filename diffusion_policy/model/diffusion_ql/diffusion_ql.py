@@ -191,7 +191,7 @@ class DiffusionQL(nn.Module):
         # TODO: implement use_double_q flag
         
         # flip a coin, randomly use q1 or q2
-        if np.random.uniform() > 0.5:
+        if True: # np.random.uniform() > 0.5:
             q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
         else:
             q_loss = - q2_new_action.mean() / q1_new_action.abs().mean().detach()
