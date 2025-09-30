@@ -190,8 +190,12 @@ class DiffusionQL(nn.Module):
         
         # TODO: implement use_double_q flag
         
-        # flip a coin, randomly use q1 or q2
-        if True: # np.random.uniform() > 0.5:
+        # flip a coin, randomly use q1 or q2, and negate it to convert from a cumulative discounted reward to a loss
+        # Fujimoto & Gu (2021), alpha = eta / E(s,a)∼D [ |Qϕ(s,a)| ]
+        # https://arxiv.org/pdf/2106.06860 
+        # the alpha denominator is supposed to be a normalization term and NOT differentiated over
+        # tensor.detach() excludes that term from the gradient calculation
+        if np.random.uniform() > 0.5:
             q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
         else:
             q_loss = - q2_new_action.mean() / q1_new_action.abs().mean().detach()
