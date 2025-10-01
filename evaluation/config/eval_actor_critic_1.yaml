@@ -2,87 +2,87 @@
 ## globals
 # values taken from `gestures_diffuison_py/datasets/convert_dataset.py`
 # whether to enable debug mode
-DEBUG: true
+debug: true
 
-# CHECKPOINT_DIR: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
-CHECKPOINT_DIR: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/"
+# checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
+checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/"
 
 # checkpoint name
-CHECKPOINT_NAME: "step=0149900.ckpt"
+checkpoint_name: "step=0149900.ckpt"
 
 # whether to use the custom num of inference steps during denoising (generally recommended)
-USE_CUSTOM_INFERENCE_STEPS: false
+use_custom_inference_steps: false
 
 # paper uses 16 for real-time control, higher nb: more accurate waypoints w.r.t. the inputs. 
 # WARNING: if this value is less than the training value, then you MUST use a DDIM scheduler instead of a DDPM scheduler (you have to replace the policy's scheduler in this script)
-NUM_CUSTOM_INFERENCE_STEPS: 50
+num_custom_inference_steps: 50
 
 
-USE_MAX_ACTION_STEPS: true
+use_max_action_steps: true
 
 # not a good idea, I don't recommend it. Was used for troubleshooting.
-USE_DEFAULT_STATE: false
+use_default_state: false
 
 
-ANALYTICS: true
+analytics: true
 
 
-TEST_REPEATED_HISTORY: false
+test_repeated_history: false
 
 
-USE_FINGERTIP_POS: true
-
-# rosbag convert uses height, width, channels
-IMAGE_SHAPE: (192, 192, 3)
+use_fingertip_pos: true
 
 # rosbag convert uses height, width, channels
-IMAGE2_SHAPE: (180, 320, 3)
+ros_image_shape: (192, 192, 3)
+
+# rosbag convert uses height, width, channels
+ros_image2_shape: (180, 320, 3)
 
 # CURRENTLY UNUSED
 # CROP_WIDTH: 1
 # CROP_HEIGHT: 35 # to remove Davin from the frame
 
 # TODO: just set this from the policy
-OUTPUT_IMAGE_W: 192
-OUTPUT_IMAGE_H: 192
+torch_image_w: 192
+torch_image_h: 192
 
 
-OBSERVATION_TOPIC: '/dexnex_projects_common/leftcam/image_resized'
-OBSERVATION_TOPIC_2: '/diffusion/wrist_cam/image_raw'
-STATE_TOPIC: '/avatar/joint_states'
-HAPTICS_TOPIC: '/biotac/lh/normalized'
+observation_topic: '/dexnex_projects_common/leftcam/image_resized'
+observation_topic_2: '/diffusion/wrist_cam/image_raw'
+state_topic: '/avatar/joint_states'
+haptics_topic: '/biotac/lh/normalized'
 
 # seconds
-INFERENCE_DT: 2.5
+inference_dt: 2.5
 
 # Hz
 INFERENCE_FREQUENCY: 1. / INFERENCE_DT
 
 # Hz, from convert_dataset_rosbag.py. Very important that this value is the same as the dataset
-DATA_FREQUENCY: 3
+data_frequency: 3
 
 # out of 15 total action steps. Consider, inference takes about 0.1 - 0.3 seconds depending on num_inference_steps. Take into account the data frequency and you can calculate the nb waypoints to skip. Example: DATA_FREQUENCY: 10.0, NUM_CUSTOM_INFERENCE_STEPS: 50. About 0.3s inference. nb to skip ~= 0.3 / 0.1: 3ish. Add on 1 to account for mechanical latency. I think at least 1 needs to be skipped from the command latency in the dataset. Works better with skipping 2
-NB_WAYPOINTS_TO_SKIP: 2
-NB_WAYPOINTS_TO_SKIP_TEST: 0
-TEST_WAYPOINT_DT: 0.25
+nb_waypoints_to_skip: 2
+nb_waypoints_to_skip_test: 0
+test_waypoint_dt: 0.25
 
 # 999 takes all
-NB_WAYPOINTS_TO_KEEP: 99
+nb_waypoints_to_keep: 99
 
 # whether to average waypoints
-AVERAGE_WAYPOINTS: false
+average_waypoints: false
 
 # how many average waypoints to calculate
-NB_AVERAGING_WAYPOINTS: 10
+nb_averaging_waypoints: 10
 
-NODE_NAME: 'DiffusionPolicy'
-NAMESPACE: 'diffusion'
+node_name: 'DiffusionPolicy'
+namespace: 'diffusion'
 
 
-JOINT_STATES_LENGTH: 66
-INPUT_STATE_LENGTH: 35 # backwards compat
-OUTPUT_ACTION_LENGTH: 21 # 6 gofa, 2 wrist, 5 th, 4 ff, 4 mf
-JOINT_COMMAND_NAMES: # correct order
+joint_states_length: 66
+input_state_length: 35 # backwards compat
+output_action_length: 21 # 6 gofa, 2 wrist, 5 th, 4 ff, 4 mf
+joint_command_names: # correct order
   - "gofa1_joint_1"
   - "gofa1_joint_2"
   - "gofa1_joint_3"
@@ -105,5 +105,5 @@ JOINT_COMMAND_NAMES: # correct order
   - "lh_THJ2"
   - "lh_THJ1"
 
-SRDF_XML_PATH: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.srdf'
-URDF_XML_PATH: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.urdf'
+srdf_xml_path: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.srdf'
+urdf_xml_path: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.urdf'
