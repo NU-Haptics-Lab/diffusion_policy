@@ -51,25 +51,98 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 # load OmegaConf
 
-# concat
-CHECKPOINT_PATH = CHECKPOINT_DIR + "/" + CHECKPOINT_NAME
-
-# Task Mask
-TASK_MASK = np.zeros(JOINT_STATES_LENGTH, dtype=bool) # default False
-TASK_MASK[0:6] = True # left gofa
-TASK_MASK[6:8] = True # left wrist
-TASK_MASK[8:12] = True # left ff
-TASK_MASK[12:16] = True # left mf
-TASK_MASK[25:30] = True # left th
-
-# IF DEBUGGING
-if DEBUG:
-    INFERENCE_FREQUENCY = 0.2
-
 class EvalDexNex(Node):
-    def __init__(self):
+    def __init__(self,
+                 debug,
+                 node_name,
+                 namespace,
+                 data_frequency,
+                 analytics,
+                 use_custom_inference_steps,
+                 num_custom_inference_steps,
+                 use_max_action_steps,
+                 use_default_state,
+                 test_repeated_history,
+                 use_fingertip_pos,
+                 ros_image_shape,
+                 ros_image2_shape,
+                 torch_image_w,
+                 torch_image_h,
+                 observation_topic,
+                 observation_topic_2,
+                 state_topic,
+                 haptics_topic,
+                 inference_dt,
+                 nb_waypoints_to_skip,
+                 nb_waypoints_to_skip_test,
+                 test_waypoint_dt,
+                 nb_waypoints_to_keep,
+                 average_waypoints: bool,
+                 nb_averaging_waypoints,
+                 joint_states_length,
+                 input_state_length,
+                 output_action_length,
+                 joint_command_names,
+                 srdf_xml_path,
+                 urdf_xml_path,
+                 use_ema,
+                 n_obs_steps
+                 ):
+        # save inputs
+        self.debug = debug
+        self.node_name = node_name
+        self.namespace = namespace
+        self.data_frequency = data_frequency
+        self.analytics = analytics
+        self.use_custom_inference_steps = use_custom_inference_steps
+        self.num_custom_inference_steps = num_custom_inference_steps
+        self.use_max_action_steps = use_max_action_steps
+        self.use_default_state = use_default_state
+        self.test_repeated_history = test_repeated_history
+        self.use_fingertip_pos = use_fingertip_pos
+        self.ros_image_shape = ros_image_shape
+        self.ros_image2_shape = ros_image2_shape
+        self.torch_image_w = torch_image_w
+        self.torch_image_h = torch_image_h
+        self.observation_topic = observation_topic
+        self.observation_topic_2 = observation_topic_2
+        self.state_topic = state_topic
+        self.haptics_topic = haptics_topic
+        self.inference_dt = inference_dt
+        self.nb_waypoints_to_skip = nb_waypoints_to_skip
+        self.nb_waypoints_to_skip_test = nb_waypoints_to_skip_test
+        self.test_waypoint_dt = test_waypoint_dt
+        self.nb_waypoints_to_keep = nb_waypoints_to_keep
+        self.average_waypoints = average_waypoints
+        self.nb_averaging_waypoints = nb_averaging_waypoints
+        self.joint_states_length = joint_states_length
+        self.input_state_length = input_state_length
+        self.output_action_length = output_action_length
+        self.joint_command_names = joint_command_names
+        self.srdf_xml_path = srdf_xml_path
+        self.urdf_xml_path = urdf_xml_path
+
+        self.use_ema = use_ema
+        self.n_obs_steps = n_obs_steps
+
+
+        # calculated from input parameters
+        self.inference_frequency = 1. / self.inference_dt 
+
+        # Task Mask
+        self.task_mask = np.zeros(self.joint_states_length, dtype=bool) # default False
+        self.task_mask[0:6] = True # left gofa
+        self.task_mask[6:8] = True # left wrist
+        self.task_mask[8:12] = True # left ff
+        self.task_mask[12:16] = True # left mf
+        self.task_mask[25:30] = True # left th
+
+        # IF DEBUGGING
+        if self.debug:
+            self.inference_frequency = 0.2
+
         # init ROS node
-        super().__init__(NODE_NAME, namespace=NAMESPACE)
+        super().__init__(self.node_name, namespace=self.namespace)
         
         # declare ROS2 params
         # self.declare_parameter('input', , "Path to checkpoint") 
@@ -80,10 +153,9 @@ class EvalDexNex(Node):
         # input = self.get_parameter('input')
         # inference_frequency = self.get_parameter('inference_frequency')
         # self.DEBUG = self.get_parameter('debug')
-        self.data_frequency = DATA_FREQUENCY # Hz, from convert_dataset_rosbag.py. Very important that this value is the same as the dataset
             
         ## Analytics
-        if ANALYTICS:
+        if self.analytics:
             self.ANALYTICS_telemetry_dt_ls = list()
         
         # extract diffusion model
@@ -96,7 +168,7 @@ class EvalDexNex(Node):
             self.policy = model_mgr.get_model()
             
         # setup inference scheduler
-        if USE_CUSTOM_INFERENCE_STEPS:
+        if self.use_custom_inference_steps:
             cfg_scheduler = cfg.policy.noise_scheduler
             
             # setup DDIM scheduler
@@ -111,28 +183,24 @@ class EvalDexNex(Node):
                 prediction_type=cfg_scheduler.prediction_type
                 )
             
-            scheduler.set_timesteps(NUM_CUSTOM_INFERENCE_STEPS)
+            scheduler.set_timesteps(num_custom_inference_steps)
             
             # replace the policy's scheduler
             self.policy.noise_scheduler = scheduler
             
             # override policy's num inference steps
-            self.policy.num_inference_steps = NUM_CUSTOM_INFERENCE_STEPS
+            self.policy.num_inference_steps = num_custom_inference_steps
             
-        if USE_MAX_ACTION_STEPS:
+        if self.use_max_action_steps:
             self.policy.n_action_steps = self.policy.horizon - self.policy.n_obs_steps + 1
             
         print("n_action_steps: {}".format(self.policy.n_action_steps))
-
-        # setup experiment
-        dt = 1/INFERENCE_FREQUENCY
-
         print("n_obs_steps: ", n_obs_steps)
         
         # default values, one time step
-        if USE_DEFAULT_STATE:
+        if self.use_default_state:
             self.m_joint_states_msg = JointState()
-            self.m_joint_states_msg.position = np.zeros(JOINT_STATES_LENGTH)
+            self.m_joint_states_msg.position = np.zeros(self.joint_states_length)
             self.m_haptics = np.zeros(5) # allow default haptics data for ease of testing
             # self.m_image = np.zeros((IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_NB_CHANNELS))
             # self.m_image2 = np.zeros((IMAGE_HEIGHT * IMAGE_WIDTH * IMAGE_NB_CHANNELS)) # update with image2 shape
@@ -144,7 +212,7 @@ class EvalDexNex(Node):
             
         # TEST
         if True:
-            self.m_image2 = np.zeros(IMAGE2_SHAPE[0] * IMAGE2_SHAPE[1] * IMAGE2_SHAPE[2]) # update with image2 shape
+            self.m_image2 = np.zeros(self.ros_image2_shape[0] * self.ros_image2_shape[1] * self.ros_image2_shape[2]) # update with image2 shape
             
         self.m_image_msg = Image()
         self.m_image2_msg = Image()
@@ -169,19 +237,9 @@ class EvalDexNex(Node):
         self.setup_moveit()
         
         # save ros data for n_obs_steps times so that our deques aren't empty and have the correct data format
-        if USE_DEFAULT_STATE:
+        if self.use_default_state:
             for _ in range(n_obs_steps):
                 self.SaveRosData()
-                
-    def load(self):
-        
-        #
-        self.cfg = cfg
-        
-        # cfg params
-        use_ema = cfg.training.use_ema
-        n_obs_steps = cfg.n_obs_steps
-        self.n_obs_steps = n_obs_steps
         
     def setup_ros(self):
         ## ROS2 setup
@@ -189,25 +247,25 @@ class EvalDexNex(Node):
         qos_profile = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         
         # subs
-        self.sub1_ = self.create_subscription(JointState, STATE_TOPIC, self.SubJointStates, 1)
+        self.sub1_ = self.create_subscription(JointState, self.state_topic, self.SubJointStates, 1)
         
-        self.sub2_ = self.create_subscription(Image, OBSERVATION_TOPIC, self.SubImage, qos_profile)
+        self.sub2_ = self.create_subscription(Image, self.observation_topic, self.SubImage, qos_profile)
         
-        self.sub_image2_ = self.create_subscription(Image, OBSERVATION_TOPIC_2, self.SubImage2, qos_profile)
+        self.sub_image2_ = self.create_subscription(Image, self.observation_topic_2, self.SubImage2, qos_profile)
         
-        self.sub3_ = self.create_subscription(BiotacNormalized, HAPTICS_TOPIC, self.SubHaptics, qos_profile)
+        self.sub3_ = self.create_subscription(BiotacNormalized, self.haptics_topic, self.SubHaptics, qos_profile)
         
         # pubs
         self.pub_trajectory = self.create_publisher(JointTrajectory, "~/out/joint_trajectory", 10)
         
         # timer
-        self.timer_ = self.create_timer(dt, self.Run)
+        self.timer_ = self.create_timer(self.inference_dt, self.Run)
         
     def setup_moveit(self):
         # moveit, if FK is needed
-        if USE_FINGERTIP_POS:
+        if self.use_fingertip_pos:
             # load the robot model for FK
-            self.robot_model = RobotModel(URDF_XML_PATH, SRDF_XML_PATH)
+            self.robot_model = RobotModel(self.urdf_xml_path, self.srdf_xml_path)
             self.robot_state = RobotState(self.robot_model)
             self.robot_state.set_to_default_values()
     
@@ -246,7 +304,7 @@ class EvalDexNex(Node):
         # obs_image_data_np_cropped = obs_image_data_np_reshaped[CROP_HEIGHT:-CROP_HEIGHT, CROP_WIDTH:-CROP_WIDTH, :]
         
         # resize the image. Ok technically rosbag-convert uses (w, h) but since the policy input is a sq image it doesn't matter. But I should update future rosbag-converts
-        obs_image_data_np_resized = cv2.resize(obs_image_data_np_cropped, dsize=(OUTPUT_IMAGE_H, OUTPUT_IMAGE_W), interpolation=cv2.INTER_CUBIC)
+        obs_image_data_np_resized = cv2.resize(obs_image_data_np_cropped, dsize=(self.torch_image_h, self.torch_image_w), interpolation=cv2.INTER_CUBIC)
         
         return obs_image_data_np_resized
         
@@ -259,8 +317,8 @@ class EvalDexNex(Node):
         policy_w = policy_img_shape[1]
         policy_h = policy_img_shape[2]
         
-        assert(policy_w == OUTPUT_IMAGE_W)
-        assert(policy_h == OUTPUT_IMAGE_H)
+        assert(policy_w == self.torch_image_w)
+        assert(policy_h == self.torch_image_h)
         
         # do the same image proc as in `convert_dataset_rosbag.py`
         img_np_procd = self.ImageProc(img_np, shape)
@@ -269,7 +327,7 @@ class EvalDexNex(Node):
     
     def TimerRosData(self):
         # if we want to repeat the most recent state in our history
-        if TEST_REPEATED_HISTORY:
+        if self.test_repeated_history:
             for _ in range(self.cfg.n_obs_steps):
                 self.SaveRosData()
                 
@@ -283,7 +341,7 @@ class EvalDexNex(Node):
         if self.m_haptics is None or self.m_joint_states_msg is None:
             print("No haptics or joint states yet.")
         else:
-            if USE_FINGERTIP_POS:
+            if self.use_fingertip_pos:
                 # set the robot state from the most recent message
                 self.robot_state.joint_positions = dict(zip(self.m_joint_states_msg.name, self.m_joint_states_msg.position))
                 
@@ -297,7 +355,7 @@ class EvalDexNex(Node):
                 
                 # assemble the full state
                 state = np.concatenate((
-                    np.array(self.m_joint_states_msg.position)[TASK_MASK],
+                    np.array(self.m_joint_states_msg.position)[self.task_mask],
                     self.m_haptics,
                     th_pos,
                     ff_pos,
@@ -305,11 +363,11 @@ class EvalDexNex(Node):
                 ))
                 
                 # backwards compat
-                state = state[:INPUT_STATE_LENGTH]
+                state = state[:self.input_state_length]
             else:
                 # assemble the full state
                 state = np.concatenate((
-                    np.array(self.m_joint_states_msg.position)[TASK_MASK],
+                    np.array(self.m_joint_states_msg.position)[self.task_mask],
                     self.m_haptics,
                 ))
             #endif
@@ -325,11 +383,11 @@ class EvalDexNex(Node):
             print("No obs image yet.")
         else:
             # pre process the raw ROS img
-            img_np_resized = self.PreProcessRosImgData(self.m_image, IMAGE_SHAPE)
+            img_np_resized = self.PreProcessRosImgData(self.m_image, self.ros_image_shape)
             
             self.image_history.appendleft(img_np_resized)
                 
-            if ANALYTICS:
+            if self.analytics:
                 # save image time
                 t1 = rclpy.time.Time.from_msg(self.m_image_msg.header.stamp)
                 self.ANALYTICS_telemetry_dt_ls.append(t1.nanoseconds / 1e9)
@@ -339,7 +397,7 @@ class EvalDexNex(Node):
             print("No obs image2 yet.")
         else:
             # pre process the raw ROS img
-            img_np_resized = self.PreProcessRosImgData(self.m_image2, IMAGE2_SHAPE)
+            img_np_resized = self.PreProcessRosImgData(self.m_image2, self.ros_image2_shape)
             
             self.image2_history.appendleft(img_np_resized)
         
@@ -419,7 +477,7 @@ class EvalDexNex(Node):
                 'action_pred': action_pred
             }
             
-            if DEBUG or ANALYTICS:
+            if self.debug or self.analytics:
                 print('Inference latency:', time.time() - s)
         
             return result
@@ -433,18 +491,18 @@ class EvalDexNex(Node):
         
         # take the first index to remove the batch axis. Transfer to CPU and numpy. 
         action_cpu_np = action[0].detach().to('cpu').numpy()
-        avg_np = np.zeros((NB_AVERAGING_WAYPOINTS, OUTPUT_ACTION_LENGTH))
+        avg_np = np.zeros((self.nb_averaging_waypoints, self.output_action_length))
         # avg_np = np.zeros((1, OUTPUT_ACTION_LENGTH))
         
         # # remove the first half of the traj because it's usually too far behind and cause a positive feedback loop of undesirable behavior
         # 
-        actions_to_avg = action_cpu_np[NB_WAYPOINTS_TO_SKIP:NB_WAYPOINTS_TO_SKIP+NB_WAYPOINTS_TO_KEEP]
+        actions_to_avg = action_cpu_np[self.nb_waypoints_to_skip:self.nb_waypoints_to_skip + self.nb_waypoints_to_keep]
         
         
-        if AVERAGE_WAYPOINTS:
-            nb_pts_per = int(np.floor(actions_to_avg.shape[0] / NB_AVERAGING_WAYPOINTS))
+        if self.average_waypoints:
+            nb_pts_per = int(np.floor(actions_to_avg.shape[0] / self.nb_averaging_waypoints))
             
-            for i in range(NB_AVERAGING_WAYPOINTS):
+            for i in range(self.nb_averaging_waypoints):
                 # average across waypoints
                 idx = i * nb_pts_per
                 avg_np[i] = actions_to_avg[idx:idx+nb_pts_per].mean(axis=0)
@@ -458,7 +516,7 @@ class EvalDexNex(Node):
         ### All joints
         msg = JointTrajectory()
         msg.points = []
-        msg.joint_names = JOINT_COMMAND_NAMES
+        msg.joint_names = self.joint_command_names
         
         # iterate over the trajectory step dimension
         for idx in range(actions_to_publish.shape[0]):
@@ -507,7 +565,7 @@ class EvalDexNex(Node):
             self.PublishTrajectory(result)
         
         # analytics
-        if ANALYTICS:
+        if self.analytics:
             self.CalculateAnalytics()
             
     def CalculateAnalytics(self):
@@ -597,7 +655,9 @@ def main(eval_cfg: OmegaConf):
     ### ROS2
     rclpy.init(args=args)
 
-    node = EvalDexNex()
+    # spin up the ros2 class
+    node = hydra.utils.instantiate(eval_cfg.eval_dexnex)
+    print("Node created.")
 
     # node.Test()
     
