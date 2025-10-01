@@ -1,3 +1,4 @@
+import os
 import time
 import math
 from multiprocessing.managers import SharedMemoryManager
@@ -543,11 +544,14 @@ OmegaConf.register_new_resolver("del", lambda: None)
 @hydra.main(
     version_base=None,
     config_path=str(pathlib.Path(__file__).parent.joinpath(
-        'diffusion_policy','config')),
+        'evaluation','config')),
 )
 def main(eval_cfg: OmegaConf):
+    # make checkpoint path
+    checkpoint_path = os.path.join(eval_cfg.checkpoint_dir, eval_cfg.checkpoint_name)
+    
     # load the training checkpoint
-    payload = torch.load(open(eval_cfg.CHECKPOINT_PATH, 'rb'), pickle_module=dill)
+    payload = torch.load(open(checkpoint_path, 'rb'), pickle_module=dill)
     
     # extract training config
     training_cfg = payload['cfg']
@@ -564,7 +568,7 @@ def main(eval_cfg: OmegaConf):
     # globals.CONFIG.spin_session_trainer = False
     
     # whether we're debugging
-    if eval_cfg.DEBUG:
+    if eval_cfg.debug:
         pass
     
     # resolve immediately so all the ${now:} resolvers
