@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader
 from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common import pytorch_util
 import diffusion_policy.globals as globals
 from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 
@@ -58,10 +59,14 @@ class DataArray:
     A class for handling a single data array and performing desired operations on it, e.g. normalize, unnormalize
     """
     def __init__(self, 
-                 normalizer: SingleFieldLinearNormalizer
+                 normalizer: SingleFieldLinearNormalizer,
+                 descriptor = "",
+                 strict: bool = True
                  ):
         self.datapoint = None
         self.normalizer = normalizer
+        self.descriptor = descriptor
+        self.strict = strict
         
         # transfer to device, since I own normalizer
         device = torch.device(globals.CONFIG.device)
@@ -71,23 +76,29 @@ class DataArray:
         self.datapoint = dp
 
     def get(self):
-        if self.datapoint is None:
+        if self.strict and self.datapoint is None:
             print("Forgot to set the datapoint")
             raise
 
         return self.datapoint
 
     def normalize(self):
-        if self.datapoint is None:
+        if self.strict and self.datapoint is None:
             print("Forgot to set the datapoint")
             raise
+        
+        if self.datapoint is None:
+            return
 
         self.datapoint = self.normalizer.normalize(self.datapoint)
     
     def unnormalize(self):
-        if self.datapoint is None:
+        if self.strict and self.datapoint is None:
             print("Forgot to set the datapoint")
             raise
+        
+        if self.datapoint is None:
+            return
 
         self.datapoint = self.normalizer.unnormalize(self.datapoint)
     
@@ -95,8 +106,13 @@ class NestedDataArray:
     """
     A class for holding a nested data structure of DataArray's. Each branch = NestedDataArray, each leaf = DataArray
     """
-    def __init__(self):
+    def __init__(self,
+                 descriptor = "",
+                 strict = True
+                 ):
         self.nest = {}
+        self.descriptor = descriptor
+        self.strict = strict
 
     def set(self, data):
         """
@@ -121,7 +137,11 @@ class NestedDataArray:
 
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
         for key, val in self.nest.items():
-            out[key] = val.get()
+            dp = val.get()
+            
+            # skip if none
+            if dp is not None:
+                out[key] = val.get()
 
         return out
 
@@ -132,12 +152,12 @@ class NestedDataArray:
         for key, val in nested_normalizers.items():
             # leaf
             if isinstance(val, SingleFieldLinearNormalizer):
-                da = DataArray(val)
+                da = DataArray(val, descriptor=key, strict=self.strict)
                 self.nest[key] = da
 
             # another branch
             else:
-                nda = NestedDataArray()
+                nda = NestedDataArray(descriptor=key, strict=self.strict)
                 nda.set_normalizers(val)
                 self.nest[key] = nda
 
@@ -177,15 +197,22 @@ class BatchLoader:
     """
     def __init__(self,
                  rb_id: str,
-                 train_or_val: str
+                 train_or_val: str,
+                 use_dataloader: bool = True,
+                 strict: bool = True
             ):
         self.rb_id = rb_id
         self.train_or_val = train_or_val
+        self.use_dataloader = use_dataloader
+        self.strict = strict
         
-        # handle to Node
-        self.dataloader: DataLoader = globals.DATALOADERS[self.rb_id][self.train_or_val]
+        # handle to "Node"
+        if self.use_dataloader:
+            self.dataloader: DataLoader = globals.DATALOADERS[self.rb_id][self.train_or_val]
+        else:
+            self.dataloader = None
         
-        self.nested_data_array = NestedDataArray()
+        self.nested_data_array = NestedDataArray("top-level", strict=self.strict)
         
         self.device = torch.device(globals.CONFIG.device)
         
@@ -236,7 +263,10 @@ class BatchLoader:
         self.count = 0
 
         # forces a reshuffle
-        self.iterator = iter(self.dataloader)
+        if self.use_dataloader:
+            self.iterator = iter(self.dataloader)
+        else:
+            self.iterator = None
 
     # implicitly called at the start of loops
     def __iter__(self):
@@ -253,7 +283,7 @@ class BatchLoader:
 
         return batch_gpu
     
-    def normalize_batch(self, batch):
+    def operate_on_batch(self, batch, normalize=True):
         """
         batch - a torch-gpu nested dict 
         
@@ -261,17 +291,44 @@ class BatchLoader:
         # update the nested data array data
         self.nested_data_array.set(batch)
 
-        # run the normalizer
-        self.nested_data_array.normalize()
+        if normalize:
+            # run the normalizer
+            self.nested_data_array.normalize()
+        else:
+            self.nested_data_array.unnormalize()
 
         # extract the normalized data
         nbatch = self.nested_data_array.get()
         
         # we're done
         return nbatch
-
+    
+    def normalize_batch(self, batch):
+        return self.operate_on_batch(batch, normalize=True)
+    
+    def unnormalize_batch(self, batch):
+        return self.operate_on_batch(batch, normalize=False)
+    
+    def transfer_and_norm(self, batch):
+        batch_gpu = self.transfer_to_gpu(batch)
+        
+        ndata = self.normalize_batch(batch_gpu)
+        
+        return ndata
+    
+    def unnorm_and_transfer(self, nbatch_gpu):
+        data_gpu = self.unnormalize_batch(nbatch_gpu)
+        
+        data = pytorch_util.dict_tensor_to(data_gpu, 'cpu')
+        
+        return data
     
     def get_batch(self):
+        """
+        To be called when we're using a dataloader. i.e. during training
+        """
+        # None protection
+        assert(self.iterator is not None)
 
         try:
             batch = next(self.iterator) # output: dict
@@ -287,9 +344,7 @@ class BatchLoader:
             # get a new batch
             batch = next(self.iterator) # output: dict
 
-        batch_gpu = self.transfer_to_gpu(batch)
-        
-        ndata = self.normalize_batch(batch_gpu)
+        ndata = self.transfer_and_norm(batch)
         
         # we're done
         return ndata

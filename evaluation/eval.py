@@ -17,13 +17,16 @@ from diffusion_policy.common.precise_sleep import precise_wait
 from diffusion_policy.real_world.real_inference_util import (
     get_real_obs_resolution, 
     get_real_obs_dict)
+from diffusion_policy.common import pytorch_util
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.cv2_util import get_image_transform
 import diffusion_policy.globals as globals
+from diffusion_policy.dataset.batch_loader import BatchLoader
 
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+
 
 # ROS2 stuff
 import rclpy
@@ -46,14 +49,10 @@ from ros2_to_rlds_msgs.msg import Float64array
 from moveit.core.robot_model import RobotModel
 from moveit.core.robot_state import RobotState
 
-
-OmegaConf.register_new_resolver("eval", eval, replace=True)
-
-# load OmegaConf
-
 class EvalDexNex(Node):
     def __init__(self,
                  debug,
+                 test,
                  node_name,
                  namespace,
                  data_frequency,
@@ -86,10 +85,12 @@ class EvalDexNex(Node):
                  srdf_xml_path,
                  urdf_xml_path,
                  use_ema,
-                 n_obs_steps
+                 noise_scheduler: DDIMScheduler,
+                 batch_loader: BatchLoader,
                  ):
         # save inputs
         self.debug = debug
+        self.test = test
         self.node_name = node_name
         self.namespace = namespace
         self.data_frequency = data_frequency
@@ -121,9 +122,9 @@ class EvalDexNex(Node):
         self.joint_command_names = joint_command_names
         self.srdf_xml_path = srdf_xml_path
         self.urdf_xml_path = urdf_xml_path
-
         self.use_ema = use_ema
-        self.n_obs_steps = n_obs_steps
+        self.noise_scheduler = noise_scheduler
+        self.batch_loader = batch_loader
 
 
         # calculated from input parameters
@@ -136,6 +137,9 @@ class EvalDexNex(Node):
         self.task_mask[8:12] = True # left ff
         self.task_mask[12:16] = True # left mf
         self.task_mask[25:30] = True # left th
+        
+        # save n obs steps
+        self.n_obs_steps = globals.CONFIG.models.models.actor.model.model.n_obs_steps
 
         # IF DEBUGGING
         if self.debug:
@@ -159,46 +163,32 @@ class EvalDexNex(Node):
             self.ANALYTICS_telemetry_dt_ls = list()
         
         # extract diffusion model
-        model_mgr = globals.MODELS["actor"].get_model()
-        
         # ema or not
         if self.use_ema:
-            self.policy = workspace.get_model().ema.average_model ?
+            self.policy = globals.MODELS["actor"].get_ema_model()
+
         else:
-            self.policy = model_mgr.get_model()
+            self.policy = globals.MODELS["actor"].get_model()
+
             
         # setup inference scheduler
         if self.use_custom_inference_steps:
-            cfg_scheduler = cfg.policy.noise_scheduler
-            
-            # setup DDIM scheduler
-            scheduler = DDIMScheduler(
-                num_train_timesteps=cfg_scheduler.num_train_timesteps,
-                beta_start=cfg_scheduler.beta_start,
-                beta_end=cfg_scheduler.beta_end,
-                beta_schedule=cfg_scheduler.beta_schedule,
-                clip_sample=cfg_scheduler.clip_sample,
-                set_alpha_to_one=True, # taken from train_diffusion_unet_real_hybrid_workspace.yaml
-                steps_offset=0, # taken from train_diffusion_unet_real_hybrid_workspace.yaml
-                prediction_type=cfg_scheduler.prediction_type
-                )
-            
-            scheduler.set_timesteps(num_custom_inference_steps)
+            self.noise_scheduler.set_timesteps(self.num_custom_inference_steps)
             
             # replace the policy's scheduler
-            self.policy.noise_scheduler = scheduler
+            self.policy.noise_scheduler = self.noise_scheduler
             
             # override policy's num inference steps
-            self.policy.num_inference_steps = num_custom_inference_steps
+            self.policy.num_inference_steps = self.num_custom_inference_steps
             
         if self.use_max_action_steps:
             self.policy.n_action_steps = self.policy.horizon - self.policy.n_obs_steps + 1
             
         print("n_action_steps: {}".format(self.policy.n_action_steps))
-        print("n_obs_steps: ", n_obs_steps)
+        print("n_obs_steps: ", self.n_obs_steps)
         
         # default values, one time step
-        if self.use_default_state:
+        if self.test or self.use_default_state:
             self.m_joint_states_msg = JointState()
             self.m_joint_states_msg.position = np.zeros(self.joint_states_length)
             self.m_haptics = np.zeros(5) # allow default haptics data for ease of testing
@@ -210,6 +200,10 @@ class EvalDexNex(Node):
             self.m_image = None # np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_NB_CHANNELS))
             self.m_image2 = None
             
+        if self.test:
+            self.m_image = np.zeros(np.prod(self.ros_image_shape))
+            self.m_image2 = np.zeros(np.prod(self.ros_image2_shape))
+            
         # TEST
         if True:
             self.m_image2 = np.zeros(self.ros_image2_shape[0] * self.ros_image2_shape[1] * self.ros_image2_shape[2]) # update with image2 shape
@@ -219,9 +213,9 @@ class EvalDexNex(Node):
         self.m_stamp = None
         
         # observation history
-        self.image_history = deque(maxlen=n_obs_steps) # use deque instead of queue because it has maxlen
-        self.image2_history = deque(maxlen=n_obs_steps) # use deque instead of queue because it has maxlen
-        self.state_history = deque(maxlen=n_obs_steps) # use deque instead of queue because it has maxlen
+        self.image_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
+        self.image2_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
+        self.state_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
         
         # ensure policy is reset
         with torch.no_grad():
@@ -237,8 +231,8 @@ class EvalDexNex(Node):
         self.setup_moveit()
         
         # save ros data for n_obs_steps times so that our deques aren't empty and have the correct data format
-        if self.use_default_state:
-            for _ in range(n_obs_steps):
+        if self.test or self.use_default_state:
+            for _ in range(self.n_obs_steps):
                 self.SaveRosData()
         
     def setup_ros(self):
@@ -311,7 +305,7 @@ class EvalDexNex(Node):
     """ Preprocess the raw ros image data. Basically the same as what I have to do in `convert_dataset.py` """
     def PreProcessRosImgData(self, img_np, shape):
         # extract parameters
-        policy_img_shape = self.cfg.shape_meta.obs.image.shape
+        policy_img_shape = globals.CONFIG.shape_meta.img.shape
         
         # policy_img_shape example: [3, 96, 96]
         policy_w = policy_img_shape[1]
@@ -328,7 +322,7 @@ class EvalDexNex(Node):
     def TimerRosData(self):
         # if we want to repeat the most recent state in our history
         if self.test_repeated_history:
-            for _ in range(self.cfg.n_obs_steps):
+            for _ in range(self.n_obs_steps):
                 self.SaveRosData()
                 
         else:
@@ -437,11 +431,18 @@ class EvalDexNex(Node):
         image2 = np.moveaxis(img2s_np, -1, 1) / 255.0
         
         # construct output dictionary
-        obs_dict_np = {
-                'image': image,
-                'image2': image2,
-                'agent_pos': states_np, # T, state_length
+        obs_dict_np_all = {
+                'img': image,
+                'img2': image2,
+                'state': states_np, # T, state_length
             }
+        
+        obs_dict_np = {}
+        
+        # reduce to only the used obs keys
+        for key, val in obs_dict_np_all.items():
+            if key in globals.CONFIG.obs_keys_to_use:
+                obs_dict_np[key] = val
         
         # done
         return obs_dict_np
@@ -456,25 +457,31 @@ class EvalDexNex(Node):
         with torch.no_grad():
             s = time.time()
             
-            # convert from numpy to torch, add a batch dimension, and transfer to the GPU
-            obs_dict = dict_apply(obs_dict_np, 
-                lambda x: torch.from_numpy(x).unsqueeze(0).to(self.device))
+            # wrap in a data dict, which is what the batch loader expects
+            dd = {"obs": obs_dict_np}
+            
+            # put into 
+            dd_torch = pytorch_util.dict_to_torch(dd)
             
             # must normalize ourselves, here, because of the way co-training works with separate normalizers per dataset
-            nobs_dict = self.policy.normalizer.normalize(obs_dict)
+            ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
+            
+            nobs_torch = ndd_torch['obs']
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            nresult = self.policy.predict_action(nobs_dict)
+            nresult = self.policy.predict_action(nobs_torch)
             naction_pred = nresult["naction_pred"]
-            naction = nresult["naction"]
+
+            # must wrap in a dict
+            sdfsd = {"action": naction_pred}
             
             # unnormalize
-            action_pred = self.policy.normalizer['action'].unnormalize(naction_pred)
-            action = self.policy.normalizer['action'].unnormalize(naction)
+            action_sdf = self.batch_loader.unnorm_and_transfer(sdfsd)
+            
+            <action_sdf contains obs for some reason>
             
             result = {
-                'action': action,
-                'action_pred': action_pred
+                'action_pred': action_sdf
             }
             
             if self.debug or self.analytics:
@@ -596,15 +603,12 @@ class EvalDexNex(Node):
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-# Register the del resolver
-OmegaConf.register_new_resolver("del", lambda: None)
-
 @hydra.main(
     version_base=None,
     config_path=str(pathlib.Path(__file__).parent.joinpath(
-        'evaluation','config')),
+        'config')),
 )
-def main(eval_cfg: OmegaConf):
+def main(eval_cfg: OmegaConf, args=None):
     # make checkpoint path
     checkpoint_path = os.path.join(eval_cfg.checkpoint_dir, eval_cfg.checkpoint_name)
     
@@ -624,6 +628,7 @@ def main(eval_cfg: OmegaConf):
     # globals.CONFIG.spin_replay_buffer = False # TODO: add to training config
     # globals.CONFIG.spin_dataloaders = False # TODO: add to training config
     # globals.CONFIG.spin_session_trainer = False
+    globals.CONFIG.replay_buffer_loader.do_loading = False
     
     # whether we're debugging
     if eval_cfg.debug:
@@ -640,6 +645,10 @@ def main(eval_cfg: OmegaConf):
     # spin up the logger
     globals.LOGGER = hydra.utils.instantiate(globals.CONFIG.logging)
     print("Logger spun.")
+    
+    # spin up the replay buffer loader
+    globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader)
+    print("Replay Buffer Loader spun.")
         
     # spin up the models
     globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models)

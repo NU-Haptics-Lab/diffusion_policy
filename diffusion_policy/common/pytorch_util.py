@@ -15,6 +15,9 @@ def dict_apply(
             result[key] = func(value)
     return result
 
+def dict_to_torch(x):
+    return dict_apply(x, torch.tensor)
+
 def dict_tensor_to(batch, device):
     return dict_apply(batch, lambda x: x.to(device, non_blocking=True))
 

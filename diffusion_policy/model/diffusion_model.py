@@ -196,10 +196,10 @@ class DiffusionModel(BaseImagePolicy):
         """
         nobs = nobs_dict
         value = next(iter(nobs.values()))
-        B = value.shape[0]
-        T = self.horizon
-        Da = self.action_dim
-        Do = self.obs_feature_dim
+        B = value.shape[0] # batch
+        T = self.horizon # trajectory length
+        Da = self.action_dim # action dimension
+        Do = self.obs_feature_dim # output length of the obs encoder
         To = self.n_obs_steps
 
         # build input
@@ -222,7 +222,11 @@ class DiffusionModel(BaseImagePolicy):
         global_cond = None
         if self.obs_as_global_cond:
             # condition through global feature
-            this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+            
+            # # I'm not sure why this line was included...
+            # this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+            this_nobs = nobs
+            
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(B, -1)

@@ -1,7 +1,8 @@
 debug: true
+test: true
 
 # checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
-checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/"
+checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/checkpoints"
 
 # checkpoint name
 checkpoint_name: "step=0149900.ckpt"
@@ -13,6 +14,7 @@ eval_dexnex:
   # values taken from `gestures_diffuison_py/datasets/convert_dataset.py`
   # whether to enable debug mode
   debug: ${debug}
+  test: ${test}
 
   # whether to use the custom num of inference steps during denoising (generally recommended)
   use_custom_inference_steps: false
@@ -37,10 +39,16 @@ eval_dexnex:
   use_fingertip_pos: true
 
   # rosbag convert uses height, width, channels
-  ros_image_shape: (192, 192, 3)
+  ros_image_shape:
+    - 192
+    - 192
+    - 3
 
   # rosbag convert uses height, width, channels
-  ros_image2_shape: (180, 320, 3)
+  ros_image2_shape:
+    - 180
+    - 320
+    - 3
 
   # CURRENTLY UNUSED
   # CROP_WIDTH: 1
@@ -110,3 +118,26 @@ eval_dexnex:
   urdf_xml_path: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.urdf'
 
   use_ema: true
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+
+    # same values as what was trained on
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    beta_start: 0.0001
+    clip_sample: true
+    num_train_timesteps: 100
+    prediction_type: epsilon
+    
+    # taken from train_diffusion_unet_real_hybrid_workspace.yaml
+    set_alpha_to_one: true
+    steps_offset: 0
+
+  # copied from the training config
+  batch_loader:
+    _target_: diffusion_policy.dataset.batch_loader.BatchLoader
+    rb_id: default # unnecessary during inference
+    train_or_val: eval # unnecessary during inference
+    use_dataloader: false # must be false during inference
+    strict: false # required for inference

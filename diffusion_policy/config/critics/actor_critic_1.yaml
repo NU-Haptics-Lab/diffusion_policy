@@ -409,4 +409,4 @@ override:
         model:
           model:
             noise_scheduler:
-              variance_type: fixed_small
+              variance_type: fixed_small # ah, I need this here because it only exists in the DDPM scheduler, so it's not common to DDIM & DDPM
