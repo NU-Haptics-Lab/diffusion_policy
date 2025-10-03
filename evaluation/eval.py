@@ -488,18 +488,19 @@ class EvalDexNex(Node):
             return action
 
     """  """
-    def PublishTrajectory(self, action):        
-        # take the first index to remove the batch axis. 
-        action = action[0]
+    def PublishTrajectory(self, action): 
+        # cast into numpy. 
+        action = action.numpy()   
         
-        # Transfer into numpy. 
-        action_cpu_np = action.numpy()
+        # squeeze the first index to remove the batch axis. 
+        action = np.squeeze(action)
+        
         avg_np = np.zeros((self.nb_averaging_waypoints, self.output_action_length))
         # avg_np = np.zeros((1, OUTPUT_ACTION_LENGTH))
         
         # # remove the first half of the traj because it's usually too far behind and cause a positive feedback loop of undesirable behavior
         # 
-        actions_to_avg = action_cpu_np[self.nb_waypoints_to_skip:self.nb_waypoints_to_skip + self.nb_waypoints_to_keep]
+        actions_to_avg = action[self.nb_waypoints_to_skip:self.nb_waypoints_to_skip + self.nb_waypoints_to_keep]
         
         
         if self.average_waypoints:
