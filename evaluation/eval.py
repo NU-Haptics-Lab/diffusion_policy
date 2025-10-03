@@ -469,35 +469,31 @@ class EvalDexNex(Node):
             nobs_torch = ndd_torch['obs']
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            nresult = self.policy.predict_action(nobs_torch)
-            naction_pred = nresult["naction_pred"]
+            nresult_gpu = self.policy.predict_action(nobs_torch)
+
+            # naction doesn't include past actions
+            naction_gpu = nresult_gpu["naction"]
 
             # must wrap in a dict
-            sdfsd = {"action": naction_pred}
+            naction_gpu_dd = {"action": naction_gpu}
             
             # unnormalize
-            action_sdf = self.batch_loader.unnorm_and_transfer(sdfsd)
-            
-            <action_sdf contains obs for some reason>
-            
-            result = {
-                'action_pred': action_sdf
-            }
+            action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
+                        
+            action = action_dd['action']
             
             if self.debug or self.analytics:
                 print('Inference latency:', time.time() - s)
         
-            return result
+            return action
 
     """  """
-    def PublishTrajectory(self, results):
+    def PublishTrajectory(self, action):        
+        # take the first index to remove the batch axis. 
+        action = action[0]
         
-        # extract full action from policy output
-        # action_pred = results['action_pred'] # horizon long (16), on GPU
-        action = results['action'] # n_action_steps long (8), on GPU. First action is at the current time
-        
-        # take the first index to remove the batch axis. Transfer to CPU and numpy. 
-        action_cpu_np = action[0].detach().to('cpu').numpy()
+        # Transfer into numpy. 
+        action_cpu_np = action.numpy()
         avg_np = np.zeros((self.nb_averaging_waypoints, self.output_action_length))
         # avg_np = np.zeros((1, OUTPUT_ACTION_LENGTH))
         
@@ -558,7 +554,7 @@ class EvalDexNex(Node):
         obs_dict_np = self.GetObs()
         
         # run inference
-        result = self.RunInference(obs_dict_np)
+        action = self.RunInference(obs_dict_np)
         
         # publish results
         if False:
@@ -569,7 +565,7 @@ class EvalDexNex(Node):
                 self.PublishTrajectory(dd)
                 time.sleep(TEST_WAYPOINT_DT)
         else:
-            self.PublishTrajectory(result)
+            self.PublishTrajectory(action)
         
         # analytics
         if self.analytics:
