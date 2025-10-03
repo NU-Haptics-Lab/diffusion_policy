@@ -63,7 +63,6 @@ class DataArray:
                  descriptor = "",
                  strict: bool = True
                  ):
-        self.datapoint = None
         self.normalizer = normalizer
         self.descriptor = descriptor
         self.strict = strict
@@ -71,6 +70,11 @@ class DataArray:
         # transfer to device, since I own normalizer
         device = torch.device(globals.CONFIG.device)
         self.normalizer.to(device)
+
+        self.reset()
+
+    def reset(self):
+        self.datapoint = None
 
     def set(self, dp: torch.Tensor):
         self.datapoint = dp
@@ -113,6 +117,10 @@ class NestedDataArray:
         self.nest = {}
         self.descriptor = descriptor
         self.strict = strict
+
+    def reset(self):
+        for key, val in self.nest.items():
+            val.reset()
 
     def set(self, data):
         """
@@ -288,6 +296,9 @@ class BatchLoader:
         batch - a torch-gpu nested dict 
         
         """
+        # reset to clear any old data
+        self.nested_data_array.reset()
+
         # update the nested data array data
         self.nested_data_array.set(batch)
 
