@@ -627,6 +627,9 @@ def main(eval_cfg: OmegaConf, args=None):
     # globals.CONFIG.spin_session_trainer = False
     globals.CONFIG.replay_buffer_loader.do_loading = False
     
+    # overwrite the checkpoint name so we load the inference checkpoint
+    globals.CONFIG.checkpoint.resume_tag = eval_cfg.resume_tag
+    
     # whether we're debugging
     if eval_cfg.debug:
         pass
