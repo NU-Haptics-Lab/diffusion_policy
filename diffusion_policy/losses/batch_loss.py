@@ -1,5 +1,7 @@
 import numpy as np
 
+import torch
+
 import diffusion_policy.globals as globals
 
 from diffusion_policy.dataset.batch_loader import BatchLoader
@@ -35,10 +37,10 @@ class BatchLoss:
         Train for one batch.
         """
         # # get the batch from the batch loader
-        # nbatch = next(self.batch_loader)
+        nbatch = next(self.batch_loader)
 
         # # get the BC loss
-        # actor_loss = self.actor.loss(nbatch, self.rb_id)
+        actor_loss = self.actor.loss(nbatch, self.rb_id)
 
         # # get the DQL loss
         # critic_loss = self.critic.loss(nbatch, self.rb_id)
@@ -47,7 +49,7 @@ class BatchLoss:
         # loss = actor_loss + self.eta * critic_loss
 
         # we're done
-        return loss
+        return actor_loss
     
     def eval(self):
         # get batch
@@ -60,6 +62,87 @@ class BatchLoss:
         action_mse_error = self.actor_model.get_val_action_mse_error(nbatch)
 
         return actor_loss.cpu(), action_mse_error
+    
+class TTREfficiencyWeightedBatchLoss(BatchLoss):
+    """
+    TTR - time-to-reward.
+    Weight each sample in the batch based on the time-to-reward effiency
+    """
+    def __init__(self, batch_loader, eta):
+        super().__init__(batch_loader, eta)
+
+        self.setup()
+
+    def setup(self):
+        """
+        compute the efficiencies
+        """
+        self.ttrs = {}
+
+        # traverse the dataset one episode at a time
+        for ep in episodes:
+            # loop vars
+            reward_timestep = None
+
+            # traverse backwards
+            for i in reversed(range(ep)):
+                dp = ep[i]
+                # unpack the dp
+                s, a, r = dp
+
+                # update reward
+                if r > 0.0:
+                    reward_timestep = i
+
+                if reward_timestep is None:
+                    ttr = None
+                else:
+                    # timesteps-to-reward
+                    ttr = reward_timestep - i
+                
+                self.ttrs[dp.id] = ttr
+
+
+        self.max_ttr = np.max(self.ttrs.values())
+        assert(self.max_ttr is not None)
+
+    def get_ttr_eff(self, idxs, batch):
+        # raw ttr
+        ttr = self.ttrs[idxs]
+
+        # efficiency is the time-to-reward divided by the number of steps to get there
+        ttr_eff = ttr / self.max_ttr
+
+        # normalize to [0, 1]
+        nttr_eff = ttr_eff / self.max_eff
+
+        return nttr_eff
+
+    def get_weights(self, batch):
+        """
+        Each sample starts with weight 1.0, and is given a higher weight if its trajectory more efficiently gets to a reward state
+        """
+        b = batch.shape[0]
+        weights = torch.ones([b, 1])
+
+        # time-to-reward efficiency
+        ttr_eff = self.get_ttr_eff(batch)
+
+        # want to give a sample more weight if it's more efficient
+        weights += ttr_eff
+
+        return weights
+
+
+    def compute_loss(self):
+        loss = super().compute_loss()
+
+        batch_weights = self.get_weights()
+
+        # element-wise multiplication
+        weighted_loss = torch.mul(loss, batch_weights)
+
+        return weighted_loss
     
 class DQLBatchLoss(BatchLoss):
     """
