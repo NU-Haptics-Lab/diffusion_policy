@@ -21,12 +21,14 @@ class ReplayBufferLoader:
 
             if self.do_loading:
                 rb = ReplayBuffer.create_from_path(val)
-                print("Replay buffer nb datapoints: ", self.rbs[key].n_steps) 
-                print("Replay buffer nb episodes: ", self.rbs[key].n_episodes) 
+                self.rbs[key] = rb
+                
+                print(key + ": replay buffer nb datapoints: ", self.rbs[key].n_steps) 
+                print(key + ": replay buffer nb episodes: ", self.rbs[key].n_episodes) 
             else:
                 rb = None
+                self.rbs[key] = rb
                 
-            self.rbs[key] = rb
             
     def __getitem__(self, key):
         return self.rbs[key]

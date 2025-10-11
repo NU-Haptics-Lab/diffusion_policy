@@ -1,11 +1,11 @@
 debug: true
-test: true
+test: false
 
 # checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
 checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/checkpoints"
 
 # checkpoint name
-resume_tag: step=0149900
+resume_tag: step=0079900
 checkpoint_name: ${resume_tag}.ckpt
 
 eval_dexnex:

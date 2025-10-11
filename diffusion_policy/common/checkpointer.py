@@ -242,7 +242,7 @@ class TopKCheckpointManager:
     
     def load(self):
         # hacky, works for now
-        if True: # "critic" in globals.CONFIG.load:
+        if self.resume: # "critic" in globals.CONFIG.load:
             lastest_ckpt_path = self.get_checkpoint_path(self.resume_tag)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint: {lastest_ckpt_path}")

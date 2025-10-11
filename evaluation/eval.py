@@ -589,9 +589,11 @@ class EvalDexNex(Node):
             # spin some
             rclpy.spin_once(self, timeout_sec=0.05)
             
+            img_history = self.image2_history
+            
             # plot
-            if len(self.image_history) > 0:
-                vis_img2 = np.clip(self.image_history[0] / 255.0, 0.0, 1.0) # othewise plt will print a bunch of annoying warnings
+            if len(img_history) > 0:
+                vis_img2 = np.clip(img_history[0] / 255.0, 0.0, 1.0) # othewise plt will print a bunch of annoying warnings
                 plt.imshow(vis_img2)
                 plt.show(block=False)
                 plt.pause(0.05)

@@ -223,9 +223,9 @@ class DiffusionModel(BaseImagePolicy):
         if self.obs_as_global_cond:
             # condition through global feature
             
-            # # I'm not sure why this line was included...
-            # this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
-            this_nobs = nobs
+            # # I'm not sure why this line was included... required during training ...
+            this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+            # this_nobs = nobs
             
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
