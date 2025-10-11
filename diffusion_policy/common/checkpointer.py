@@ -59,7 +59,8 @@ class TopKCheckpointManager:
             save_last_ckpt = False,
             save_last_snapshot = False,
             resume = False,
-            resume_tag = "latest"
+            resume_tag = "latest",
+            use_current_directory = True
         ):
         assert mode in ['max', 'min']
         assert k >= 0
@@ -69,8 +70,11 @@ class TopKCheckpointManager:
             self.output_dir = output_dir
             
         # new 
-        else:
+        elif use_current_directory:
             self.output_dir = HydraConfig.get().runtime.output_dir
+            
+        else:
+            self.output_dir = output_dir
 
         self.rel_save_dir = rel_save_dir
         self.save_dir = os.path.join(self.output_dir, rel_save_dir)
@@ -191,8 +195,8 @@ class TopKCheckpointManager:
         else:
             path = pathlib.Path(path)
             
-        # ensure directory exists, make it if it doesn't
-        path.parent.mkdir(parents=False, exist_ok=True)
+        # ensure directory exists, make it if it doesn't (including parent dir's)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         # saving payload
         payload = {

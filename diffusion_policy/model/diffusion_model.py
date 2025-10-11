@@ -286,9 +286,9 @@ class DiffusionModel(BaseImagePolicy):
     def loss(self, nbatch, task_id):
         loss2 = self.compute_loss(nbatch)
         
-        # logging
-        dd = {task_id + ": bc_actor_loss": loss2}
-        globals.LOGGER.log(dd)
+        # # logging
+        # dd = {task_id + ": bc_actor_loss": loss2}
+        # globals.LOGGER.log(dd)
         
         return loss2
             
@@ -381,5 +381,5 @@ class DiffusionModel(BaseImagePolicy):
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss.mean()
+        # loss = loss.mean()
         return loss

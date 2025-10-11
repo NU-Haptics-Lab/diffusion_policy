@@ -117,7 +117,7 @@ class TrainAndVal:
         self.val_sampler.Init(val_mask)
 
         # init the original sampler
-        all = train_mask or val_mask
+        all = np.logical_or(val_mask, train_mask)
         self.sampler.Init(all)
         
         # make the datasets

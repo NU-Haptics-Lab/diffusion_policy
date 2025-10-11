@@ -149,7 +149,7 @@ class Optim(Base):
 class Model(Base):
         
     def __init__(self,
-                 model,
+                 model: DiffusionModel,
                  ):
         super().__init__()
         

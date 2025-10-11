@@ -264,10 +264,13 @@ class BatchLoader:
             'action_next': act,
             'not_done': get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
-            ),
+                ),
             'reward': get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
-                )
+                ),
+            'rb_index': get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                ),
         }
         
         self.nested_data_array.set_normalizers(nn)

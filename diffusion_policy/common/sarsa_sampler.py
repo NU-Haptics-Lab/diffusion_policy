@@ -501,12 +501,12 @@ class EpisodeSampler:
         
         return sample
     
-    def get_rb_index(self, ep_idx):
+    def get_rb_index(self, ep_idx) -> np.ndarray:
         indices = [ep_idx]
 
         index = self.indices.get_rb_indices(indices)
 
-        return index[0]
+        return np.array(index)
 
     
     def get_sample(self, ep_idx):

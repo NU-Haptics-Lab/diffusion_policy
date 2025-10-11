@@ -2,6 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
+description: "actor_2: weighted BC"
 # global controls
 debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
@@ -17,6 +18,7 @@ load:
   # - critic
   # - actor
   # - globals
+
 # hack
 resume: false
 
@@ -58,15 +60,16 @@ checkpoint:
   save_last_snapshot: false
 
   format_str: step={global_step:07d}.ckpt
-  k: 20 # nb checkpoints to keep
-  checkpoint_every: 50 # how often, in epochs
+  k: 50 # nb checkpoints to keep
+  checkpoint_every: 100 # how often, in epochs
   mode: max
   monitor_key: epoch
+  use_current_directory: false # use ${output_dir} as the base
 
   # required if resuming
   resume: ${resume}
   resume_tag: critic_compat.step=0179900
-  output_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-09-28/18-54-40/"
+  output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
 
 # common data
 shape_meta:
@@ -195,8 +198,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
-    eta: 0.1 # weight of the dql actor loss
+    _target_: diffusion_policy.losses.batch_loss.TTREfficiencyWeightedBatchLoss
 
     # children
     batch_loader:
