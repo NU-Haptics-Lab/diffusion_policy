@@ -1,6 +1,10 @@
 import wandb
+from wandb.sdk import wandb_run 
+import wandb.sdk.lib
 import collections
 from omegaconf import OmegaConf
+import typing
+from typing import Union, Dict
 
 import diffusion_policy.globals as globals
 from diffusion_policy.utils import get_output_dir
@@ -13,7 +17,7 @@ class Logging:
     def __init__(self,
                  use_wandb = False,
                  output_dir = None,
-                 wandb_cfg: dict = None
+                 wandb_cfg: dict = {}
                  ):
         self.use_wandb = use_wandb
         self.output_dir = get_output_dir(output_dir)
@@ -22,11 +26,16 @@ class Logging:
         self.reset()
         
         if self.use_wandb:
-            self.wandb_run = wandb.init(
-                dir=str(self.output_dir),
-                config=OmegaConf.to_container(globals.CONFIG, resolve=True),
-                **wandb_cfg
-            )
+            config = OmegaConf.to_container(globals.CONFIG, resolve=True)
+
+            # if isinstance(config, typing.get_args(Union[Dict, str, None])):
+            if not isinstance(config, list):
+                self.wandb_run = wandb.init(
+                    dir = str(self.output_dir),
+                    config = config,
+                    **wandb_cfg
+                )
+
             wandb.config.update(
                 {
                     "output_dir": self.output_dir,
@@ -48,10 +57,11 @@ class Logging:
         self.save(data)
         
         if self.use_wandb:
-            self.wandb_run.log(
-                data,
-                step=globals.STEP
-            )
+            if self.wandb_run is not None:
+                self.wandb_run.log(
+                    data,
+                    step=globals.STEP
+                )
             
     def log_one(self, label, datapoint):
         dd = {label: datapoint}

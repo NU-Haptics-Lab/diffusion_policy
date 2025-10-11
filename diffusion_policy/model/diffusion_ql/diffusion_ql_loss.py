@@ -10,6 +10,8 @@ from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 
 import diffusion_policy.globals as globals
+from diffusion_policy.model.model import ModelEmaOptim
+from diffusion_policy.model.diffusion_model import DiffusionModel
 
 """
 reference paper: https://arxiv.org/pdf/2208.06193
@@ -50,15 +52,22 @@ class CriticLoss(nn.Module):
         
         
     def Denoise(self, nobs_dict, use_ema=False):
+        """
+        Should use the regular model if doing training
+        Should use the ema model if doing inference, or doing critic training
+        """
         # save handles to nodes
-        actor = globals.MODELS["actor"]
+        actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
         
+        m: DiffusionModel
         if use_ema:
             m = actor.get_ema_model()
         else:
             m = actor.get_model()
+
+        # None protection, also for pylance
+        assert(m is not None)
         
-        # use actor or ema actor? idk
         nresult = m.denoise(
             nobs_dict, 
             self.noise_scheduler, 
@@ -76,9 +85,10 @@ class CriticLoss(nn.Module):
         This is exactly the same as the Diffusion-QL repo, the downside however is that we have to do denoising twice per step, once on this state and once on the next state. If this proves to be very slow to train, then a potential optimization is to do critic training on the previous state & this state so we only have to denoise once per step.
         """
         # TODO: add feature for training the critic separately, so no denoising is needed
+        models_to_train: list = globals.CONFIG.models_to_train #type:ignore
         
         # training the actor, so we need to use the actor to denoise an observation
-        if "actor" in globals.CONFIG.models_to_train:
+        if "actor" in models_to_train:
             # want gradients on this one so we can back-prop from the critic through to the actor
             new_action = self.Denoise(nbatch['obs'])
         else:

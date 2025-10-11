@@ -229,15 +229,8 @@ class Indices:
     #     data = np.zeros(shape=(self.sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
         
     #     return data
-    
-    def get_sequence_by_indices_and_key(self, indices, key):
-        """
-        The caller requests data from `indices`, which may or may not exist in the episode this instance is associated with.
-        If using the fill-back / fill-forward (default) option, then we first modify indices to be all valid indexes.
-        We then use the indices to "fancy index" the r.b.
 
-        indices - episode-relative indices. Meaning the only valid values are [0, len(episode)-1]
-        """
+    def get_rb_indices(self, indices):
         # ensure it's numpy
         valid_indices = np.array(indices)
 
@@ -251,6 +244,18 @@ class Indices:
 
         # add on rb ep offset to make the indices rb-relative
         rb_indices = valid_indices + self.rb_offset
+
+        return rb_indices
+    
+    def get_sequence_by_indices_and_key(self, indices, key):
+        """
+        The caller requests data from `indices`, which may or may not exist in the episode this instance is associated with.
+        If using the fill-back / fill-forward (default) option, then we first modify indices to be all valid indexes.
+        We then use the indices to "fancy index" the r.b.
+
+        indices - episode-relative indices. Meaning the only valid values are [0, len(episode)-1]
+        """
+        rb_indices = self.get_rb_indices(indices)
 
         # get this key's data from the r.b.
         input_arr = self.replay_buffer[key]
@@ -415,8 +420,17 @@ class EpisodeSampler:
         self.action_key = "action"
         self.reward_key = "reward"
 
+    def get_id(self, i):
+        assert(i >= 0)
+        assert(i < len(self))
+
+        return i + self.rb_offset
+
     def __len__(self):
         return len(self.indices)
+    
+    def get(self, idx, key):
+        return self.indices.get_sequence_by_indices_and_key(idx, key)
     
     def get_not_done(self, ep_idx):
         # last valid sample in the ep => second to last ep_idx, and don't forget python is zero-indexed.
@@ -486,6 +500,13 @@ class EpisodeSampler:
         sample = self.indices.get_sequence_by_indices_and_key(indices, "action")
         
         return sample
+    
+    def get_rb_index(self, ep_idx):
+        indices = [ep_idx]
+
+        index = self.indices.get_rb_indices(indices)
+
+        return index[0]
 
     
     def get_sample(self, ep_idx):
@@ -503,10 +524,16 @@ class EpisodeSampler:
 
         sample["not_done"] = self.get_not_done(ep_idx)
 
+        sample["rb_index"] = self.get_rb_index(ep_idx)
+
         return sample
 
 class DatasetSampler:
     """
+    This class takes a handle to a replay buffer and partitions it into episodes and data-points
+
+    
+
     Here's the issue. In order to shuffle datasets, the data must be laid out in a single iterable. But the organization of our data is in episodes -> steps. So it makes sense to structure our sampler's around episode classes which contain step classes.
 
     But, to further compound the design problem, we use zarr to store our datasets on disk, which are linear in nature. We are only able to distinguish data in zarr into different episodes because of the `episode_ends` key in the zarr meta data.
@@ -528,7 +555,7 @@ class DatasetSampler:
         self.ep_mask = ep_mask
 
         # episode classes
-        self.ep_samplers = []
+        self.ep_samplers: list[EpisodeSampler] = []
 
         # training episode ends. Copy from the ep sampler classes so we can use the efficient binary-search np.searchsorted method when converting from training index to episode
         self.tr_ep_offsets = []
@@ -566,6 +593,9 @@ class DatasetSampler:
             # set rb offset to the old episode_end
             rb_offset = episode_end
 
+    @property
+    def episodes(self):
+        return self.ep_samplers
 
     def get_episode_and_index(self, idx) -> tuple[EpisodeSampler, int]:
         # get the episode index

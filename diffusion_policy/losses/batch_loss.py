@@ -1,5 +1,7 @@
 import numpy as np
 
+import torch
+
 import diffusion_policy.globals as globals
 
 from diffusion_policy.dataset.batch_loader import BatchLoader
@@ -7,7 +9,11 @@ from diffusion_policy.losses.actor_loss import ActorLoss
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common.sarsa_sampler import DatasetSampler, Indices
+from diffusion_policy.dataset.train_and_val import TrainAndVal
 
+from diffusion_policy.model.model import ModelEmaOptim
+from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 class BatchLoss:
     """
@@ -23,22 +29,26 @@ class BatchLoss:
         self.eta = eta
         
         # save handles to nodes
-        self.actor = globals.MODELS["actor"]
-        self.actor_model = globals.MODELS["actor"].get_model()
-        self.critic = globals.MODELS["critic"]
+        self.actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+        self.actor_model = self.actor.get_model()
+        self.critic: CriticLoss = globals.MODELS["critic"] #type:ignore
         
         # get the rb_id
         self.rb_id = self.batch_loader.rb_id
+
+        # my members
+        self.current_batch: dict
 
     def compute_loss(self):
         """
         Train for one batch.
         """
         # # get the batch from the batch loader
-        # nbatch = next(self.batch_loader)
+        nbatch = next(self.batch_loader)
+        self.current_batch = nbatch # save
 
         # # get the BC loss
-        # actor_loss = self.actor.loss(nbatch, self.rb_id)
+        actor_loss = self.actor.loss(nbatch, self.rb_id)
 
         # # get the DQL loss
         # critic_loss = self.critic.loss(nbatch, self.rb_id)
@@ -47,7 +57,7 @@ class BatchLoss:
         # loss = actor_loss + self.eta * critic_loss
 
         # we're done
-        return loss
+        return actor_loss
     
     def eval(self):
         # get batch
@@ -61,6 +71,92 @@ class BatchLoss:
 
         return actor_loss.cpu(), action_mse_error
     
+class TTREfficiencyWeightedBatchLoss(BatchLoss):
+    """
+    TTR - time-to-reward.
+    Weight each sample in the batch based on the time-to-reward effiency
+    """
+    def __init__(self, batch_loader, eta):
+        super().__init__(batch_loader, eta)
+
+        self.setup()
+
+    def setup(self):
+        """
+        compute the efficiencies.
+
+        Might have to correct if we pad the dataset episodes, not sure
+        """
+        ttrs_reversed = []
+        dataloader: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        dss: DatasetSampler = dataloader.sampler #type:ignore ide error from sars vs sarsa. can ignore
+
+        # traverse the dataset one episode at a time, from end of the dataset to the beginning
+        for ep in reversed(dss.episodes):
+            # loop vars
+            reward_timestep = None
+
+            # traverse backwards
+            for i in reversed(range(len(ep))):
+                r = ep.get_reward(i)
+
+                # update reward
+                if r > 0.0:
+                    # check for false positive
+                    # assume any time-to-reward less than 2.0 seconds (20 steps) was a false positive from the end of the previous episode so don't update the reward
+                    if i > 20:
+                        reward_timestep = i
+
+                # check if we have a reward timestamp
+                if reward_timestep is None:
+                    ttr = None
+                else:
+                    # timesteps-to-reward
+                    ttr = reward_timestep - i
+                
+                id = ep.get_id(i)
+                ttrs_reversed.append(ttr)
+
+        # reverse back to forward
+        ttrs = ttrs_reversed.reverse()
+
+        ## post process to remove outliers
+        ttrs = np.array(ttrs)
+
+        # replace nan's with the max so they'll map to 0.0 extra weight
+        ttrs[np.isnan(ttrs)] = np.max(ttrs)
+        
+        # efficiency between [0, 1] where 0 == max ttr, and 1 == min ttr
+        self.efficiencies = (np.max(ttrs) - ttrs) / (np.max(ttrs) - np.min(ttrs))
+
+    def get_weights(self, indices):
+        """
+        Each sample starts with weight 1.0, and is given a higher weight if its trajectory more efficiently gets to a reward state
+        """
+        b = indices.shape[0]
+        weights = torch.ones([b, 1])
+
+        # time-to-reward efficiency
+        ttr_eff = self.efficiencies[indices]
+
+        # want to give a sample more weight if it's more efficient
+        weights += ttr_eff
+
+        return weights
+
+
+    def compute_loss(self):
+        loss = super().compute_loss()
+
+        indices = self.current_batch["rb_index"]
+
+        batch_weights = self.get_weights(indices)
+
+        # element-wise multiplication
+        weighted_loss = torch.mul(loss, batch_weights)
+
+        return weighted_loss
+    
 class DQLBatchLoss(BatchLoss):
     """
     Compute actor and critic loss and return them in a dictionary
@@ -73,9 +169,12 @@ class DQLBatchLoss(BatchLoss):
         losses = {}
         
         # flags
-        train_actor = "actor" in globals.CONFIG.models_to_train
-        train_critic = "critic" in globals.CONFIG.models_to_train
-        need_dql_actor_loss = train_actor and globals.CONFIG.use_dql
+        models_to_train: list = globals.CONFIG.models_to_train # type: ignore
+        use_dql: bool = globals.CONFIG.use_dql # type: ignore
+
+        train_actor = "actor" in models_to_train
+        train_critic = "critic" in models_to_train
+        need_dql_actor_loss = train_actor and use_dql
         
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
@@ -93,8 +192,9 @@ class DQLBatchLoss(BatchLoss):
             if train_critic:
                 losses['critic'] = dql_critic_loss
             
-        if need_dql_actor_loss:
-            losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
+            # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
+            if need_dql_actor_loss and dql_actor_loss is not None:
+                losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
         
         # we're done
         return losses

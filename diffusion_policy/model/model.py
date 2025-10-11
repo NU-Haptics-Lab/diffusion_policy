@@ -8,6 +8,7 @@ from diffusion_policy.common.pytorch_util import optimizer_to
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.common.checkpointer import TopKCheckpointManager
+from diffusion_policy.model.diffusion_model import DiffusionModel
 
 class Base(nn.Module):
     def __init__(self,
@@ -59,7 +60,7 @@ class Ema(Base):
             self.ema_model = copy.deepcopy(self.model)
 
         # configure ema
-        self.ema: EMAModel = None
+        self.ema: EMAModel
         if self.use_ema:
             assert(self.ema_model is not None)
                 
@@ -69,7 +70,7 @@ class Ema(Base):
                 model=self.ema_model)
         
         # device transfer of the ema, since I own it
-        device = torch.device(globals.CONFIG.device)
+        device = torch.device(globals.CONFIG.device) #type:ignore
         if self.ema_model is not None:
             self.ema_model.to(device)
         
@@ -89,8 +90,8 @@ class Optim(Base):
     Torch optimizer and learning rate scheduler mixin
     """
     def __init__(self,
-                 optimizer_target: str = None,
-                 optimizer_cfg: dict = None,
+                 optimizer_target: str = "",
+                 optimizer_cfg: dict = {},
                  lr_scheduler = "cosine",
                  lr_warmup_steps = 500,
                  gradient_accumulate_every = 1,
@@ -116,7 +117,7 @@ class Optim(Base):
                 )
         
         # transfer to GPU
-        optimizer_to(self.optimizer, globals.CONFIG.device)
+        optimizer_to(self.optimizer, globals.CONFIG.device) #type:ignore
         
         # make the LR scheduler
         self.lr_scheduler = get_scheduler(
@@ -148,14 +149,15 @@ class Optim(Base):
 class Model(Base):
         
     def __init__(self,
-                 model):
+                 model,
+                 ):
         super().__init__()
         
         # configure model
         self.model = model
 
         # device transfer of the model, since I own it
-        device = torch.device(globals.CONFIG.device)
+        device = torch.device(globals.CONFIG.device) #type:ignore because pylance can't do dynamic type checking
         self.model.to(device)
             
     def loss(self, nbatch, task_id):
@@ -166,6 +168,8 @@ class Model(Base):
             nobs_dict,
             noise_scheduler,
             ):
+        
+        assert(isinstance(self.model, DiffusionModel))
         return self.model.denoise(nobs_dict, noise_scheduler)
     
     def get_model(self):
