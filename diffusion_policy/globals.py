@@ -20,22 +20,22 @@ from diffusion_policy.common.logging import Logging
 """
 Global config access
 """
-CONFIG: OmegaConf = None
+CONFIG: OmegaConf
 
 """
 Contains replay buffers for each dataset specified
 """
-REPLAY_BUFFER_LOADER: ReplayBufferLoader = None
+REPLAY_BUFFER_LOADER: ReplayBufferLoader
 
 """
 Contains both train and val data loaders
 """
-DATALOADERS: dict = None
+DATALOADERS: dict
 
 """
 Contains all models used in training
 """
-MODELS: Models = None
+MODELS: Models
 
 """ Epoch count """
 EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoch
@@ -44,7 +44,7 @@ EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoc
 STEP = 0
 
 """ Logger """
-LOGGER: Logging = None
+LOGGER: Logging
 
 """ Checkpointer """
-CHECKPOINTER: TopKCheckpointManager = None
+CHECKPOINTER: TopKCheckpointManager

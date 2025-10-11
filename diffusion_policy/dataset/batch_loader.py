@@ -68,7 +68,11 @@ class DataArray:
         self.strict = strict
         
         # transfer to device, since I own normalizer
-        device = torch.device(globals.CONFIG.device)
+        # if hasattr(globals.CONFIG, "device"):
+        # assert(hasattr(globals.CONFIG, "device"))
+
+        device_type: str = globals.CONFIG.device # type: ignore
+        device = torch.device(device_type) 
         self.normalizer.to(device)
 
         self.reset()
@@ -214,15 +218,16 @@ class BatchLoader:
         self.use_dataloader = use_dataloader
         self.strict = strict
         
-        # handle to "Node"
+        # if we actually want to use a data-loader. might not when we're doing inference but still need the task-ids
         if self.use_dataloader:
+            # get a handle to the dataloader "Node"
             self.dataloader: DataLoader = globals.DATALOADERS[self.rb_id][self.train_or_val]
-        else:
-            self.dataloader = None
         
         self.nested_data_array = NestedDataArray("top-level", strict=self.strict)
         
-        self.device = torch.device(globals.CONFIG.device)
+
+        device_type: str = globals.CONFIG.device # type: ignore
+        self.device = torch.device(device_type) 
         
         # will make the nested data array structure
         self.init_normalizers()
@@ -236,14 +241,15 @@ class BatchLoader:
 
         """
         obs = {}
-        if "state" in globals.CONFIG.obs_keys_to_use:
+        obs_keys_to_use = globals.CONFIG.obs_keys_to_use # type: ignore
+        if "state" in obs_keys_to_use:
             obs['state'] = get_range_normalizer_from_stat(
                     {'min': LIMITS[:, 0], 'max': LIMITS[:, 1]})
             
-        if "img" in globals.CONFIG.obs_keys_to_use:
+        if "img" in obs_keys_to_use:
             obs['img'] = get_image_range_normalizer()
             
-        if "img2" in globals.CONFIG.obs_keys_to_use:
+        if "img2" in obs_keys_to_use:
             obs['img2'] = get_image_range_normalizer()
 
         

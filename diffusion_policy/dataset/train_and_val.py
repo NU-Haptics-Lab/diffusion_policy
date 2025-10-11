@@ -29,7 +29,8 @@ class DexNexDataset(BaseImageDataset):
         """
         # Moveaxis moved to the dataset generation script to save training time
         # now I must do this to be backwards compatable with my messed up dataset order. whoops!
-        for key in globals.CONFIG.obs_keys_to_use:
+        obs_keys_to_use = globals.CONFIG.obs_keys_to_use # type: ignore
+        for key in obs_keys_to_use:
             if "img" in key:
                 obs[key] = np.moveaxis(obs[key], 2, 1)
 
@@ -124,10 +125,10 @@ class TrainAndVal:
         self.val_dataset = DexNexDataset(self.val_sampler)
         
         # make the train & val config
-        train_cfg = copy.deepcopy(options.common)
-        val_cfg = copy.deepcopy(options.common)
-        OmegaConf.unsafe_merge(train_cfg, options.train)
-        OmegaConf.unsafe_merge(val_cfg, options.val)
+        train_cfg = copy.deepcopy(options.common) # type: ignore
+        val_cfg = copy.deepcopy(options.common) # type: ignore
+        OmegaConf.unsafe_merge(train_cfg, options.train) # type: ignore
+        OmegaConf.unsafe_merge(val_cfg, options.val) # type: ignore
         
         # make the train & val dataloader
         self.train_dataloader = torchDataLoader(

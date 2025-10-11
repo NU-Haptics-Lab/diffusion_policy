@@ -54,63 +54,63 @@ def main(cfg: OmegaConf):
     globals.CONFIG = cfg
     
     # Temporarily disable strict mode to add new keys
-    OmegaConf.set_struct(globals.CONFIG, False)
+    OmegaConf.set_struct(globals.CONFIG, False) # type: ignore
     
     # whether we're debugging
-    if globals.CONFIG.debug:
-        globals.CONFIG.common_dataset.options.common.batch_size = 4
-        globals.CONFIG.total_num_epochs = 4
-        globals.CONFIG.batches_per_epoch = 2
-        globals.CONFIG.common_dataset.options.train.num_workers = 0
-        globals.CONFIG.common_dataset.options.train.persistent_workers = False
-        globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10
-        globals.CONFIG.models.models.critic.num_inference_steps = 1
+    if globals.CONFIG.debug:  # type: ignore
+        globals.CONFIG.common_dataset.options.common.batch_size = 4 # type: ignore
+        globals.CONFIG.total_num_epochs = 4 # type: ignore
+        globals.CONFIG.batches_per_epoch = 2 # type: ignore
+        globals.CONFIG.common_dataset.options.train.num_workers = 0 # type: ignore
+        globals.CONFIG.common_dataset.options.train.persistent_workers = False # type: ignore
+        globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10 # type: ignore
+        globals.CONFIG.models.models.critic.num_inference_steps = 1 # type: ignore
         
         # test small network
         # globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
         
         # no online logging
-        globals.CONFIG.logging.use_wandb = False
+        globals.CONFIG.logging.use_wandb = False # type: ignore
         
         # testing checkpointing
-        globals.CONFIG.checkpoint.checkpoint_every = 1
+        globals.CONFIG.checkpoint.checkpoint_every = 1 # type: ignore
         
         # testing validation
-        globals.CONFIG.val_every = 1
+        globals.CONFIG.val_every = 1 # type: ignore
         
-        torch.autograd.set_detect_anomaly(True)
+        torch.autograd.set_detect_anomaly(True) # type: ignore
     
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
-    OmegaConf.resolve(globals.CONFIG)
+    OmegaConf.resolve(globals.CONFIG) # type: ignore
     
     # apply overrides, much faster than merge
-    OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override)
+    OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override) # type: ignore
     print("Config merged.")
         
     # spin up the logger
-    globals.LOGGER = hydra.utils.instantiate(globals.CONFIG.logging)
+    globals.LOGGER = hydra.utils.instantiate(globals.CONFIG.logging) # type: ignore
     print("Logger spun.")
     
     # spin up the replay buffer loader
-    globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader)
+    globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader) # type: ignore
     print("Replay Buffer Loader spun.")
     
     # spin up the dataloaders
-    globals.DATALOADERS = hydra.utils.instantiate(globals.CONFIG.dataloaders)
+    globals.DATALOADERS = hydra.utils.instantiate(globals.CONFIG.dataloaders) # type: ignore
     print("Dataloaders spun.")
         
     # spin up the models
-    globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models)
+    globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models) # type: ignore
     print("Models spun.")
     
     # spin up the checkpointer
-    globals.CHECKPOINTER = hydra.utils.instantiate(globals.CONFIG.checkpoint)
+    globals.CHECKPOINTER = hydra.utils.instantiate(globals.CONFIG.checkpoint) # type: ignore
     print("Checkpointer spun.")
 
     # spin up the session trainer
     # cls = hydra.utils.get_class(cfg._target_)
-    session_trainer: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer)
+    session_trainer: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer) # type: ignore
     print("Session Trainer spun.")
     
     # if resuming, load
