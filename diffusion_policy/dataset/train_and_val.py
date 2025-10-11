@@ -70,6 +70,8 @@ class DexNexDataset(BaseImageDataset):
 
 class TrainAndVal:
     """
+    Wrapper for a dataset sampler. Computes val and train masks and uses those to create a torch dataloader (along with a handle to a replay buffer) 
+
     Dataset to provide (s, a, r, s') samples to a torch dataloader. Formerly named dexnex_2cams_image_ql_dataset.py:DexNexDataset but that name isn't descriptive.
 
     note: s and s' are actually observations.
@@ -86,8 +88,7 @@ class TrainAndVal:
             val_ratio=0.0,
             max_train_episodes=None,
             ):
-        
-        super().__init__()
+        self.sampler = sampler
         rb_id = sampler.rb_id
         self.options = options
 
@@ -113,6 +114,10 @@ class TrainAndVal:
         # make an exact copy
         self.val_sampler = copy.deepcopy(sampler)
         self.val_sampler.Init(val_mask)
+
+        # init the original sampler
+        all = train_mask or val_mask
+        self.sampler.Init(all)
         
         # make the datasets
         self.train_dataset = DexNexDataset(self.train_sampler)

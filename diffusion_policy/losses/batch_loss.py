@@ -9,6 +9,8 @@ from diffusion_policy.losses.actor_loss import ActorLoss
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common.sarsa_sampler import DatasetSampler, Indices
+from diffusion_policy.dataset.train_and_val import TrainAndVal
 
 
 class BatchLoss:
@@ -32,12 +34,16 @@ class BatchLoss:
         # get the rb_id
         self.rb_id = self.batch_loader.rb_id
 
+        # my members
+        self.current_batch: dict = None
+
     def compute_loss(self):
         """
         Train for one batch.
         """
         # # get the batch from the batch loader
         nbatch = next(self.batch_loader)
+        self.current_batch = nbatch # save
 
         # # get the BC loss
         actor_loss = self.actor.loss(nbatch, self.rb_id)
@@ -75,58 +81,61 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
 
     def setup(self):
         """
-        compute the efficiencies
-        """
-        self.ttrs = {}
+        compute the efficiencies.
 
-        # traverse the dataset one episode at a time
-        for ep in episodes:
+        Might have to correct if we pad the dataset episodes, not sure
+        """
+        ttrs_reversed = []
+        dataloader: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        dss: DatasetSampler = dataloader.sampler # ide error from sars vs sarsa. can ignore
+
+        # traverse the dataset one episode at a time, from end of the dataset to the beginning
+        for ep in reversed(dss.episodes):
             # loop vars
             reward_timestep = None
 
             # traverse backwards
-            for i in reversed(range(ep)):
-                dp = ep[i]
-                # unpack the dp
-                s, a, r = dp
+            for i in reversed(range(len(ep))):
+                r = ep.get_reward(i)
 
                 # update reward
                 if r > 0.0:
-                    reward_timestep = i
+                    # check for false positive
+                    # assume any time-to-reward less than 2.0 seconds (20 steps) was a false positive from the end of the previous episode so don't update the reward
+                    if i > 20:
+                        reward_timestep = i
 
+                # check if we have a reward timestamp
                 if reward_timestep is None:
                     ttr = None
                 else:
                     # timesteps-to-reward
                     ttr = reward_timestep - i
                 
-                self.ttrs[dp.id] = ttr
+                id = ep.get_id(i)
+                ttrs_reversed.append(ttr)
 
+        # reverse back to forward
+        ttrs = ttrs_reversed.reverse()
 
-        self.max_ttr = np.max(self.ttrs.values())
-        assert(self.max_ttr is not None)
+        ## post process to remove outliers
+        ttrs = np.array(ttrs)
 
-    def get_ttr_eff(self, idxs, batch):
-        # raw ttr
-        ttr = self.ttrs[idxs]
+        # replace nan's with the max so they'll map to 0.0 extra weight
+        ttrs[np.isnan(ttrs)] = np.max(ttrs)
+        
+        # efficiency between [0, 1] where 0 == max ttr, and 1 == min ttr
+        self.efficiencies = (np.max(ttrs) - ttrs) / (np.max(ttrs) - np.min(ttrs))
 
-        # efficiency is the time-to-reward divided by the number of steps to get there
-        ttr_eff = ttr / self.max_ttr
-
-        # normalize to [0, 1]
-        nttr_eff = ttr_eff / self.max_eff
-
-        return nttr_eff
-
-    def get_weights(self, batch):
+    def get_weights(self, indices):
         """
         Each sample starts with weight 1.0, and is given a higher weight if its trajectory more efficiently gets to a reward state
         """
-        b = batch.shape[0]
+        b = indices.shape[0]
         weights = torch.ones([b, 1])
 
         # time-to-reward efficiency
-        ttr_eff = self.get_ttr_eff(batch)
+        ttr_eff = self.efficiencies[indices]
 
         # want to give a sample more weight if it's more efficient
         weights += ttr_eff
@@ -137,7 +146,9 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
     def compute_loss(self):
         loss = super().compute_loss()
 
-        batch_weights = self.get_weights()
+        indices = self.current_batch["rb_index"]
+
+        batch_weights = self.get_weights(indices)
 
         # element-wise multiplication
         weighted_loss = torch.mul(loss, batch_weights)

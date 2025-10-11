@@ -30,7 +30,7 @@ REPLAY_BUFFER_LOADER: ReplayBufferLoader = None
 """
 Contains both train and val data loaders
 """
-DATALOADERS = None
+DATALOADERS: dict = None
 
 """
 Contains all models used in training
