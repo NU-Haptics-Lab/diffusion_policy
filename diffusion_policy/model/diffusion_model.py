@@ -29,7 +29,6 @@ import diffusion_policy.globals as globals
 from diffusion_policy.utils import print_nb_params
 
 
-
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
             action_shape: dict,

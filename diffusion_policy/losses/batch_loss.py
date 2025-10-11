@@ -12,6 +12,8 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.sarsa_sampler import DatasetSampler, Indices
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
+from diffusion_policy.model.model import ModelEmaOptim
+from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 class BatchLoss:
     """
@@ -27,15 +29,15 @@ class BatchLoss:
         self.eta = eta
         
         # save handles to nodes
-        self.actor = globals.MODELS["actor"]
-        self.actor_model = globals.MODELS["actor"].get_model()
-        self.critic = globals.MODELS["critic"]
+        self.actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+        self.actor_model = self.actor.get_model()
+        self.critic: CriticLoss = globals.MODELS["critic"] #type:ignore
         
         # get the rb_id
         self.rb_id = self.batch_loader.rb_id
 
         # my members
-        self.current_batch: dict = None
+        self.current_batch: dict
 
     def compute_loss(self):
         """
@@ -87,7 +89,7 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         """
         ttrs_reversed = []
         dataloader: TrainAndVal = globals.DATALOADERS[self.rb_id]
-        dss: DatasetSampler = dataloader.sampler # ide error from sars vs sarsa. can ignore
+        dss: DatasetSampler = dataloader.sampler #type:ignore ide error from sars vs sarsa. can ignore
 
         # traverse the dataset one episode at a time, from end of the dataset to the beginning
         for ep in reversed(dss.episodes):
@@ -167,9 +169,12 @@ class DQLBatchLoss(BatchLoss):
         losses = {}
         
         # flags
-        train_actor = "actor" in globals.CONFIG.models_to_train
-        train_critic = "critic" in globals.CONFIG.models_to_train
-        need_dql_actor_loss = train_actor and globals.CONFIG.use_dql
+        models_to_train: list = globals.CONFIG.models_to_train # type: ignore
+        use_dql: bool = globals.CONFIG.use_dql # type: ignore
+
+        train_actor = "actor" in models_to_train
+        train_critic = "critic" in models_to_train
+        need_dql_actor_loss = train_actor and use_dql
         
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
@@ -187,8 +192,9 @@ class DQLBatchLoss(BatchLoss):
             if train_critic:
                 losses['critic'] = dql_critic_loss
             
-        if need_dql_actor_loss:
-            losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
+            # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
+            if need_dql_actor_loss and dql_actor_loss is not None:
+                losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
         
         # we're done
         return losses

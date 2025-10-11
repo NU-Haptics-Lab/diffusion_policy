@@ -217,9 +217,10 @@ class DiffusionQL(nn.Module):
         dd = {}
         
         options = self.MakeOptions(task_id)
+        models_to_train: list = globals.CONFIG.models_to_train #type:ignore
         
         # training the critic
-        if "critic" in globals.CONFIG.models_to_train:
+        if "critic" in models_to_train:
             # calc loss for the critic, using (s, a, r, s') & a'
             critic_loss = self.LossCritic(nbatch_dict, next_action, options)
             
@@ -232,7 +233,7 @@ class DiffusionQL(nn.Module):
         state = nbatch_dict['obs']
         
         # training the actor
-        if "actor" in globals.CONFIG.models_to_train:
+        if "actor" in models_to_train:
             # get the actor loss using (s, a)
             actor_loss = self.LossActor(state, new_action, options)
             
