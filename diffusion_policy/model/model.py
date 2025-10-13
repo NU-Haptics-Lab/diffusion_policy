@@ -119,13 +119,17 @@ class Optim(Base):
         # transfer to GPU
         optimizer_to(self.optimizer, globals.CONFIG.device) #type:ignore
         
+        # extract config vals
+        nb_batches = globals.CONFIG.session_trainer.epoch_trainer.nb_batches # type:ignore
+        total_num_epochs = globals.CONFIG.total_num_epochs #type:ignore
+        
         # make the LR scheduler
         self.lr_scheduler = get_scheduler(
             self.lr_scheduler,
             optimizer=self.optimizer,
             num_warmup_steps = self.lr_warmup_steps,
             num_training_steps=(
-                globals.CONFIG.session_trainer.epoch_trainer.nb_batches * globals.CONFIG.total_num_epochs) // self.gradient_accumulate_every,
+                nb_batches * total_num_epochs) // self.gradient_accumulate_every,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
             last_epoch=globals.STEP-1

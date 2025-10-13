@@ -24,6 +24,8 @@ from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.cv2_util import get_image_transform
 import diffusion_policy.globals as globals
 from diffusion_policy.dataset.batch_loader import BatchLoader
+from diffusion_policy.model.model import ModelEmaOptim
+from diffusion_policy.model.diffusion_model import DiffusionModel
 
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
@@ -139,7 +141,7 @@ class EvalDexNex(Node):
         self.task_mask[25:30] = True # left th
         
         # save n obs steps
-        self.n_obs_steps = globals.CONFIG.models.models.actor.model.model.n_obs_steps
+        self.n_obs_steps = globals.CONFIG.models.models.actor.model.model.n_obs_steps # type:ignore
 
         # IF DEBUGGING
         if self.debug:
@@ -164,11 +166,13 @@ class EvalDexNex(Node):
         
         # extract diffusion model
         # ema or not
+        actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+        self.policy: DiffusionModel
         if self.use_ema:
-            self.policy = globals.MODELS["actor"].get_ema_model()
+            self.policy = actor.get_ema_model()
 
         else:
-            self.policy = globals.MODELS["actor"].get_model()
+            self.policy = actor.get_model()
 
             
         # setup inference scheduler
@@ -305,7 +309,7 @@ class EvalDexNex(Node):
     """ Preprocess the raw ros image data. Basically the same as what I have to do in `convert_dataset.py` """
     def PreProcessRosImgData(self, img_np, shape):
         # extract parameters
-        policy_img_shape = globals.CONFIG.shape_meta.img.shape
+        policy_img_shape = globals.CONFIG.shape_meta.img.shape #type:ignore
         
         # policy_img_shape example: [3, 96, 96]
         policy_w = policy_img_shape[1]
@@ -439,9 +443,11 @@ class EvalDexNex(Node):
         
         obs_dict_np = {}
         
+        obs_keys_to_use: list = globals.CONFIG.obs_keys_to_use #type:ignore
+        
         # reduce to only the used obs keys
         for key, val in obs_dict_np_all.items():
-            if key in globals.CONFIG.obs_keys_to_use:
+            if key in obs_keys_to_use:
                 obs_dict_np[key] = val
         
         # done
@@ -469,7 +475,7 @@ class EvalDexNex(Node):
             nobs_torch = ndd_torch['obs']
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            nresult_gpu = self.policy.predict_action(nobs_torch)
+            nresult_gpu = self.policy.infer(nobs_torch)
 
             # naction doesn't include past actions
             naction_gpu = nresult_gpu["naction"]
@@ -535,6 +541,7 @@ class EvalDexNex(Node):
             
         # use the joint states msg stamp. Should be similar enough to the image headers. Don't have to worry about the msg updating since this is a blocking call
         # msg.header.stamp = self.get_clock().now().to_msg()
+        assert(self.m_joint_states_msg is not None) # for pylance
         self.m_stamp = self.m_joint_states_msg.header.stamp # THIS IS THE SAME STAMP AS WHEN THE DIFFUSION POLICY BEGAN EVALUATION, see comment above
         msg.header.stamp = self.m_joint_states_msg.header.stamp
         self.pub_trajectory.publish(msg)
@@ -608,8 +615,15 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
         'config')),
 )
 def main(eval_cfg: OmegaConf, args=None):
+    # extract config params
+    checkpoint_dir = eval_cfg.checkpoint_dir #type:ignore
+    checkpoint_name = eval_cfg.checkpoint_name #type:ignore
+    resume_tag = eval_cfg.resume_tag # type:ignore
+    debug = eval_cfg.debug #type:ignore
+    eval_dexnex = eval_cfg.eval_dexnex #type:ignore
+    
     # make checkpoint path
-    checkpoint_path = os.path.join(eval_cfg.checkpoint_dir, eval_cfg.checkpoint_name)
+    checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name)
     
     # load the training checkpoint
     payload = torch.load(open(checkpoint_path, 'rb'), pickle_module=dill)
@@ -630,10 +644,10 @@ def main(eval_cfg: OmegaConf, args=None):
     globals.CONFIG.replay_buffer_loader.do_loading = False
     
     # overwrite the checkpoint name so we load the inference checkpoint
-    globals.CONFIG.checkpoint.resume_tag = eval_cfg.resume_tag
+    globals.CONFIG.checkpoint.resume_tag = resume_tag
     
     # whether we're debugging
-    if eval_cfg.debug:
+    if debug:
         pass
     
     # resolve immediately so all the ${now:} resolvers
@@ -667,7 +681,7 @@ def main(eval_cfg: OmegaConf, args=None):
     rclpy.init(args=args)
 
     # spin up the ros2 class
-    node = hydra.utils.instantiate(eval_cfg.eval_dexnex)
+    node = hydra.utils.instantiate(eval_dexnex)
     print("Node created.")
 
     # node.Test()

@@ -171,6 +171,21 @@ class DiffusionModel(BaseImagePolicy):
         trajectory[condition_mask] = condition_data[condition_mask]        
 
         return trajectory
+    
+    def infer(self, nobs_dict: dict):
+        """
+        setup for predict_action. Squeeze all tensors, then add the appropriate dimensions
+        """
+        for key, val in nobs_dict.items():
+            val = torch.squeeze(val)
+            
+            # predict_action expects a batch dimension, and a history dimension, so add two axes
+            val = torch.reshape(val, [1, 1] + list(val.shape))
+            
+            nobs_dict[key] = val
+            
+        return self.predict_action(nobs_dict)
+            
 
     def predict_action(self, nobs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return self.predict_action_impl(
