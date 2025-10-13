@@ -221,7 +221,7 @@ class TopKCheckpointManager:
     
     def load_payload(self, payload, **kwargs):
         # modules
-        if "critic" in globals.CONFIG.load:
+        if True: # "critic" in globals.CONFIG.load:
             # hack for backwards compat.
             # TODO: fix
             globals.MODELS.load_state_dict(payload['models_state_dict'], strict=False)

@@ -17,10 +17,10 @@ val_every: 10
 load:
   # - critic
   # - actor
-  # - globals
+  - globals
 
 # hack
-resume: false
+resume: true
 
 tasks_to_use:
   - bnb_2cams
@@ -68,8 +68,9 @@ checkpoint:
 
   # required if resuming
   resume: ${resume}
-  resume_tag: critic_compat.step=0179900
-  output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
+  resume_tag: step=0029900
+  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
+  output_dir: "/media/dexnex_ssd/models/2025.10.11/16.01.15/"
 
 # common data
 shape_meta:
