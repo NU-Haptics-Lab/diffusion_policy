@@ -1,24 +1,31 @@
 debug: false
 test: false
 
-# checkpoint_dir: "/home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-05-08/20-05-18/checkpoints"
-checkpoint_dir: "/media/dexnex_ssd/models/2025.10.11/16.01.15/checkpoints"
+output_dir: /home/omnid/dexnex/libraries/diffusion_policy/outputs/2025-10-03/13-23-51
+checkpoint_dir: ${output_dir}/checkpoints
 
 # checkpoint name
-# step=0009900.ckpt'
-# step=0019900.ckpt
-# step=0029900.ckpt
-# step=0039900.ckpt
-# step=0049900.ckpt
-# step=0059900.ckpt
-# step=0069900.ckpt
-# step=0079900.ckpt
-# step=0089900.ckpt
-# step=0099900.ckpt
+# step=0104900.ckpt
 # step=0109900.ckpt
+# step=0114900.ckpt
 # step=0119900.ckpt
+# step=0124900.ckpt
 # step=0129900.ckpt
-resume_tag: step=0069900
+# step=0134900.ckpt
+# step=0139900.ckpt
+# step=0144900.ckpt
+# step=0149900.ckpt
+# step=0154900.ckpt
+# step=0159900.ckpt
+# step=0164900.ckpt
+# step=0169900.ckpt
+# step=0174900.ckpt
+# step=0179900.ckpt
+# step=0184900.ckpt
+# step=0189900.ckpt
+# step=0194900.ckpt
+# step=0199900.ckpt
+resume_tag: step=0104900
 checkpoint_name: ${resume_tag}.ckpt
 
 eval_dexnex:

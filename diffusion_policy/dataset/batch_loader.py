@@ -241,15 +241,15 @@ class BatchLoader:
 
         """
         obs = {}
-        obs_keys_to_use = globals.CONFIG.obs_keys_to_use # type: ignore
-        if "state" in obs_keys_to_use:
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
+        if "state" in obs_keys_to_load:
             obs['state'] = get_range_normalizer_from_stat(
                     {'min': LIMITS[:, 0], 'max': LIMITS[:, 1]})
             
-        if "img" in obs_keys_to_use:
+        if "img" in obs_keys_to_load:
             obs['img'] = get_image_range_normalizer()
             
-        if "img2" in obs_keys_to_use:
+        if "img2" in obs_keys_to_load:
             obs['img2'] = get_image_range_normalizer()
 
         

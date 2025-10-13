@@ -414,8 +414,8 @@ class EpisodeSampler:
         # make the training indices
         self.indices.create_indices()
 
-        # hard-coded state keys, obtained from the rosbag-to-zarr dataset conversion script
-        self.obs_keys = globals.CONFIG.obs_keys_to_use
+        # for effiency, only load the provided obs-keys
+        self.obs_keys = globals.CONFIG.obs_keys_to_load #type:ignore
 
         self.action_key = "action"
         self.reward_key = "reward"

@@ -181,7 +181,7 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         """
         Train for one batch.
         """
-        # # get the batch from the batch loader
+        # get the batch from the batch loader
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch # save
 

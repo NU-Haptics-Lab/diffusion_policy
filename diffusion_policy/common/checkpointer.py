@@ -130,7 +130,7 @@ class TopKCheckpointManager:
         
     def get_checkpoint_path(self, tag='latest'):
         return pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
-
+    
     def save(self):
         if EveryEpoch(self.checkpoint_every):
             print("Saving...")

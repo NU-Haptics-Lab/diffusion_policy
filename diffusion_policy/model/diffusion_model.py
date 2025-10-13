@@ -43,12 +43,15 @@ class DiffusionModel(BaseImagePolicy):
             cond_predict_scale=True,
             obs_encoder_group_norm=False,
             eval_fixed_crop=False,
+            action_relative_to_state = False,
             # parameters passed to step
             **kwargs):
         super().__init__()
         
         # save from global config
         self.action_rel_indices = globals.CONFIG.action_rel_indices
+        
+        self.action_relative_to_state = action_relative_to_state
 
         # parse shape_meta
         assert len(action_shape) == 1
@@ -308,6 +311,9 @@ class DiffusionModel(BaseImagePolicy):
         return loss2
             
     def get_val_action_mse_error(self, nbatch):
+        if self.action_relative_to_state:
+            nbatch = self.ActionRelativeToState(nbatch)
+            
         # ground truth action
         nobs = nbatch['obs']
         gt_action = nbatch['action']
@@ -325,11 +331,36 @@ class DiffusionModel(BaseImagePolicy):
         action_mse_error = mse.item()
         
         return action_mse_error
+    
+    def ActionRelativeToState(self, nbatch):
+        """
+        subtract the state value off the action values
+        """
+        nobs = nbatch['obs']
+        nactions = nbatch['action']
+        
+        nb_actions = nactions.shape[-1]
+        
+        nstate = nobs['state']
+        
+        # assume the first n state values correspond to action values
+        nstate_actions = nstate[..., 0:nb_actions]
+        
+        # subtract off, using broadcasting in the trajectory-dimension
+        nactions -= nstate_actions
+        
+        # save in nbatch
+        nbatch['action'] = nactions
+        
+        return nbatch
 
     # ========= training  ============
     def compute_loss(self, nbatch):
         # normalize input
         assert 'valid_mask' not in nbatch
+        
+        if self.action_relative_to_state:
+            nbatch = self.ActionRelativeToState(nbatch)
         
         # for cotraining, we normalize when we construct the batch
         nobs = nbatch['obs']

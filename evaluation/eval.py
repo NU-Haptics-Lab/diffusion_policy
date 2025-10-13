@@ -616,6 +616,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 )
 def main(eval_cfg: OmegaConf, args=None):
     # extract config params
+    output_dir = eval_cfg.output_dir #type:ignore
     checkpoint_dir = eval_cfg.checkpoint_dir #type:ignore
     checkpoint_name = eval_cfg.checkpoint_name #type:ignore
     resume_tag = eval_cfg.resume_tag # type:ignore
@@ -645,6 +646,13 @@ def main(eval_cfg: OmegaConf, args=None):
     
     # overwrite the checkpoint name so we load the inference checkpoint
     globals.CONFIG.checkpoint.resume_tag = resume_tag
+    globals.CONFIG.checkpoint.output_dir = output_dir
+    
+    # backwards compat
+    globals.CONFIG.load = ['globals']
+    
+    # overwrite to trigger resume
+    globals.CONFIG.checkpoint.resume = True
     
     # whether we're debugging
     if debug:
