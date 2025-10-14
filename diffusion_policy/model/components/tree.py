@@ -9,11 +9,11 @@ class Tree(nn.Module):
     a Tree-style nn module, where it has a common trunk and separate leafs (a.k.a. heads) for each dataset.
     """
     def __init__(self,
-            rootcaps: nn.ModuleDict,
-            roots: nn.ModuleDict,
-            trunk: nn.Module,
-            branches: nn.ModuleDict,
-            leafs: nn.ModuleDict,
+            rootcaps: nn.ModuleDict = None,
+            roots: nn.ModuleDict = None,
+            trunk: nn.Module = None,
+            branches: nn.ModuleDict = None,
+            leafs: nn.ModuleDict = None,
             ):
         super().__init__()
         
@@ -23,22 +23,27 @@ class Tree(nn.Module):
         self.branches = branches
         self.leafs = leafs
 
-    def forward(self, inputs, rootcap=None, root=None, branch=None, leaf=None):
+    def forward(self, inputs, use_trunk=False, rootcap=None, root=None, branch=None, leaf=None):
         x = inputs
         
-        if len(self.rootcaps) != 0:
+        if rootcap is not None:
+            assert(self.rootcaps is not None)
             x = self.rootcaps[rootcap](x)
         
-        if len(self.roots) != 0:
+        if root is not None:
+            assert(self.roots is not None)
             x = self.roots[root](x)
         
-        # required
-        x = self.trunk(x)
+        if use_trunk:
+            assert(self.trunk is not None)
+            x = self.trunk(x)
         
-        if len(self.branches) != 0:
+        if branch is not None:
+            assert(self.branches is not None)
             x = self.branches[branch](x)
 
-        if len(self.leafs) != 0:
+        if leaf is not None:
+            assert(self.leafs is not None)
             x = self.leafs[leaf](x)
             
             if x._version == 1:

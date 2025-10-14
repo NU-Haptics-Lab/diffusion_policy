@@ -28,6 +28,10 @@ from diffusion_policy.model.obs_encoder import ObsEncoderMaker
 import diffusion_policy.globals as globals
 from diffusion_policy.utils import print_nb_params
 
+from diffusion_policy.model.components.tree import Tree
+
+import logging
+logger = logging.getLogger(__name__)
 
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
@@ -44,14 +48,17 @@ class DiffusionModel(BaseImagePolicy):
             obs_encoder_group_norm=False,
             eval_fixed_crop=False,
             action_relative_to_state = False,
+            use_tree = False,
             # parameters passed to step
             **kwargs):
         super().__init__()
         
         # save from global config
-        self.action_rel_indices = globals.CONFIG.action_rel_indices
+        self.action_rel_indices = globals.CONFIG.action_rel_indices #type:ignore
+        self.horizon = len(self.action_rel_indices)
         
         self.action_relative_to_state = action_relative_to_state
+        self.use_tree = use_tree
 
         # parse shape_meta
         assert len(action_shape) == 1
@@ -86,6 +93,7 @@ class DiffusionModel(BaseImagePolicy):
             
         # print 
 
+        #### trunk
         # create diffusion model. Get first/only element from list
         obs_feature_dim = self.obs_encoder.output_shape()[0]
         input_dim = action_dim + obs_feature_dim
@@ -104,7 +112,31 @@ class DiffusionModel(BaseImagePolicy):
             n_groups=n_groups,
             cond_predict_scale=cond_predict_scale
         )
+        #### end trunk
+        
+        if self.use_tree:
+            ### leafs
+            leafs = nn.ModuleDict()
+            for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
+                logger.info("Making Unet leaf for task: {}".format(key))
+                # hard-coded leafs for now. We'd expect the input to be the same shape as the output of `model`, which is action_dim (the horizon dim is taken care of implicitly)
+                leafs[key] = ConditionalUnet1D(
+                            input_dim = action_dim,
+                            local_cond_dim=None,
+                            global_cond_dim=global_cond_dim,
+                            down_dims=[16,32,64],
+                            diffusion_step_embed_dim=diffusion_step_embed_dim,
+                            kernel_size=kernel_size,
+                            n_groups=n_groups,
+                            cond_predict_scale=cond_predict_scale
+                        )
+            ### end leafs
 
+            # tree
+            self.tree = Tree(
+                            leafs=leafs
+                            )
+            
         self.model = model
         self.noise_scheduler = noise_scheduler
         self.mask_generator = LowdimMaskGenerator(
@@ -114,7 +146,6 @@ class DiffusionModel(BaseImagePolicy):
             fix_obs_steps=True,
             action_visible=False
         )
-        self.horizon = len(self.action_rel_indices)
         self.obs_feature_dim = obs_feature_dim
         self.action_dim = action_dim
         self.n_obs_steps = n_obs_steps
@@ -135,10 +166,10 @@ class DiffusionModel(BaseImagePolicy):
             local_cond=None, 
             global_cond=None,
             generator=None,
+            task_id = None,
             # keyword arguments to scheduler.step
             **kwargs
             ):
-        model = self.model
         
         if False: # self.random_noise is None:
             self.random_noise = torch.randn(
@@ -160,8 +191,13 @@ class DiffusionModel(BaseImagePolicy):
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. predict model output
-            model_output = model(trajectory, t, 
+            model_output = self.model(trajectory, t, 
                 local_cond=local_cond, global_cond=global_cond)
+            
+            # tree?
+            if self.use_tree:
+                assert(task_id is not None)
+                model_output = self.tree.leafs[task_id](model_output, t, global_cond=global_cond) # hack
 
             # 3. compute previous image: x_t -> x_t-1
             trajectory = scheduler.step(
@@ -175,7 +211,7 @@ class DiffusionModel(BaseImagePolicy):
 
         return trajectory
     
-    def infer(self, nobs_dict: dict):
+    def infer(self, nobs_dict: dict, task_id=None):
         """
         setup for predict_action. Squeeze all tensors, then add the appropriate dimensions
         """
@@ -187,25 +223,48 @@ class DiffusionModel(BaseImagePolicy):
             
             nobs_dict[key] = val
             
-        return self.predict_action(nobs_dict)
+        nresult = self.predict_action(nobs_dict, task_id=task_id)
+        
+        # naction doesn't include past actions
+        naction = nresult["naction"]
+        naction_og = naction.clone() # for debugging
+        
+        if self.action_relative_to_state:
+            # requires action and obs
+            nbatch = {
+                'action': naction,
+                'obs': nobs_dict
+                    }
             
+            nbatch = self.ActionRelativeToState(nbatch, inference=True)
+            
+            naction = nbatch['action']
+            
+        # done
+        return naction, naction_og
 
-    def predict_action(self, nobs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, 
+                       nobs_dict: Dict[str, torch.Tensor],
+                        task_id = None,
+                       ) -> Dict[str, torch.Tensor]:
         return self.predict_action_impl(
             nobs_dict,
             self.noise_scheduler,
+            task_id=task_id,
             )
         
     def denoise(self, 
             nobs_dict,
             noise_scheduler,
+            task_id = None,
             ):
         """ alias for predict_action_impl """
-        return self.predict_action_impl(nobs_dict, noise_scheduler)
+        return self.predict_action_impl(nobs_dict, noise_scheduler , task_id=task_id)
 
     def predict_action_impl(self, 
             nobs_dict: Dict[str, torch.Tensor],
             noise_scheduler,
+            task_id = None,
             ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -268,6 +327,7 @@ class DiffusionModel(BaseImagePolicy):
             noise_scheduler,
             local_cond=local_cond,
             global_cond=global_cond,
+            task_id = task_id,
             **self.kwargs)
         
         # unnormalize elsewhere
@@ -302,7 +362,7 @@ class DiffusionModel(BaseImagePolicy):
         return nresult
     
     def loss(self, nbatch, task_id):
-        loss2 = self.compute_loss(nbatch)
+        loss2 = self.compute_loss(nbatch, task_id=task_id)
         
         # # logging
         # dd = {task_id + ": bc_actor_loss": loss2}
@@ -310,7 +370,7 @@ class DiffusionModel(BaseImagePolicy):
         
         return loss2
             
-    def get_val_action_mse_error(self, nbatch):
+    def get_val_action_mse_error(self, nbatch, task_id=None):
         if self.action_relative_to_state:
             nbatch = self.ActionRelativeToState(nbatch)
             
@@ -319,7 +379,7 @@ class DiffusionModel(BaseImagePolicy):
         gt_action = nbatch['action']
         
         # denoise
-        nresult = self.predict_action(nobs)
+        nresult = self.predict_action(nobs, task_id=task_id)
         
         # extract the predicted action
         pred_action = nresult['naction_pred']
@@ -332,7 +392,7 @@ class DiffusionModel(BaseImagePolicy):
         
         return action_mse_error
     
-    def ActionRelativeToState(self, nbatch):
+    def ActionRelativeToState(self, nbatch, inference=False):
         """
         subtract the state value off the action values
         """
@@ -346,8 +406,12 @@ class DiffusionModel(BaseImagePolicy):
         # assume the first n state values correspond to action values
         nstate_actions = nstate[..., 0:nb_actions]
         
-        # subtract off, using broadcasting in the trajectory-dimension
-        nactions -= nstate_actions
+        if inference:
+            # if inferring, action = state + rel_action
+            nactions += nstate_actions
+        else:
+            # subtract off, using broadcasting in the trajectory-dimension
+            nactions -= nstate_actions
         
         # save in nbatch
         nbatch['action'] = nactions
@@ -355,7 +419,7 @@ class DiffusionModel(BaseImagePolicy):
         return nbatch
 
     # ========= training  ============
-    def compute_loss(self, nbatch):
+    def compute_loss(self, nbatch, task_id):
         # normalize input
         assert 'valid_mask' not in nbatch
         
@@ -398,7 +462,7 @@ class DiffusionModel(BaseImagePolicy):
         bsz = trajectory.shape[0]
         # Sample a random timestep for each image
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, 
+            0, self.noise_scheduler.config.num_train_timesteps, #type:ignore
             (bsz,), device=trajectory.device
         ).long()
         # Add noise to the clean images according to the noise magnitude at each timestep
@@ -416,7 +480,11 @@ class DiffusionModel(BaseImagePolicy):
         pred = self.model(noisy_trajectory, timesteps, 
             local_cond=local_cond, global_cond=global_cond)
 
-        pred_type = self.noise_scheduler.config.prediction_type 
+        # tree?
+        if self.use_tree:
+            pred = self.tree.leafs[task_id](pred, timesteps, global_cond=global_cond) # hack
+
+        pred_type = self.noise_scheduler.config.prediction_type #type:ignore
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':

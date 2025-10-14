@@ -74,7 +74,7 @@ class BatchLoss:
         actor_loss = self.actor.loss(nbatch, self.rb_id)
 
         # get the action mse error
-        action_mse_error = self.actor_model.get_val_action_mse_error(nbatch)
+        action_mse_error = self.actor_model.get_val_action_mse_error(nbatch, task_id=self.rb_id)
 
         return actor_loss.cpu(), action_mse_error
     
@@ -210,7 +210,7 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
     def eval(self):
         loss = self.compute_loss()['actor'].cpu()
         # get the action mse error
-        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch)
+        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
         
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error

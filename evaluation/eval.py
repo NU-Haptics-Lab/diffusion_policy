@@ -89,6 +89,7 @@ class EvalDexNex(Node):
                  use_ema,
                  noise_scheduler: DDIMScheduler,
                  batch_loader: BatchLoader,
+                 task_id,
                  ):
         # save inputs
         self.debug = debug
@@ -127,6 +128,7 @@ class EvalDexNex(Node):
         self.use_ema = use_ema
         self.noise_scheduler = noise_scheduler
         self.batch_loader = batch_loader
+        self.task_id = task_id
 
 
         # calculated from input parameters
@@ -443,11 +445,11 @@ class EvalDexNex(Node):
         
         obs_dict_np = {}
         
-        obs_keys_to_use: list = globals.CONFIG.obs_keys_to_use #type:ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load #type:ignore
         
         # reduce to only the used obs keys
         for key, val in obs_dict_np_all.items():
-            if key in obs_keys_to_use:
+            if key in obs_keys_to_load:
                 obs_dict_np[key] = val
         
         # done
@@ -475,16 +477,19 @@ class EvalDexNex(Node):
             nobs_torch = ndd_torch['obs']
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            nresult_gpu = self.policy.infer(nobs_torch)
+            naction_gpu, naction_rel_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
 
-            # naction doesn't include past actions
-            naction_gpu = nresult_gpu["naction"]
+            # this is now done in self.policy.infer
+            # # naction doesn't include past actions
+            # naction_gpu = nresult_gpu["naction"]
 
             # must wrap in a dict
             naction_gpu_dd = {"action": naction_gpu}
+            naction_rel_gpu_dd = {"action": naction_rel_gpu} # debug
             
             # unnormalize
             action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
+            action_rel_dd = self.batch_loader.unnorm_and_transfer(naction_rel_gpu_dd) # debug
                         
             action = action_dd['action']
             
@@ -504,7 +509,7 @@ class EvalDexNex(Node):
         avg_np = np.zeros((self.nb_averaging_waypoints, self.output_action_length))
         # avg_np = np.zeros((1, OUTPUT_ACTION_LENGTH))
         
-        # # remove the first half of the traj because it's usually too far behind and cause a positive feedback loop of undesirable behavior
+        # remove the first half of the traj because it's usually too far behind and causes a positive feedback loop of undesirable behavior
         # 
         actions_to_avg = action[self.nb_waypoints_to_skip:self.nb_waypoints_to_skip + self.nb_waypoints_to_keep]
         
