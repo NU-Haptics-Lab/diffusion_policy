@@ -131,37 +131,40 @@ class TopKCheckpointManager:
     def get_checkpoint_path(self, tag='latest'):
         return pathlib.Path(self.save_dir).joinpath(f'{tag}.ckpt')
     
+    def force_save(self):
+        print("Saving...")
+        
+        # save the current state as `latest`
+        # checkpointing
+        if self.save_last_ckpt:
+            self.save_checkpoint()
+
+        # snapshotting
+        if self.save_last_snapshot:
+            # NOT IMPLEMENTED / TESTED
+            # self.save_snapshot()
+            pass
+
+        # sanitize metric names
+        metric_dict = dict()
+        for key, value in globals.LOGGER.data.items():
+            new_key = key.replace('/', '_')
+            metric_dict[new_key] = value
+        
+        # Now, save a top-k checkpoint
+        # We can't copy the last checkpoint here
+        # since save_checkpoint uses threads.
+        # therefore at this point the file might have been empty!
+        topk_ckpt_path = self.get_ckpt_path(metric_dict)
+
+        if topk_ckpt_path is not None:
+            self.save_checkpoint(path=topk_ckpt_path)
+            
+        print("Saved.")
+    
     def save(self):
         if EveryEpoch(self.checkpoint_every):
-            print("Saving...")
-            
-            # save the current state as `latest`
-            # checkpointing
-            if self.save_last_ckpt:
-                self.save_checkpoint()
-
-            # snapshotting
-            if self.save_last_snapshot:
-                # NOT IMPLEMENTED / TESTED
-                # self.save_snapshot()
-                pass
-
-            # sanitize metric names
-            metric_dict = dict()
-            for key, value in globals.LOGGER.data.items():
-                new_key = key.replace('/', '_')
-                metric_dict[new_key] = value
-            
-            # Now, save a top-k checkpoint
-            # We can't copy the last checkpoint here
-            # since save_checkpoint uses threads.
-            # therefore at this point the file might have been empty!
-            topk_ckpt_path = self.get_ckpt_path(metric_dict)
-
-            if topk_ckpt_path is not None:
-                self.save_checkpoint(path=topk_ckpt_path)
-                
-            print("Saved.")
+            self.force_save()
             
     def get_state_dicts(self, dd):
         """

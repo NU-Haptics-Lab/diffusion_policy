@@ -88,10 +88,12 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
     
     def __init__(self, batch_loader, 
                  eta=0.0,
-                 on_gpu = True
+                 on_gpu = True,
+                 alpha = 0.75,
                  ):
         super().__init__(batch_loader, eta)
         self.on_gpu = on_gpu
+        self.alpha = alpha
 
         self.setup()
 
@@ -146,10 +148,17 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         ttrs[ttrs < 0.0] = ttrs.max()
         
         # efficiency between [0, 1] where 0 == max ttr, and 1 == min ttr
-        efficiency = (np.max(ttrs) - ttrs) / (np.max(ttrs) - np.min(ttrs))
+        mm = np.max(ttrs)
+        mn = np.min(ttrs)
+        
+        # if all TTR's are equal, then set to all ones
+        if mm == mn:
+            efficiency = np.ones_like(ttrs)
+        else:
+            efficiency = (np.max(ttrs) - ttrs) / (np.max(ttrs) - np.min(ttrs))
         
         if self.on_gpu:
-            efficiency = torch.tensor(efficiency, device=globals.CONFIG.device)
+            efficiency = torch.tensor(efficiency, device=globals.CONFIG.device) #type:ignore
 
         TTREfficiencyWeightedBatchLoss.efficiencies[self.rb_id] = efficiency
         
@@ -167,13 +176,13 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         indices = indices.to(dtype=torch.long)
         
         b = indices.shape[0]
-        weights = torch.ones([b, 1], device=globals.CONFIG.device)
+        base_weight = torch.ones([b, 1], device=globals.CONFIG.device) #type:ignore
 
         # time-to-reward efficiency
         ttr_eff = TTREfficiencyWeightedBatchLoss.efficiencies[self.rb_id][indices]
 
         # want to give a sample more weight if it's more efficient
-        weights += ttr_eff
+        weights = (1.0 - self.alpha) * base_weight + self.alpha * ttr_eff
 
         return weights
 
@@ -190,10 +199,11 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
 
         indices = nbatch["rb_index"]
 
+        # get the TTR weight
         batch_weights = self.get_weights(indices)
         
         if not self.on_gpu:
-            batch_weights = torch.tensor(batch_weights, device=globals.CONFIG.device)
+            batch_weights = torch.tensor(batch_weights, device=globals.CONFIG.device) #type:ignore
 
         # element-wise multiplication
         weighted_loss = torch.mul(loss, batch_weights)

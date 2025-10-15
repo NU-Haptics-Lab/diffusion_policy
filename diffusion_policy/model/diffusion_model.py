@@ -18,6 +18,7 @@ import robomimic.utils.obs_utils as ObsUtils
 import robomimic.models.base_nets as rmbn
 import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
+from diffusion_policy.common import pytorch_util
 
 import torchsummary
 from torchvision import models as vision_models
@@ -32,6 +33,28 @@ from diffusion_policy.model.components.tree import Tree
 
 import logging
 logger = logging.getLogger(__name__)
+
+class Leaf(nn.Module):
+    def __init__(self, nb_action, horizon):
+        super().__init__()
+        
+        self.model = rmbn.MLP(
+            input_dim = nb_action * horizon,
+            output_dim = nb_action * horizon,   
+        )
+        
+        print_nb_params(self.model, "Leaf params")
+        
+    def forward(self, inputs: torch.Tensor):
+        sh = inputs.shape
+        
+        # flatten, skip the batch axis
+        x = torch.flatten(inputs, start_dim=1)
+        
+        self.model(x)
+        
+        out = x.reshape(sh)
+        return out
 
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
@@ -120,16 +143,18 @@ class DiffusionModel(BaseImagePolicy):
             for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
                 logger.info("Making Unet leaf for task: {}".format(key))
                 # hard-coded leafs for now. We'd expect the input to be the same shape as the output of `model`, which is action_dim (the horizon dim is taken care of implicitly)
-                leafs[key] = ConditionalUnet1D(
-                            input_dim = action_dim,
-                            local_cond_dim=None,
-                            global_cond_dim=global_cond_dim,
-                            down_dims=[16,32,64],
-                            diffusion_step_embed_dim=diffusion_step_embed_dim,
-                            kernel_size=kernel_size,
-                            n_groups=n_groups,
-                            cond_predict_scale=cond_predict_scale
-                        )
+                # leafs[key] = ConditionalUnet1D(
+                #             input_dim = action_dim,
+                #             local_cond_dim=None,
+                #             global_cond_dim=global_cond_dim,
+                #             down_dims=[16,32,64],
+                #             diffusion_step_embed_dim=diffusion_step_embed_dim,
+                #             kernel_size=kernel_size,
+                #             n_groups=n_groups,
+                #             cond_predict_scale=cond_predict_scale
+                #         )
+                leafs[key] = Leaf(action_dim, self.horizon)
+                
             ### end leafs
 
             # tree
@@ -197,7 +222,8 @@ class DiffusionModel(BaseImagePolicy):
             # tree?
             if self.use_tree:
                 assert(task_id is not None)
-                model_output = self.tree.leafs[task_id](model_output, t, global_cond=global_cond) # hack
+                # model_output = self.tree.leafs[task_id](model_output, t, global_cond=global_cond) # hack
+                model_output = self.tree.forward(model_output, leaf=task_id)
 
             # 3. compute previous image: x_t -> x_t-1
             trajectory = scheduler.step(
@@ -392,10 +418,13 @@ class DiffusionModel(BaseImagePolicy):
         
         return action_mse_error
     
-    def ActionRelativeToState(self, nbatch, inference=False):
+    def ActionRelativeToState(self, nbatch0, inference=False):
         """
         subtract the state value off the action values
         """
+        # copy to prevent modifying the upstream object
+        nbatch = pytorch_util.dict_of_tensor_copy(nbatch0)
+        
         nobs = nbatch['obs']
         nactions = nbatch['action']
         
@@ -482,7 +511,8 @@ class DiffusionModel(BaseImagePolicy):
 
         # tree?
         if self.use_tree:
-            pred = self.tree.leafs[task_id](pred, timesteps, global_cond=global_cond) # hack
+            # pred = self.tree.leafs[task_id](pred, timesteps, global_cond=global_cond) # hack
+            pred = self.tree.forward(pred, leaf=task_id)
 
         pred_type = self.noise_scheduler.config.prediction_type #type:ignore
         if pred_type == 'epsilon':

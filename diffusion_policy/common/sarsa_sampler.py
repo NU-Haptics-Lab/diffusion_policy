@@ -392,7 +392,7 @@ class EpisodeSampler:
             # tr_offset,
             rb_id,
             rb_offset,
-            rb_ep_end
+            rb_ep_end,
             ):
         # self.tr_offset = tr_offset
         self.rb_id = rb_id
@@ -478,7 +478,7 @@ class EpisodeSampler:
         # iterate over obs keys
         for key in self.obs_keys:
             sample[key] = self.indices.get_sequence_by_indices_and_key(indices, key)
-
+            
         return sample
     
     def get_key_sample(self, key, ep_idx):
@@ -494,7 +494,7 @@ class EpisodeSampler:
         For an action, we want a sequence from ep_idx - n_obs_steps to ep_idx + horizon.
         """
         # make indices which are episode-relative
-        indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx
+        indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
 
         # get the sample
         sample = self.indices.get_sequence_by_indices_and_key(indices, "action")

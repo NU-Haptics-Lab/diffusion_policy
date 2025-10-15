@@ -21,6 +21,20 @@ def dict_to_torch(x):
 def dict_tensor_to(batch, device):
     return dict_apply(batch, lambda x: x.to(device, non_blocking=True))
 
+def dict_of_tensor_copy(batch):
+    out = {}
+    val: torch.Tensor
+    for key, val in batch.items():
+        if isinstance(val, dict):
+            newval = dict_of_tensor_copy(val)
+        else:
+            assert(isinstance(val, torch.Tensor))
+            newval = val.clone().detach()
+            
+        out[key] = newval
+        
+    return out
+
 def pad_remaining_dims(x, target):
     assert x.shape == target.shape[:len(x.shape)]
     return x.reshape(x.shape + (1,)*(len(target.shape) - len(x.shape)))

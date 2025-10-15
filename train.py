@@ -19,6 +19,8 @@ For example:
 
 
 import sys
+import atexit
+import signal
 # use line-buffering for both stdout and stderr
 sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
@@ -43,6 +45,12 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 # Register the del resolver
 OmegaConf.register_new_resolver("del", lambda: None)
+
+# final save if the program was ctrl+c'd
+def Shutdown():
+    if input("Save a checkpoint? y/n") == 'y':
+        # checkpoints
+        globals.CHECKPOINTER.save()
 
 @hydra.main(
     version_base=None,
@@ -118,7 +126,12 @@ def main(cfg: OmegaConf):
 
     # run it
     print("Begin running.")
-    session_trainer.run()
+    try:
+        session_trainer.run()
+    except KeyboardInterrupt:
+        if input("Save a checkpoint? y/n ") == 'y':
+            # checkpoints
+            globals.CHECKPOINTER.save()
 
 if __name__ == "__main__":
     # only need the following if using my meta dataset

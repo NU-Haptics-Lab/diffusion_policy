@@ -20,7 +20,7 @@ load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 tasks_to_use:
   - bnb_2cams
@@ -311,7 +311,7 @@ models:
             - 1504
 
           action_relative_to_state: true
-          use_tree: true
+          use_tree: false
 
       ema:
         _target_: diffusion_policy.model.model.Ema
