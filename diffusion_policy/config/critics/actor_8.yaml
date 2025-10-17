@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor_7: 4 task co-train, actor leafs, TTR eff, rel-actions"
+description: "actor_8: fine-tune sim_hitl"
 # global controls
 debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
@@ -20,12 +20,12 @@ load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 tasks_to_use:
-  - bnb_2cams
-  - bnb_1cam
-  - block_transfer
+  # - bnb_2cams
+  # - bnb_1cam
+  # - block_transfer
   - sim_hitl
 
 # which obs the obs_encoder will use
@@ -76,9 +76,9 @@ checkpoint:
 
   # required if resuming
   resume: ${resume}
-  resume_tag: notree_step=0009900
-  output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  # output_dir: /media/dexnex_ssd/models/2025.10.14/16.13.24
+  resume_tag: step=0109900
+  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
+  output_dir: /media/dexnex_ssd/models/sim_hitl
 
 # common data
 shape_meta:

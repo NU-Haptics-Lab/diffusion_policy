@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.diffusion_ql.critic_arch import DoubleCritic
 from diffusion_policy.common.pytorch_util import optimizer_to
+from diffusion_policy.common import pytorch_util
 
 import diffusion_policy.globals as globals
 
@@ -36,7 +37,8 @@ class DiffusionQL(nn.Module):
                  grad_norm=1.0,
                  use_target_network = True,
                  use_double_q = True,
-                 use_actor = True
+                 use_actor = True,
+                 use_tree = False,
                  ):
         nn.Module.__init__(self)
         
@@ -45,6 +47,7 @@ class DiffusionQL(nn.Module):
         self.use_target_network = use_target_network
         self.use_double_q = use_double_q
         self.use_actor = use_actor
+        self.use_tree = use_tree
 
         self.critic = critic
         
@@ -78,7 +81,9 @@ class DiffusionQL(nn.Module):
         
     def MakeOptions(self, task_id):
         options = {}
-        options['leaf'] = task_id
+        
+        if self.use_tree:
+            options['leaf'] = task_id
         return options
     
     def ForwardCritic(self, *args, **kwargs):
@@ -102,6 +107,12 @@ class DiffusionQL(nn.Module):
         next_action = nbatch_dict['action_next']
         reward = nbatch_dict['reward']
         not_done = nbatch_dict['not_done']
+        
+        # hack TODO: fix. squeeze the dims
+        # state = pytorch_util.dict_of_tensor_copy(state)
+        # for key, val in state.items():
+        #     state[key] = torch.squeeze(val)
+        # action = torch.squeeze_copy(action)
 
         """ Q Training """
         current_q1, current_q2 = self.critic(state, action, options)
@@ -144,7 +155,10 @@ class DiffusionQL(nn.Module):
         
         # logging
         dd = {}
-        dd[self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
+        if self.use_tree:
+            dd[self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
+        else:
+            dd[self.get_mode_string() + ": avg q-value"] = current_q1.mean()
         globals.LOGGER.log(dd)
         
         return critic_loss
@@ -195,10 +209,13 @@ class DiffusionQL(nn.Module):
         # https://arxiv.org/pdf/2106.06860 
         # the denominator is supposed to be a normalization term and NOT differentiated over
         # tensor.detach() excludes that term from the gradient calculation
-        if np.random.uniform() > 0.5:
-            q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
+        if self.use_double_q:
+            if np.random.uniform() > 0.5:
+                q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
+            else:
+                q_loss = - q2_new_action.mean() / q1_new_action.abs().mean().detach()
         else:
-            q_loss = - q2_new_action.mean() / q1_new_action.abs().mean().detach()
+            q_loss = - q1_new_action.mean()
             
         # weighted loss
         loss = q_loss

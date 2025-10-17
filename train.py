@@ -131,7 +131,7 @@ def main(cfg: OmegaConf):
     except KeyboardInterrupt:
         if input("Save a checkpoint? y/n ") == 'y':
             # checkpoints
-            globals.CHECKPOINTER.save()
+            globals.CHECKPOINTER.force_save()
 
 if __name__ == "__main__":
     # only need the following if using my meta dataset

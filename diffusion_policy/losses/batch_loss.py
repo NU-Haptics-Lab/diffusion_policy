@@ -224,6 +224,86 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error
+    
+class QvalWBatchLoss(TTREfficiencyWeightedBatchLoss):
+    """
+    Explicit Q-Val weighted batch loss
+    """
+
+    def setup(self):
+        """
+        compute the efficiencies. Each datapoint in a reward-yielding trajectory should have the same efficiency because it's the single-value efficiency of the trajectory.
+
+        Might have to correct if we pad the dataset episodes, not sure
+        """
+        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+        if self.rb_id not in tasks_to_use:
+            return
+        
+        if TTREfficiencyWeightedBatchLoss.is_setup[self.rb_id]:
+            return
+        
+        dataloader: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        dss: DatasetSampler = dataloader.sampler #type:ignore ide error from sars vs sarsa. can ignore
+        ttrs = np.zeros((len(dss),)) # TODO: use len of the replay buffer dataset instead of the sampler (which might be padded)
+        
+        gamma = 0.995
+
+        # traverse the dataset one episode at a time
+        c = 0
+        for ep in dss.episodes:
+            c += 1
+            if c%10==0:
+                print("{} of {}".format(c, len(dss.episodes)))
+            if globals.CONFIG.debug and c%20==0: #type:ignore
+                break
+            
+            # loop vars
+            q = 0.0
+
+            # traverse through each datapt in the ep, in reverse order
+            for i in reversed(range(len(ep))):
+                r = ep.get_reward(i)
+                id = ep.get_id(i)
+
+                # update reward
+                if r > 0.0:
+                    # check for false positive
+                    # assume any time-to-reward less than 2.0 seconds (20 steps) was a false positive from the end of the previous episode so don't update the reward
+                    if i > 20:
+                        # degrade q
+                        q *= gamma
+                        
+                        # add on new rewards
+                        q += r
+                        
+                else:
+                    q *= gamma
+                    
+                ttrs[id] = q
+                
+            pass
+                        
+                        
+        # efficiency between [0, 1] where 0 == max ttr, and 1 == min ttr
+        mm = np.max(ttrs)
+        mn = np.min(ttrs)
+        
+        # if all TTR's are equal, then set to all ones
+        if mm == mn:
+            efficiency = np.ones_like(ttrs)
+        else:
+            # ttrs is already [0, r]
+            efficiency = ttrs / mm
+        
+        if self.on_gpu:
+            efficiency = torch.tensor(efficiency, device=globals.CONFIG.device) #type:ignore
+
+        TTREfficiencyWeightedBatchLoss.efficiencies[self.rb_id] = efficiency
+        
+        TTREfficiencyWeightedBatchLoss.is_setup[self.rb_id] = True
+        
+        pass
         
 class DQLBatchLoss(BatchLoss):
     """
@@ -246,10 +326,12 @@ class DQLBatchLoss(BatchLoss):
         
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
+        self.current_batch = nbatch
         
         if train_actor:
             # get the BC loss
-            bc_loss = self.actor.loss(nbatch, self.rb_id)
+            loss_arr = self.actor.loss(nbatch, self.rb_id)
+            bc_loss = loss_arr.mean()
             losses['actor'] = bc_loss
         
         # need critic loss if we're training critic, need actor loss if we're using dql
@@ -267,6 +349,16 @@ class DQLBatchLoss(BatchLoss):
         # we're done
         return losses
     
+    # TODO: rename all eval to validate
+    def eval(self):
+        loss = self.compute_loss()['actor'].cpu()
+        
+        # get the action mse error
+        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
+        
+        # right now eval is hard-coded to expect two tensors on cpu
+        return loss, action_mse_error
+    
 
 class CriticBatchLoss(BatchLoss):
     """
@@ -279,6 +371,7 @@ class CriticBatchLoss(BatchLoss):
         """
         # get the batch from the batch loader
         nbatch = next(self.batch_loader)
+        self.current_batch = nbatch
 
         # get the DQL losses
         dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
@@ -295,13 +388,13 @@ class CriticBatchLoss(BatchLoss):
     
     # TODO: rename all eval to validate
     def eval(self):
-        # get batch, batch_loader handles train vs val mode
-        nbatch = next(self.batch_loader)
-
-        # get the critic loss
-        dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
-    
-        return dql_critic_loss.cpu()
+        loss = self.compute_loss()['actor'].cpu()
+        
+        # get the action mse error
+        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
+        
+        # right now eval is hard-coded to expect two tensors on cpu
+        return loss, action_mse_error
         
 
     

@@ -30,29 +30,38 @@ class StepTrainer:
         # initialize a zero loss variable
         total_losses = CalcSumLoss(self.w_batch_losses)
         
+        dd = {}
+        
         # do one at a time
         for key, loss in total_losses.items():
+            if key not in globals.CONFIG.models_to_train:
+                continue
+            
+            model = globals.MODELS[key]
+            
+            # back propagation
+            loss.backward()
+            
+            # logging
+            dd[key + ": weighted sum loss"] = loss
+            
+        # now step
+        for key in total_losses:
             if key not in globals.CONFIG.models_to_train:
                 continue
             
             dd = {}
             model = globals.MODELS[key]
             
-            # back propagation
-            loss.backward()
-            
             # if clipping the gradients
             if self.grad_norm > 0: 
                 norms = nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=self.grad_norm, norm_type=2)
                 dd[key + ": Grad Norm"] = norms.max().item()
             
-            
             # step
             model.step()
-            
-            # logging
-            dd[key + ": weighted sum loss"] = loss
-            globals.LOGGER.log(dd)
+        
+        globals.LOGGER.log(dd)
         
         # reset optimizer gradients
         globals.MODELS.reset() 

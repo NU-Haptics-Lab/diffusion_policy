@@ -627,6 +627,11 @@ def main(eval_cfg: OmegaConf, args=None):
     resume_tag = eval_cfg.resume_tag # type:ignore
     debug = eval_cfg.debug #type:ignore
     eval_dexnex = eval_cfg.eval_dexnex #type:ignore
+        
+    # sim mods
+    if eval_cfg.sim: # type:ignore
+        eval_cfg.eval_dexnex.ros_image2_shape = [192, 192, 3] #type:ignore
+        eval_cfg.eval_dexnex.task_id = "sim_hitl" # type:ignore
     
     # make checkpoint path
     checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name)

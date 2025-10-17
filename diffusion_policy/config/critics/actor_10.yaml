@@ -2,13 +2,13 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor_7: 4 task co-train, actor leafs, TTR eff, rel-actions"
+description: "actor_10: sim hitl"
 # global controls
 debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 2004
+total_num_epochs: 1001
 batches_per_epoch: 100
 batch_size: 32
 val_every: 10
@@ -23,9 +23,9 @@ load:
 resume: false
 
 tasks_to_use:
-  - bnb_2cams
-  - bnb_1cam
-  - block_transfer
+  # - bnb_2cams
+  # - bnb_1cam
+  # - block_transfer
   - sim_hitl
 
 # which obs the obs_encoder will use
@@ -76,9 +76,9 @@ checkpoint:
 
   # required if resuming
   resume: ${resume}
-  resume_tag: notree_step=0009900
-  output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  # output_dir: /media/dexnex_ssd/models/2025.10.14/16.13.24
+  resume_tag: step=0010000
+  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
+  output_dir: /media/dexnex_ssd/models/2025.10.16/21.41.28
 
 # common data
 shape_meta:
@@ -166,7 +166,7 @@ replay_buffer_loader:
     block_transfer: ${data_directory}bt.reward.zarr
     bnb_1cam: ${data_directory}1cam.reward.zarr
     bnb_2cams: ${data_directory}2cams.reward.zarr
-    sim_hitl: ${data_directory}sim_hitl.zarr
+    sim_hitl: ${data_directory}sim_hitl.reward.zarr
 
 
 
@@ -210,10 +210,10 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.TTREfficiencyWeightedBatchLoss
+    _target_: diffusion_policy.losses.batch_loss.QvalWBatchLoss
 
-    # alpha: 1.0 means 100% TTR weighting
-    alpha: 0.33
+    # alpha: 1.0 means 100% TTR weighting (idk if that's a good idea though)
+    alpha: 0.5
 
     # children
     batch_loader:
@@ -383,7 +383,7 @@ override:
                 rb_id: bnb_2cams
 
           sim_hitl:
-            weight: 0.2
+            weight: 1.0
             batch_loss: 
               batch_loader:
                 rb_id: sim_hitl
@@ -411,7 +411,7 @@ override:
               train_or_val: val
 
         sim_hitl:
-          weight: 0.2
+          weight: 1.0
           batch_loss: 
             batch_loader:
               rb_id: sim_hitl

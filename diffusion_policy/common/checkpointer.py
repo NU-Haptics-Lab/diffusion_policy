@@ -229,7 +229,7 @@ class TopKCheckpointManager:
             # TODO: fix
             globals.MODELS.load_state_dict(payload['models_state_dict'], strict=False)
         
-        if "globals" in globals.CONFIG.load:
+        if "globals" in globals.CONFIG.load: # type:ignore
             self.load_globals(payload)
 
 

@@ -64,11 +64,13 @@ class QLModel(nn.Module):
                  obs_encoder_maker: ObsEncoderMaker,
                  if_stack_history: bool = True,
                  trunk_hidden_dim = 256,
-                 leaf_hidden_dim = 128
+                 leaf_hidden_dim = 128,
+                 use_tree = False
                  ):
         super().__init__()
         self.obs_encoder_maker = obs_encoder_maker
         self.if_stack_history = if_stack_history
+        self.use_tree = use_tree
         
         # if we're stacking the history
         if self.if_stack_history:
@@ -92,20 +94,28 @@ class QLModel(nn.Module):
         branches = nn.ModuleDict()
 
         # leafs
-        leafs = nn.ModuleDict()
-        for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
-            leafs[key] = nn.Sequential(
-                QLDenser(self.trunk_denser.output_shape(), hidden_dim=leaf_hidden_dim),
-                nn.Linear(leaf_hidden_dim, 1) # critic must output a single q-value
-            )
+        if self.use_tree:
+            leafs = nn.ModuleDict()
+            for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
+                leafs[key] = nn.Sequential(
+                    QLDenser(self.trunk_denser.output_shape(), hidden_dim=leaf_hidden_dim),
+                    nn.Linear(leaf_hidden_dim, 1) # critic must output a single q-value
+                )
 
-        # tree
-        self.tree = Tree(
-                         rootcaps,
-                         roots,
-                         trunk,
-                         branches,
-                         leafs)
+            # tree
+            self.tree = Tree(
+                            rootcaps,
+                            roots,
+                            trunk,
+                            branches,
+                            leafs)
+        else:
+            t = nn.Sequential(
+                trunk,
+                nn.Linear(trunk.output_shape(), 1)
+            )
+            self.tree = t
+            self.policy = t
         
     def MakeStackObsEncoder(self):
         # if we're stacking the history, we must modify the shape meta 
@@ -159,7 +169,10 @@ class QLModel(nn.Module):
         # encode the inputs
         x = self.forward_obs(state_dict, action)
 
-        x = self.tree.forward_options(x, options)
+        if self.use_tree:
+            x = self.tree.forward_options(x, options)
+        else:
+            x = self.policy(x)
         
         return x
     

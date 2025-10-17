@@ -359,6 +359,7 @@ class BatchLoader:
             print(e)
             
             # reset
+            print("shuffle")
             self.reset()
             
             # get a new batch

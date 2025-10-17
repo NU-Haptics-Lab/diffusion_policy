@@ -22,6 +22,10 @@ class Tree(nn.Module):
         self.trunk = trunk
         self.branches = branches
         self.leafs = leafs
+        
+        self.use_trunk = False
+        if self.trunk is not None:
+            self.use_trunk = True
 
     def forward(self, inputs, use_trunk=False, rootcap=None, root=None, branch=None, leaf=None):
         x = inputs
@@ -34,7 +38,7 @@ class Tree(nn.Module):
             assert(self.roots is not None)
             x = self.roots[root](x)
         
-        if use_trunk:
+        if self.use_trunk or use_trunk:
             assert(self.trunk is not None)
             x = self.trunk(x)
         
@@ -46,9 +50,9 @@ class Tree(nn.Module):
             assert(self.leafs is not None)
             x = self.leafs[leaf](x)
             
-            if x._version == 1:
-                print("hi")
-                pass
+            # if x._version == 1:
+            #     print("hi")
+            #     pass
 
         return x
     

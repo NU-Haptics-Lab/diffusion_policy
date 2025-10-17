@@ -21,19 +21,21 @@ class SessionTrainer:
         """
         Run for one session
         """
-        for nb_epoch in range(self.nb_epochs):
+        globals.LOGGER.log_one("epoch", globals.EPOCH) # edge-case compat for when we save <1 epoch after beginning the session
+            
+        while globals.EPOCH < globals.CONFIG.total_num_epochs:
             # train for one epoch
             self.epoch_trainer.train()
             
             # eval for one epoch
             self.epoch_evaluator.validate()
+            
+            # checkpoints
+            globals.CHECKPOINTER.save()
 
             # end of epoch logging
             globals.EPOCH += 1
             globals.LOGGER.log_one("epoch", globals.EPOCH)
-            
-            # checkpoints
-            globals.CHECKPOINTER.save()
             
             
 
