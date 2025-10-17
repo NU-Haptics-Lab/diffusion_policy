@@ -17,6 +17,7 @@ from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 from diffusion_policy.common.pytorch_util import dict_tensor_to
+from diffusion_policy import utils
 
 class BatchLoss:
     """
@@ -25,11 +26,15 @@ class BatchLoss:
     """
 
     def __init__(self,
-        batch_loader: BatchLoader,
-        eta: float # weight of the critic loss
+            batch_loader: BatchLoader,
+            eta: float = 0.0, # weight of the critic loss
+            use_bc_loss = True,
+            freqs = {}, # training frequencies, units: steps
         ):
         self.batch_loader = batch_loader
         self.eta = eta
+        self.use_bc_loss = use_bc_loss
+        self.freqs = freqs
         
         # save handles to nodes
         self.actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
@@ -46,23 +51,20 @@ class BatchLoss:
         """
         Train for one batch.
         """
-        return {} # not updated
-        # # get the batch from the batch loader
+        # get the batch from the batch loader
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch # save
 
-        # # get the BC loss
-        actor_loss = self.actor.loss(nbatch, self.rb_id)
-
-        # # get the DQL loss
-        # critic_loss = self.critic.loss(nbatch, self.rb_id)
-
-        # # weighted sum them
-        # loss = actor_loss + self.eta * critic_loss
+        # get the BC loss
+        if self.use_bc_loss:
+            actor_loss = self.actor.loss(nbatch, self.rb_id)
+            actor_loss = actor_loss.mean()
+        else:
+            actor_loss = 0.0
 
         # we're done
         losses = {
-            'actor': actor_loss.mean()
+            'actor': actor_loss
         }
         return actor_loss
     
@@ -310,7 +312,24 @@ class DQLBatchLoss(BatchLoss):
     Compute actor and critic loss and return them in a dictionary
     """
     
-    def compute_loss(self):
+    def get_bc_loss(self, is_eval=False):
+        # get the BC loss
+        bc_loss = utils.InitZeroTensorOnDevice()
+        
+        if utils.StepFreqTrigger(self.freqs['actor']) or is_eval:
+            loss_arr = self.actor.loss(self.current_batch, self.rb_id)
+            bc_loss = loss_arr.mean()
+            
+            # hack
+            if is_eval:
+                return bc_loss
+            
+            # log if training
+            globals.LOGGER.log_one(self.rb_id + ": bc_actor_loss", bc_loss)
+            
+        return bc_loss
+    
+    def compute_loss(self, is_eval=False):
         """
         compute loss for one batch.
         """
@@ -319,6 +338,9 @@ class DQLBatchLoss(BatchLoss):
         # flags
         models_to_train: list = globals.CONFIG.models_to_train # type: ignore
         use_dql: bool = globals.CONFIG.use_dql # type: ignore
+        
+        for key in models_to_train:
+            losses[key] = utils.InitZeroTensorOnDevice()
 
         train_actor = "actor" in models_to_train
         train_critic = "critic" in models_to_train
@@ -328,11 +350,11 @@ class DQLBatchLoss(BatchLoss):
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch
         
-        if train_actor:
-            # get the BC loss
-            loss_arr = self.actor.loss(nbatch, self.rb_id)
-            bc_loss = loss_arr.mean()
-            losses['actor'] = bc_loss
+        if train_actor and self.use_bc_loss:
+            losses['actor'] = self.get_bc_loss(is_eval)
+            # hack
+            if is_eval:
+                return losses
         
         # need critic loss if we're training critic, need actor loss if we're using dql
         if train_critic or need_dql_actor_loss:
@@ -351,10 +373,15 @@ class DQLBatchLoss(BatchLoss):
     
     # TODO: rename all eval to validate
     def eval(self):
-        loss = self.compute_loss()['actor'].cpu()
+        loss = 0.0
+        action_mse_error = 0.0
         
-        # get the action mse error
-        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
+        if "actor" in globals.CONFIG.models_to_train: #type:ignore
+            t = self.compute_loss(is_eval=True)['actor']
+            loss = t.cpu()
+        
+            # get the action mse error
+            action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
         
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error

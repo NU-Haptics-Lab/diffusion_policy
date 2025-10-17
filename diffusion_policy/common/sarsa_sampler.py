@@ -447,7 +447,7 @@ class EpisodeSampler:
         reward = self.get_key_sample("reward", ep_idx) # adds a dimension
         
         # TESTING -- reduce the existence penalty so I don't have to regen the dataset
-        reward[ reward < 0.0] = -0.01
+        reward[ reward < 0.0] = 0.0
         
         # convert to np array
         reward = np.array(reward)

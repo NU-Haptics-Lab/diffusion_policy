@@ -6,8 +6,29 @@ output_dir: /media/dexnex_ssd/models/2025.10.16/21.41.28
 checkpoint_dir: ${output_dir}/checkpoints
 
 # checkpoint name
-# step=0054900.ckpt
-resume_tag: step=0015000
+# step=0005000
+# step=0010000
+# step=0010100
+# step=0015000
+# step=0015100
+# step=0020100
+# step=0025100
+# step=0030100
+# step=0035100
+# step=0040100
+# step=0045100
+# step=0050100
+# step=0055100
+# step=0060100
+# step=0065100
+# step=0070100
+# step=0075100
+# step=0080100
+# step=0085100
+# step=0090100
+# step=0095100
+# step=0100100
+resume_tag: step=0090100
 checkpoint_name: ${resume_tag}.ckpt
 
 eval_dexnex:

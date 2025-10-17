@@ -8,6 +8,14 @@ def EveryEpoch(every: int):
     yes = (globals.EPOCH % every) == 0
     return yes
 
+def StepFreqTrigger(every: int):
+    yes = (globals.STEP % every) == 0
+    return yes
+
+def InitZeroTensorOnDevice():
+    t = torch.tensor(0, device=globals.CONFIG.device)
+    return t
+
 def get_output_dir(_output_dir=None):
     output_dir = _output_dir
     if output_dir is None:

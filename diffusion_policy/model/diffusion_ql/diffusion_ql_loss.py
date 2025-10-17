@@ -12,6 +12,7 @@ from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 import diffusion_policy.globals as globals
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.model.diffusion_model import DiffusionModel
+from diffusion_policy import utils
 
 """
 reference paper: https://arxiv.org/pdf/2208.06193
@@ -88,7 +89,7 @@ class CriticLoss(nn.Module):
         models_to_train: list = globals.CONFIG.models_to_train #type:ignore
         
         # training the actor, so we need to use the actor to denoise an observation
-        if "actor" in models_to_train:
+        if "actor" in models_to_train and utils.StepFreqTrigger(globals.CONFIG.step_freqs['actor']):
             # want gradients on this one so we can back-prop from the critic through to the actor
             new_action = self.Denoise(nbatch['obs'])
         else:

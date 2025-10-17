@@ -20,7 +20,7 @@ load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 tasks_to_use:
   # - bnb_2cams

@@ -86,6 +86,10 @@ def main(cfg: OmegaConf):
         # testing validation
         globals.CONFIG.val_every = 1 # type: ignore
         
+        # testing freq
+        # for key in globals.CONFIG.step_freqs:
+        #     globals.CONFIG.step_freqs[key] = 1
+        
         torch.autograd.set_detect_anomaly(True) # type: ignore
     
     # resolve immediately so all the ${now:} resolvers

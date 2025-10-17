@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor_10: sim hitl"
+description: "actor-critic-2: learning about SAC"
 # global controls
 debug: false
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
@@ -41,15 +41,24 @@ obs_keys_to_load:
   - img
 
 models_to_train:
-  - critic
   - actor
+  - critic
 
 # irrelevant when using CriticBatchLoss
 models_to_eval:
-  # - critic
   - actor
+  # - critic
+
+step_freqs:
+  actor: 5
+  critic: 1
+
+max_epochs:
+  actor: 1001
+  critic: 401 # to prevent overfitting
 
 use_dql: true
+action_relative_to_state: true
 ### End Global Control Panel ###
 
 
@@ -76,9 +85,9 @@ checkpoint:
 
   # required if resuming
   resume: ${resume}
-  resume_tag: step=0010000
-  output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  # output_dir: /media/dexnex_ssd/models/2025.10.16/21.41.28
+  resume_tag: step=0001476
+  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
+  output_dir: /media/dexnex_ssd/models/actor_critic_2
 
 # common data
 shape_meta:
@@ -183,6 +192,7 @@ session_trainer:
     # children
     step_trainer: 
       _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 0.5
     
       # weighted batch loss dict
       w_batch_losses:
@@ -211,7 +221,9 @@ common_wbatch_loss:
   # children
   batch_loss:
     _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
-    eta: 0.5 # weight of the dql actor loss
+    eta: 1.0 # weight of the dql actor loss
+    use_bc_loss: false
+    freqs: ${step_freqs}
 
     # children
     batch_loader:
@@ -268,15 +280,16 @@ models:
       critic:
         _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
         discount: 0.99
-        lr: 2.5e-5
+        lr: 1e-6
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
-        use_target_network: true
-        use_double_q: true
+        use_target_network: false
+        use_double_q: false
+        action_relative_to_state: ${action_relative_to_state}
 
         # lr decay
         use_lr_decay: true
-        lr_maxt: 50000
-        lr_min: 2.5e-5
+        lr_maxt: 500000
+        lr_min: 2.5e-7
 
         critic:
           _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic
@@ -316,7 +329,7 @@ models:
             - 752
             - 1504
 
-          action_relative_to_state: false
+          action_relative_to_state: ${action_relative_to_state}
           use_tree: false
 
       ema:
@@ -342,7 +355,7 @@ models:
             - 0.95
             - 0.999
           eps: 1.0e-08
-          lr: 0.0001 # 1e-4
+          lr: 1e-4 # 1e-4
           weight_decay: 1.0e-06
 
 
