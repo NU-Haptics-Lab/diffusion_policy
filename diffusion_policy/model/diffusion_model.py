@@ -1,6 +1,7 @@
 from typing import Dict
 import math
 import torch
+import torch.func
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -55,6 +56,41 @@ class Leaf(nn.Module):
         
         out = x.reshape(sh)
         return out
+    
+def ForNoiseStep(noise_scheduler,
+               pred,
+               timesteps,
+               noisy_trajectory,
+               ):
+    
+    out = []
+    for i in range(pred.shape[0]):
+        f = noise_scheduler.step(
+                pred[i], timesteps[i], noisy_trajectory[i]
+                ).pred_original_sample
+        f2 = torch.unsqueeze(f, 0)
+        out.append(f2)
+        
+    outt = torch.concat(out)
+    return outt
+
+def VectorNoiseStep(noise_scheduler,
+               pred,
+               timesteps,
+               noisy_trajectory,
+               ):
+    """
+    doesn't work with vmap
+    """
+    def func(p, t, n):
+        a = noise_scheduler.step(
+                p, t, n
+                ).pred_original_sample
+        return a
+        
+    batched_func = torch.vmap(func)  
+    out = batched_func(pred, timesteps, noisy_trajectory)
+    return out
 
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
@@ -187,7 +223,7 @@ class DiffusionModel(BaseImagePolicy):
     def conditional_sample(self, 
             condition_data, 
             condition_mask,
-            scheduler,
+            scheduler: DDPMScheduler,
             local_cond=None, 
             global_cond=None,
             generator=None,
@@ -388,13 +424,13 @@ class DiffusionModel(BaseImagePolicy):
         return nresult
     
     def loss(self, nbatch, task_id):
-        loss2 = self.compute_loss(nbatch, task_id=task_id)
+        loss2, a0 = self.compute_loss(nbatch, task_id=task_id)
         
         # # logging
         # dd = {task_id + ": bc_actor_loss": loss2}
         # globals.LOGGER.log(dd)
         
-        return loss2
+        return loss2, a0
             
     def get_val_action_mse_error(self, nbatch, task_id=None):
         if self.action_relative_to_state:
@@ -489,13 +525,16 @@ class DiffusionModel(BaseImagePolicy):
         # Sample noise that we'll add to the images
         noise = torch.randn(trajectory.shape, device=trajectory.device)
         bsz = trajectory.shape[0]
+        
         # Sample a random timestep for each image
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps, #type:ignore
             (bsz,), device=trajectory.device
         ).long()
+        
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
+        # basically does t' = alpha * t + (1-alpha) * noise
         noisy_trajectory = self.noise_scheduler.add_noise(
             trajectory, noise, timesteps)
         
@@ -515,15 +554,24 @@ class DiffusionModel(BaseImagePolicy):
             pred = self.tree.forward(pred, leaf=task_id)
 
         pred_type = self.noise_scheduler.config.prediction_type #type:ignore
+        
+        # model prediction is the noise that's been added to the original trajectory of actions
         if pred_type == 'epsilon':
             target = noise
+            
+            # must use the noise scheduler to compute the original sample
+            a0 = ForNoiseStep(self.noise_scheduler, pred, timesteps, noisy_trajectory)
+            
+        # model prediction is the original trajectory of actions
         elif pred_type == 'sample':
             target = trajectory
+            a0 = pred
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
-
+        
+        # calculate the loss
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         # loss = loss.mean()
-        return loss
+        return loss, a0

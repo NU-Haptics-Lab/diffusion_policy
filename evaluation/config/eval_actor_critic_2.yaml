@@ -1,0 +1,168 @@
+debug: false
+test: false
+sim: true
+
+output_dir: /media/dexnex_ssd/models/actor_critic_2
+checkpoint_dir: ${output_dir}/checkpoints
+
+# checkpoint name
+# step=0005000
+# step=0010000
+# step=0010100
+# step=0015000
+# step=0015100
+# step=0020100
+# step=0025100
+# step=0030100
+# step=0035100
+# step=0040100
+# step=0045100
+# step=0050100
+# step=0055100
+# step=0060100
+# step=0065100
+# step=0070100
+# step=0075100
+# step=0080100
+# step=0085100
+# step=0090100
+# step=0095100
+# step=0100100
+resume_tag: latest
+checkpoint_name: ${resume_tag}.ckpt
+
+eval_dexnex:
+  _target_: evaluation.eval.EvalDexNex
+  task_id: bnb_2cams
+
+  ## globals
+  # values taken from `gestures_diffuison_py/datasets/convert_dataset.py`
+  # whether to enable debug mode
+  debug: ${debug}
+  test: ${test}
+
+  # whether to use the custom num of inference steps during denoising (generally recommended)
+  use_custom_inference_steps: true
+
+  # paper uses 16 for real-time control, higher nb: more accurate waypoints w.r.t. the inputs. 
+  # WARNING: if this value is less than the training value, then you MUST use a DDIM scheduler instead of a DDPM scheduler (you have to replace the policy's scheduler in this script)
+  num_custom_inference_steps: 20
+
+
+  use_max_action_steps: true
+
+  # not a good idea, I don't recommend it. Was used for troubleshooting.
+  use_default_state: false
+
+
+  analytics: true
+
+
+  test_repeated_history: false
+
+
+  use_fingertip_pos: true
+
+  # rosbag convert uses height, width, channels
+  ros_image_shape:
+    - 192
+    - 192
+    - 3
+
+  # rosbag convert uses height, width, channels
+  ros_image2_shape:
+    - 180
+    - 320
+    - 3
+
+  # CURRENTLY UNUSED
+  # CROP_WIDTH: 1
+  # CROP_HEIGHT: 35 # to remove Davin from the frame
+
+  # TODO: just set this from the policy
+  torch_image_w: 192
+  torch_image_h: 192
+
+
+  observation_topic: '/dexnex_projects_common/leftcam/image_resized'
+  observation_topic_2: '/diffusion/wrist_cam/image_raw'
+  state_topic: '/avatar/joint_states'
+  haptics_topic: '/biotac/lh/normalized'
+
+  # seconds
+  inference_dt: 2.0
+
+  # Hz, from convert_dataset_rosbag.py. Very important that this value is the same as the dataset. not used rn
+  data_frequency: 10
+
+  # out of 15 total action steps. Consider, inference takes about 0.1 - 0.3 seconds depending on num_inference_steps. Take into account the data frequency and you can calculate the nb waypoints to skip. Example: DATA_FREQUENCY: 10.0, NUM_CUSTOM_INFERENCE_STEPS: 50. About 0.3s inference. nb to skip ~= 0.3 / 0.1: 3ish. Add on 1 to account for mechanical latency. I think at least 1 needs to be skipped from the command latency in the dataset. Works better with skipping 2
+  nb_waypoints_to_skip: 1
+  nb_waypoints_to_skip_test: 0
+  test_waypoint_dt: 0.25
+
+  # 999 takes all
+  nb_waypoints_to_keep: 15
+
+  # whether to average waypoints
+  average_waypoints: false
+
+  # how many average waypoints to calculate
+  nb_averaging_waypoints: 10
+
+  node_name: 'DiffusionPolicy'
+  namespace: 'diffusion'
+
+
+  joint_states_length: 66
+  input_state_length: 35 # backwards compat
+  output_action_length: 21 # 6 gofa, 2 wrist, 4 ff, 4 mf, 5 th
+  joint_command_names: # correct order
+    - "gofa1_joint_1"
+    - "gofa1_joint_2"
+    - "gofa1_joint_3"
+    - "gofa1_joint_4"
+    - "gofa1_joint_5"
+    - "gofa1_joint_6"
+    - "lh_WRJ2"
+    - "lh_WRJ1"
+    - "lh_FFJ4"
+    - "lh_FFJ3"
+    - "lh_FFJ2"
+    - "lh_FFJ1"
+    - "lh_MFJ4"
+    - "lh_MFJ3"
+    - "lh_MFJ2"
+    - "lh_MFJ1"
+    - "lh_THJ5"
+    - "lh_THJ4"
+    - "lh_THJ3"
+    - "lh_THJ2"
+    - "lh_THJ1"
+
+  srdf_xml_path: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.srdf'
+  urdf_xml_path: '/home/omnid/dexnex/ws_avatar/src/avatar_master/avatar_moveit_config/config/avatar.urdf'
+
+  use_ema: false
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+
+    # same values as what was trained on
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    beta_start: 0.0001
+    clip_sample: true
+    num_train_timesteps: 100
+    prediction_type: epsilon
+    
+    # taken from train_diffusion_unet_real_hybrid_workspace.yaml
+    set_alpha_to_one: true
+    steps_offset: 0
+
+  # copied from the training config
+  batch_loader:
+    _target_: diffusion_policy.dataset.batch_loader.BatchLoader
+    rb_id: default # unnecessary during inference
+    train_or_val: eval # unnecessary during inference
+    use_dataloader: false # must be false during inference
+    strict: false # required for inference

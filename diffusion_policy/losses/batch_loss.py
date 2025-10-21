@@ -57,7 +57,7 @@ class BatchLoss:
 
         # get the BC loss
         if self.use_bc_loss:
-            actor_loss = self.actor.loss(nbatch, self.rb_id)
+            actor_loss, a0 = self.actor.loss(nbatch, self.rb_id)
             actor_loss = actor_loss.mean()
         else:
             actor_loss = 0.0
@@ -73,7 +73,7 @@ class BatchLoss:
         nbatch = next(self.batch_loader)
 
         # get the actor loss
-        actor_loss = self.actor.loss(nbatch, self.rb_id)
+        actor_loss, a0 = self.actor.loss(nbatch, self.rb_id)
 
         # get the action mse error
         action_mse_error = self.actor_model.get_val_action_mse_error(nbatch, task_id=self.rb_id)
@@ -197,7 +197,7 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         self.current_batch = nbatch # save
 
         # # get the BC loss
-        loss = self.actor.loss(nbatch, self.rb_id)
+        loss, a0 = self.actor.loss(nbatch, self.rb_id)
 
         indices = nbatch["rb_index"]
 
@@ -216,7 +216,7 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         }
         
         # logging
-        globals.LOGGER.log_one(self.rb_id + ": bc_actor_loss", mean_weighted_loss)
+        globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", mean_weighted_loss)
         return losses
     
     def eval(self):
@@ -315,21 +315,24 @@ class DQLBatchLoss(BatchLoss):
     def get_bc_loss(self, is_eval=False):
         # get the BC loss
         bc_loss = utils.InitZeroTensorOnDevice()
+        a0 = None
         
         if utils.StepFreqTrigger(self.freqs['actor']) or is_eval:
-            loss_arr = self.actor.loss(self.current_batch, self.rb_id)
+            loss_arr, a0 = self.actor.loss(self.current_batch, self.rb_id)
             bc_loss = loss_arr.mean()
             
             # hack
             if is_eval:
-                return bc_loss
+                return bc_loss, a0
             
             # log if training
-            globals.LOGGER.log_one(self.rb_id + ": bc_actor_loss", bc_loss)
+            globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", bc_loss)
             
-        return bc_loss
+        return bc_loss, a0
     
-    def compute_loss(self, is_eval=False):
+    def compute_loss(self, 
+                     is_eval=False, 
+                     ):
         """
         compute loss for one batch.
         """
@@ -350,8 +353,16 @@ class DQLBatchLoss(BatchLoss):
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch
         
+        a0 = None
+        
+        # if we need the BC output
+        if True:
+            bc_loss, a0 = self.get_bc_loss(is_eval)
+        
+        # if we're training using BC loss
         if train_actor and self.use_bc_loss:
-            losses['actor'] = self.get_bc_loss(is_eval)
+            losses['actor'] = bc_loss
+            
             # hack
             if is_eval:
                 return losses
@@ -359,13 +370,14 @@ class DQLBatchLoss(BatchLoss):
         # need critic loss if we're training critic, need actor loss if we're using dql
         if train_critic or need_dql_actor_loss:
             # get the DQL losses
-            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id)
+            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0)
             
             if train_critic:
                 losses['critic'] = dql_critic_loss
             
             # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
-            if need_dql_actor_loss and dql_actor_loss is not None:
+            if need_dql_actor_loss and dql_actor_loss is not None and utils.StepFreqTrigger(self.freqs['actor']):
+                # add on the DQL actor loss
                 losses['actor'] = losses['actor'] + self.eta * dql_actor_loss
         
         # we're done

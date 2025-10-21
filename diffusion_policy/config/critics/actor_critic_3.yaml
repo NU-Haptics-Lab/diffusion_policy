@@ -10,7 +10,7 @@ obs_rel_indices: [0] # recall, we stack the channels for the observation history
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 total_num_epochs: 2001
 batches_per_epoch: 100
-batch_size: 64
+batch_size: 32
 val_every: 10
 
 ### Global Control Panel ###
@@ -20,11 +20,11 @@ load:
   - globals
 
 # hack
-resume: true
+resume: false
 resume_tag: latest
 
 tasks_to_use:
-  # - bnb_2cams
+  - bnb_2cams
   # - bnb_1cam
   # - block_transfer
   - sim_hitl
@@ -32,14 +32,14 @@ tasks_to_use:
 # which obs the obs_encoder will use
 obs_keys_to_use:
   - state
-  # - img2 # wrist cam
-  # - img
+  - img2 # wrist cam
+  - img
 
 # which obs the sarsa_sampler will load from the replay buffer
 obs_keys_to_load:
   - state # needed for action_relative_to_state
-  # - img2 # wrist cam
-  # - img
+  - img2 # wrist cam
+  - img
 
 models_to_train:
   - actor
@@ -82,7 +82,7 @@ checkpoint:
 
   format_str: step={global_step:07d}.ckpt
   k: 50 # nb checkpoints to keep
-  checkpoint_every: 200 # how often, in epochs
+  checkpoint_every: 100 # how often, in epochs
   mode: max
   monitor_key: epoch
   use_current_directory: false # use ${output_dir} as the base
@@ -91,7 +91,7 @@ checkpoint:
   resume: ${resume}
   resume_tag: ${resume_tag}
   # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  output_dir: /media/dexnex_ssd/models/actor_critic_2
+  output_dir: /media/dexnex_ssd/models/actor_critic_3
 
 # common data
 shape_meta:

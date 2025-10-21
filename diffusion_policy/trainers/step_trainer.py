@@ -43,6 +43,10 @@ class StepTrainer:
             # reset optimizer gradients
             globals.MODELS.reset() 
             
+            # can skip backprop if the loss is zero (aka the loss was skipped due to freqs)
+            if loss == 0.0:
+                continue
+            
             if key not in globals.CONFIG.models_to_train: #type:ignore
                 continue
             
@@ -59,7 +63,6 @@ class StepTrainer:
         #     if key not in globals.CONFIG.models_to_train:
         #         continue
             
-            dd = {}
             model = globals.MODELS[key]
             
             # if clipping the gradients

@@ -72,7 +72,7 @@ def main(cfg: OmegaConf):
         globals.CONFIG.common_dataset.options.train.num_workers = 0 # type: ignore
         globals.CONFIG.common_dataset.options.train.persistent_workers = False # type: ignore
         globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10 # type: ignore
-        globals.CONFIG.models.models.critic.num_inference_steps = 1 # type: ignore
+        globals.CONFIG.models.models.critic.num_inference_steps = 4 # type: ignore
         
         # test small network
         # globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
@@ -136,6 +136,7 @@ def main(cfg: OmegaConf):
         if input("Save a checkpoint? y/n ") == 'y':
             # checkpoints
             globals.CHECKPOINTER.force_save()
+    print("Done")
 
 if __name__ == "__main__":
     # only need the following if using my meta dataset

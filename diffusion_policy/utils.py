@@ -13,7 +13,7 @@ def StepFreqTrigger(every: int):
     return yes
 
 def InitZeroTensorOnDevice():
-    t = torch.tensor(0, device=globals.CONFIG.device)
+    t = torch.tensor(0, device=globals.CONFIG.device) #type: ignore
     return t
 
 def get_output_dir(_output_dir=None):

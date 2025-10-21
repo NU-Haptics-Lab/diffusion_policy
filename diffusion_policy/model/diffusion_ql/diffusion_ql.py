@@ -40,6 +40,7 @@ class DiffusionQL(nn.Module):
                  use_actor = True,
                  use_tree = False,
                  action_relative_to_state = False,
+                 use_denoise = False,
                  ):
         nn.Module.__init__(self)
         
@@ -50,6 +51,7 @@ class DiffusionQL(nn.Module):
         self.use_actor = use_actor
         self.use_tree = use_tree
         self.action_relative_to_state = action_relative_to_state
+        self.use_denoise = use_denoise
 
         self.critic = critic
         
@@ -57,7 +59,7 @@ class DiffusionQL(nn.Module):
             self.critic_target = copy.deepcopy(self.critic)
             
         # set up the optimizer
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr, weight_decay=1.0e-06)
         
         # device transfer members, since I own them
         device = torch.device(globals.CONFIG.device)
@@ -140,7 +142,8 @@ class DiffusionQL(nn.Module):
         
         # if using double-q learning
         if self.use_double_q:
-            # this will pose issues when q-values are negative ..........................................................................
+            # this will pose issues when q-values are negative ?
+            # actually maybe that's intended. it's a pessimistic q-value
             target_qm = torch.min(target_q1, target_q2)
         else:
             target_qm = target_q1
@@ -158,10 +161,13 @@ class DiffusionQL(nn.Module):
         # logging
         dd = {}
         if self.use_tree:
-            dd[self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
+            dd["qval/" + self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
         else:
-            dd[self.get_mode_string() + ": avg q-value"] = current_q1.mean()
+            dd["qval/" + self.get_mode_string() + ": avg q-value"] = current_q1.mean()
         globals.LOGGER.log(dd)
+        
+        if reward.mean() > 0.0:
+            pass
         
         return critic_loss
     
@@ -198,14 +204,23 @@ class DiffusionQL(nn.Module):
 
         return metric
     
-    def LossActor(self, state, new_action, options):
+    def LossActor(self, state, new_action, options,
+                  a0 = None,
+                  ):
         """
         Use the uncorrupted (a.k.a. ground truth) state and the denoised action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
         """
-        if self.use_target_network:
-            q1_new_action, q2_new_action = self.critic_target(state, new_action, options)
+        if self.use_denoise:
+            actions = new_action
         else:
-            q1_new_action, q2_new_action = self.critic(state, new_action, options)
+            assert(a0 is not None)
+            actions = a0
+        
+        
+        if self.use_target_network:
+            q1_new_action, q2_new_action = self.critic_target(state, actions, options)
+        else:
+            q1_new_action, q2_new_action = self.critic(state, actions, options)
         
         
         
@@ -216,7 +231,7 @@ class DiffusionQL(nn.Module):
         # https://arxiv.org/pdf/2106.06860 
         # the denominator is supposed to be a normalization term and NOT differentiated over
         # tensor.detach() excludes that term from the gradient calculation
-        if False: # TEST self.use_double_q:
+        if self.use_double_q:
             if np.random.uniform() > 0.5:
                 q_loss = - q1_new_action.mean() / q2_new_action.abs().mean().detach()
             else:
@@ -258,11 +273,14 @@ class DiffusionQL(nn.Module):
         
         return nbatch
         
-    def Loss(self, nbatch_dict, new_action, next_action, task_id):
+    def Loss(self, nbatch_dict, new_action, next_action, task_id,
+             a0 = None,
+             ):
         """
         new_action - grad-full denoised observation using the actor
         next_action - grad-free denoised next observation using the actor
         task_id - task identifier
+        a0 - grad-full diffusion policy outputs, replaces new_action
         
         new_action should be used to compute the DQL actor loss
         next_action should be used to compute the DQL critic loss
@@ -270,6 +288,7 @@ class DiffusionQL(nn.Module):
         dd = {}
         if self.action_relative_to_state:
             nbatch_dict = self.ActionRelativeToState(nbatch_dict)
+            # a0?
         
         options = self.MakeOptions(task_id)
         models_to_train: list = globals.CONFIG.models_to_train #type:ignore
@@ -288,9 +307,9 @@ class DiffusionQL(nn.Module):
         state = nbatch_dict['obs']
         
         # training the actor
-        if "actor" in models_to_train and new_action is not None:
+        if "actor" in models_to_train and (new_action is not None or a0 is not None):
             # get the actor loss using (s, a)
-            actor_loss = self.LossActor(state, new_action, options)
+            actor_loss = self.LossActor(state, new_action, options, a0)
             
             # actor logging
             dd[self.get_mode_string() + " mode. " + task_id + ": dql_actor_loss"] = actor_loss

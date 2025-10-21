@@ -43,8 +43,10 @@ class QLDenser(nn.Module):
         self.model = nn.Sequential(nn.Linear(input_dim, hidden_dim),
                     nn.Mish(),
                     nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
                     nn.Mish(),
                     nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
                     nn.Mish(),
                     )
         
