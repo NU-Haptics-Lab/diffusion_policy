@@ -90,6 +90,10 @@ def main(cfg: OmegaConf):
         # for key in globals.CONFIG.step_freqs:
         #     globals.CONFIG.step_freqs[key] = 1
         
+        # testing rollouts
+        globals.CONFIG.session_trainer.rollouts.freq = 1 # type:ignore
+        globals.CONFIG.session_trainer.rollouts.num_rollouts_per_trigger = 1 # type:ignore
+        
         torch.autograd.set_detect_anomaly(True) # type: ignore
     
     # resolve immediately so all the ${now:} resolvers

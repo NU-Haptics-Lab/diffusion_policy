@@ -7,9 +7,11 @@ class ReplayBufferLoader:
 
     def __init__(self,
         rb_paths: dict,
-        do_loading: bool = True
+        do_loading: bool = True,
+        modes = {},
             ):
         self.rb_paths = rb_paths
+        self.modes = modes
         
         # setting for actually loading the replay buffer or just creating the structure. Used during inference.
         self.do_loading = do_loading
@@ -20,7 +22,7 @@ class ReplayBufferLoader:
             # this will load directly from disk, and not into RAM. There's no noticeable slowdown. You really don't want to load into RAM, so that we don't save the entire dataset into each checkpoint during pickling
 
             if self.do_loading:
-                rb = ReplayBuffer.create_from_path(val)
+                rb = ReplayBuffer.create_from_path(val, mode=self.modes[key])
                 self.rbs[key] = rb
                 
                 print(key + ": replay buffer nb datapoints: ", self.rbs[key].n_steps) 
@@ -31,6 +33,11 @@ class ReplayBufferLoader:
                 
             
     def __getitem__(self, key):
+        # key check
+        if key not in self.rbs:
+            print("WARNING: {} not in replay buffer loader!".format(key))
+            return None
+
         return self.rbs[key]
     
     def __len__(self):

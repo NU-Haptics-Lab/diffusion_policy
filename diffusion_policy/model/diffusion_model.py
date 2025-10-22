@@ -1,7 +1,6 @@
 from typing import Dict
 import math
 import torch
-import torch.func
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
