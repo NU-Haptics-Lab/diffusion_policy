@@ -88,6 +88,7 @@ class TrainAndVal:
             seed=42,
             val_ratio=0.0,
             max_train_episodes=None,
+            whether_to_use = True,
             ):
         self.sampler = sampler
         self.rb_id = sampler.rb_id
@@ -95,10 +96,14 @@ class TrainAndVal:
         self.val_ratio = val_ratio
         self.seed = seed
         self.max_train_episodes = max_train_episodes
+        self.whether_to_use = whether_to_use
 
         self.init()
         
     def init(self):
+        if not self.whether_to_use:
+            return
+        
         # get nb episodes
         nb_episodes = globals.REPLAY_BUFFER_LOADER[self.rb_id].n_episodes # type:ignore
         
@@ -153,6 +158,8 @@ class TrainAndVal:
         self.dd = {}
         self.dd["train"] = self.train_dataloader
         self.dd["val"] = self.val_dataloader
+        
+        print(self.rb_id + ": len train dataset: {}".format(len(self.train_dataloader)))
         
         
     def __getitem__(self, key):

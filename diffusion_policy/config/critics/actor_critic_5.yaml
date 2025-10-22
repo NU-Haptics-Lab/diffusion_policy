@@ -2,15 +2,15 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-4: generating initial RL dataset"
+description: "actor-critic-5: BC + online RL"
 # global controls
 debug: false # 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 2001
+total_num_epochs: 10001
 batches_per_epoch: 100
-batch_size: 64
+batch_size: 32
 val_every: 10
 
 ### Global Control Panel ###
@@ -23,12 +23,13 @@ load:
 resume: false
 resume_tag: latest
 
-tasks_to_use: []
-  # - bnb_2cams
-  # - bnb_1cam
-  # - block_transfer
-  # - sim_hitl
-  # - sim_online_rl
+tasks_to_use:
+  - bnb_2cams
+  - bnb_1cam
+  - block_transfer
+  - sim_hitl
+  - sim_online_rl1
+  - sim_online_rl2
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -42,18 +43,18 @@ obs_keys_to_load:
   # - img2 # wrist cam
   # - img
 
-models_to_train: []
-  # - actor
-  # - critic
+models_to_train:
+  - actor
+  - critic
 
 # irrelevant when using CriticBatchLoss
-models_to_eval: []
-  # - actor
+models_to_eval:
+  - actor
   # - critic
 
 # higher value means less frequent updates
 step_freqs:
-  actor: 2
+  actor: 4
   critic: 1
 
 # TODO: implement
@@ -62,7 +63,7 @@ max_epochs:
   critic: 401 # to prevent overfitting
 
 use_dql: true
-use_bc_loss: false
+use_bc_loss: true
 action_relative_to_state: false
 ### End Global Control Panel ###
 
@@ -92,7 +93,7 @@ checkpoint:
   resume: ${resume}
   resume_tag: ${resume_tag}
   # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  output_dir: /media/dexnex_ssd/models/actor_critic_2
+  output_dir: /media/dexnex_ssd/models/actor_critic_5
 
 # common data
 shape_meta:
@@ -180,14 +181,16 @@ replay_buffer_loader:
     bnb_1cam: ${data_directory}1cam.reward.zarr
     bnb_2cams: ${data_directory}2cams.reward.zarr
     sim_hitl: ${data_directory}sim_hitl.reward.zarr
-    sim_online_rl: ${data_directory}sim_online_rl.reward.zarr
+    sim_online_rl1: ${data_directory}sim_online_rl1.reward.zarr
+    sim_online_rl2: ${data_directory}sim_online_rl2.reward.zarr
 
   modes:
     block_transfer: r
     bnb_1cam: r
     bnb_2cams: r
     sim_hitl: r
-    sim_online_rl: a
+    sim_online_rl1: r
+    sim_online_rl2: a
 
 
 
@@ -212,19 +215,21 @@ session_trainer:
         bnb_1cam: ${common_wbatch_loss}
         bnb_2cams: ${common_wbatch_loss}
         sim_hitl: ${common_wbatch_loss}
-        sim_online_rl: ${common_wbatch_loss}
+        sim_online_rl1: ${common_wbatch_loss}
+        sim_online_rl2: ${common_wbatch_loss}
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 1
-      num_rollouts_per_trigger: 5
+      freq: 400 # in steps
+      num_rollouts_per_trigger: 1
+      rb_id: sim_online_rl2
 
       evaluator:
         _target_: evaluation.eval.Inference
 
         batch_loader:
           _target_: diffusion_policy.dataset.batch_loader.BatchLoader
-          rb_id: sim_online_rl
+          rb_id: sim_online_rl2
           train_or_val: eval # unnecessary during inference
           use_dataloader: false # must be false during inference
           strict: false # required for inference
@@ -232,7 +237,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: sim_online_rl
+        task_id: sim_online_rl2 # could experiment with sim_hitl
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -245,7 +250,8 @@ session_trainer:
       bnb_1cam: ${common_wbatch_loss}
       bnb_2cams: ${common_wbatch_loss}
       sim_hitl: ${common_wbatch_loss}
-      sim_online_rl: ${common_wbatch_loss}
+      sim_online_rl1: ${common_wbatch_loss}
+      sim_online_rl2: ${common_wbatch_loss}
 
 
 
@@ -256,7 +262,7 @@ common_wbatch_loss:
   # children
   batch_loss:
     _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
-    eta: 1.0e+0 # weight of the dql actor loss
+    eta: 1e-2 # weight of the dql actor loss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
 
@@ -265,21 +271,20 @@ common_wbatch_loss:
       _target_: diffusion_policy.dataset.batch_loader.BatchLoader
       rb_id: default
       train_or_val: train
-      use_dataloader: false
 
 dataloaders:
   block_transfer: ${common_dataset}
   bnb_1cam: ${common_dataset}
   bnb_2cams: ${common_dataset}
   sim_hitl: ${common_dataset}
-  sim_online_rl: ${common_dataset}
+  sim_online_rl1: ${common_dataset}
+  sim_online_rl2: ${common_dataset}
 
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
-  whether_to_use: false # turn off when generating sim datasets
 
   options:
     common:
@@ -337,7 +342,7 @@ models:
 
           qlmodel:
             _target_: diffusion_policy.model.diffusion_ql.critic_arch.QLModel
-            trunk_hidden_dim: 256
+            trunk_hidden_dim: 512
             leaf_hidden_dim: 64
 
             obs_encoder_maker:
@@ -417,19 +422,19 @@ override:
       step_trainer: 
         w_batch_losses:
           block_transfer: 
-            weight: 0.2
+            weight: 0.5
             batch_loss: 
               batch_loader:
                 rb_id: block_transfer
 
           bnb_1cam:
-            weight: 0.2
+            weight: 0.5
             batch_loss:
               batch_loader:
                 rb_id: bnb_1cam
 
           bnb_2cams:
-            weight: 0.4
+            weight: 0.5
             batch_loss: 
               batch_loader:
                 rb_id: bnb_2cams
@@ -440,11 +445,18 @@ override:
               batch_loader:
                 rb_id: sim_hitl
 
-          sim_online_rl:
+          sim_online_rl1:
+            weight: 0.5
+            batch_loss: 
+              batch_loader:
+                rb_id: sim_online_rl1
+              use_bc_loss: false
+
+          sim_online_rl2:
             weight: 1.0
             batch_loss: 
               batch_loader:
-                rb_id: sim_online_rl
+                rb_id: sim_online_rl2
               use_bc_loss: false
     epoch_evaluator:
       w_batch_losses:
@@ -476,11 +488,19 @@ override:
               rb_id: sim_hitl
               train_or_val: val
 
-        sim_online_rl:
+        sim_online_rl1:
+          weight: 0.5
+          batch_loss: 
+            batch_loader:
+              rb_id: sim_online_rl1
+              train_or_val: val
+            use_bc_loss: false
+
+        sim_online_rl2:
           weight: 1.0
           batch_loss: 
             batch_loader:
-              rb_id: sim_online_rl
+              rb_id: sim_online_rl2
               train_or_val: val
             use_bc_loss: false
 
@@ -497,9 +517,12 @@ override:
     sim_hitl:
       sampler:
         rb_id: sim_hitl
-    sim_online_rl:
+    sim_online_rl1:
       sampler:
-        rb_id: sim_online_rl
+        rb_id: sim_online_rl1
+    sim_online_rl2:
+      sampler:
+        rb_id: sim_online_rl2
 
   models:
     models:

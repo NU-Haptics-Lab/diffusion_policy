@@ -112,8 +112,6 @@ class Rollout:
             img,
             img2
         )
-        
-        pass
     
     def save_obs(self, state, img, img2):
         self.state = state
@@ -124,37 +122,52 @@ class Rollout:
         total_reward = 0.0
         samples = []
         
+        new_obs = None
+        done = False
+        infos = None
+        
         for action in actions:
         # step the env
             new_obs, rewards, terminated, truncated, infos = self.env.step(action) #type:ignore
             
+            # save sample using the old obs
+            self.save_samples(action, rewards, samples)
+            
+            # convert the obs
+            state, img, img2 = self.convert_obs(new_obs)
+            
+            # save the obs
+            self.save_obs(state, img, img2)
+            
             done = terminated or truncated
             
-            total_reward += rewards
+            total_reward += float(rewards)
             
             if done:
                 break
             
-        return new_obs, total_reward, done, infos
+        return samples, new_obs, total_reward, done, infos
         
     def one_rollout(self):
         """
         Run one rollout
         """
         samples = []
+        total_reward = 0.0
         done = False
         while not done:
             # get the action trajectory
-            actions = self.evaluator.infer()
+            actions: torch.tensor = self.evaluator.infer() #type:ignore
             actions = torch.squeeze(actions)
             actions = actions.numpy()
             
             # none protection
             if actions is not None:
                 # execute the full trajectory
-                new_obs, rewards, dones, infos = self.step_trajectory(actions)
+                new_samples, new_obs, rewards, dones, infos = self.step_trajectory(actions)
                 
-                self.save_samples(actions, rewards, samples)
+                # append all new samples
+                samples += new_samples
                 
                 # convert the obs
                 state, img, img2 = self.convert_obs(new_obs)
@@ -170,11 +183,21 @@ class Rollout:
                 
                 if dones:
                     done = True
+                    
+                # logging
+                total_reward += rewards
                 
+        # logging
+        globals.LOGGER.log_one("rollout/ep_reward", total_reward)
+            
         return samples
     
     def save_samples(self, actions, rewards, samples):
         # save the sample using the old obs, current action, current reward
+        assert(self.state is not None)
+        assert(self.img is not None)
+        assert(self.img2 is not None)
+        
         data = {
             'state': self.state,
             'img': self.img,
@@ -283,76 +306,3 @@ class Rollout:
             # use the replay buffer to write to disk
             rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] # type:ignore
             rb.add_episode(data_dict, compressors='disk')
-            
-    
-    def save_data(self,
-                  image_,
-                  image2_,
-                  robot_state,
-                  avatar_state_,
-                  episode,
-                  administer_reward,
-                  ):
-        # check for image data
-        if len(image_.data) == 0 or len(image2_.data) == 0:
-            return
-        
-        # assemble the observation state
-        # using https://github.com/NU-Haptics-Lab/DexNexSimulationIntegration/issues/63
-        d = np.array(avatar_state_.data)
-        
-        joint_state = np.concatenate((
-            d[0:16], # gofa, wr, ff, mf
-            d[25:30] # th
-        )) # correct order
-        
-        ff_pos = d[158:161]
-        mf_pos = d[165:168]
-        th_pos = d[186:189]
-        
-        obs_state_data_np = np.concatenate((
-            joint_state,
-            biotac_.values[:],
-            th_pos,
-            ff_pos,
-            mf_pos,
-            ))
-        
-        # actions only include the gofa, wr, ff, th
-        action_state_data_np = np.array(joint_cmd_.position)[TASK_MASK]
-        
-        ## Image Proc
-        obs_image_data_np_reshaped = proc_img(image_, (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_NB_CHANNELS))
-        img2 = proc_img(image2_, (CAM2_H, CAM2_W, IMAGE_NB_CHANNELS))
-                
-        # crop the image
-        obs_image_data_np_cropped = obs_image_data_np_reshaped
-        
-        img_moveaxis = resize_img(obs_image_data_np_cropped)
-        img2_moveaxis = resize_img(img2)
-        
-        ## construct output vars
-        output_img = img_moveaxis
-        output_img2 = img2_moveaxis
-        output_state = obs_state_data_np
-        output_action = action_state_data_np
-        
-        # reward logic -- +1.0 if a block was transferred, -0.1 otherwise
-        reward = 0.0
-        if administer_reward:
-            reward += reward_value
-            
-            # reward has been captured, so we can now deactivate this flag
-            administer_reward = False
-        
-        # construct the data dict
-        data = {
-            'state': np.float32(output_state),
-            'img': output_img,
-            'img2': output_img2,
-            'action': np.float32(output_action),
-            'reward': np.float32(reward),
-        }
-        
-        # append the data to the episode
-        episode.append(data)

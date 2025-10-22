@@ -74,8 +74,20 @@ class Inference:
         self.image2_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
         self.state_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
         
+        # make the scheduler
+        self.noise_scheduler = DDIMScheduler(
+            beta_end=0.02,
+            beta_schedule="squaredcos_cap_v2",
+            beta_start=0.0001,
+            clip_sample=True,
+            num_train_timesteps=100,
+            prediction_type="epsilon"
+        )
+        self.noise_scheduler.set_timesteps(20)
+        
     def set_policy(self, policy):
         self.policy = policy
+        self.original_policy_noise_scheduler = self.policy.noise_scheduler
         
     def save_data(self,
         state,
@@ -99,9 +111,15 @@ class Inference:
         
         # get observation
         obs_dict_np = self.GetObs()
+            
+        # replace the policy's scheduler
+        self.policy.noise_scheduler = self.noise_scheduler
         
         # run inference
         action = self.RunInference(obs_dict_np)
+        
+        # put the original back in
+        self.policy.noise_scheduler = self.original_policy_noise_scheduler
         
         return action
 

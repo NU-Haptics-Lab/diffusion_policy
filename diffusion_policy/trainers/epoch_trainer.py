@@ -5,6 +5,7 @@ from .common import CalcSumLoss, CalcSumEval
 from diffusion_policy.utils import EveryEpoch
 import tqdm
 import numpy as np
+from diffusion_policy.rollout import Rollout
 
 class Epoch:
     """
@@ -83,12 +84,12 @@ class EpochTrainer(Epoch):
 
     def __init__(self,
             step_trainer: StepTrainer,
-            nb_batches: int
+            nb_batches: int,
+            rollouts: Rollout = None,
             ):
         self.step_trainer = step_trainer
         self.nb_batches = nb_batches
-        
-
+        self.rollouts = rollouts
 
     def train(self):
         """
@@ -100,6 +101,10 @@ class EpochTrainer(Epoch):
         for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Training epoch {globals.EPOCH}", leave=False):
             # train for one step
             self.step_trainer.train()
+            
+            # rollouts
+            if self.rollouts is not None:
+                self.rollouts.run()
 
             # update the global step count
             globals.STEP += 1

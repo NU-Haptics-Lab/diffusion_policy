@@ -48,6 +48,12 @@ class QLDenser(nn.Module):
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
                     nn.Mish(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.Mish(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.Mish(),
                     )
         
     def forward(self, inputs):
