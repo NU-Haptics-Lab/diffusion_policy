@@ -14,7 +14,8 @@ from diffusion_policy.common.sarsa_sampler import DatasetSampler, Indices
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
 from diffusion_policy.model.model import ModelEmaOptim
-from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
+from diffusion_policy.model.diffusion_ql.attractor import Attractor
+from diffusion_policy.model.diffusion_ql.attractor import EnergyPenalty
 
 from diffusion_policy.common.pytorch_util import dict_tensor_to
 from diffusion_policy import utils
@@ -358,6 +359,9 @@ class DQLBatchLoss(BatchLoss):
         # if we need the BC output
         if True:
             bc_loss, a0 = self.get_bc_loss(is_eval)
+            
+        # save
+        self.a0 = a0
         
         # if we're training using BC loss
         if train_actor and self.use_bc_loss:
@@ -398,6 +402,52 @@ class DQLBatchLoss(BatchLoss):
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error
     
+class AttractorLoss(DQLBatchLoss):
+    """
+    With an attractor.
+    
+    """
+    def __init__(self,
+                 attractor: Attractor,
+                 energy_penalty: EnergyPenalty,
+                 *args,
+                 **kwargs,
+                ):
+        super().__init__(*args, **kwargs)
+        
+        self.attractor = attractor
+        self.energy_penalty = energy_penalty
+        
+    def compute_loss(self, 
+                     is_eval=False, 
+                     ):
+        losses = super().compute_loss(is_eval)
+        
+        # somehow get a0
+        a0 = self.a0
+        state = self.current_batch['obs']['state']
+        
+        # none protection
+        if (a0 is None) or (state is None):
+            return losses
+            
+        # call the attractor
+        l = self.attractor.forward(state, a0)
+        
+        lmean = l.mean()
+        
+        losses['actor'] += lmean
+            
+        # call the energy penalty
+        l = self.energy_penalty.forward(state, a0)
+        
+        lmean = l.mean()
+        
+        losses['actor'] += lmean
+        
+        globals.LOGGER.log_one("AttractorLoss/lmean", lmean)
+        
+        return losses
 
 class CriticBatchLoss(BatchLoss):
     """

@@ -11,7 +11,7 @@ gradient_accumulate_every: 1 # may move this to ModelandEma later
 total_num_epochs: 10001
 batches_per_epoch: 100
 batch_size: 32
-val_every: 10
+val_every: 25
 
 ### Global Control Panel ###
 load:
@@ -20,7 +20,7 @@ load:
   - globals
 
 # hack
-resume: false
+resume: true
 resume_tag: latest
 
 tasks_to_use:
@@ -220,9 +220,11 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 400 # in steps
+      freq: 200 # in steps
       num_rollouts_per_trigger: 1
       rb_id: sim_online_rl2
+      use_online_rollout: true
+      rollout_num_actions: 5
 
       evaluator:
         _target_: evaluation.eval.Inference
@@ -237,7 +239,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: sim_online_rl2 # could experiment with sim_hitl
+        task_id: sim_online_rl2 # could experiment with sim_hitl for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl leaf doesn't have the same penalty as sim_online_rl2?)
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -261,8 +263,8 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.DQLBatchLoss
-    eta: 1e-2 # weight of the dql actor loss
+    _target_: diffusion_policy.losses.batch_loss.AttractorLoss
+    eta: 1e-3 # weight of the dql actor loss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
 
@@ -271,6 +273,22 @@ common_wbatch_loss:
       _target_: diffusion_policy.dataset.batch_loader.BatchLoader
       rb_id: default
       train_or_val: train
+
+    attractor:
+      _target_: diffusion_policy.model.diffusion_ql.attractor.Attractor
+      weight: 0.025
+
+      # for normalizing
+      batch_loader:
+        _target_: diffusion_policy.dataset.batch_loader.BatchLoader
+        rb_id: sim_online_rl2
+        train_or_val: eval # unnecessary during inference
+        use_dataloader: false # must be false during inference
+        strict: false # required for inference
+
+    energy_penalty:
+      _target_: diffusion_policy.model.diffusion_ql.attractor.EnergyPenalty
+      weight: 0.001
 
 dataloaders:
   block_transfer: ${common_dataset}

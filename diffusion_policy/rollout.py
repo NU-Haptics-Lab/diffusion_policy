@@ -31,46 +31,51 @@ class Rollout:
                  freq = 10,
                  num_rollouts_per_trigger = 10,
                  rb_id = "sim_online_rl",
+                 use_online_rollout = True,
+                 rollout_num_actions = 10,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
         self.num_rollouts_per_trigger = num_rollouts_per_trigger
         self.rb_id = rb_id
+        self.use_online_rollout = use_online_rollout
+        self.rollout_num_actions = rollout_num_actions
         
         self.setup()
         
     def setup(self):
-        # Register environment with gym globally
-        gym.envs.register(id="DexnexGym-v0", entry_point="avatar_drake_sim.rl.dexnex_gym:DexnexGymEnv") #type:ignore
+        if self.use_online_rollout:
+            # Register environment with gym globally
+            gym.envs.register(id="DexnexGym-v0", entry_point="avatar_drake_sim.rl.dexnex_gym:DexnexGymEnv") #type:ignore
 
-        class Args:
-            task = "box-and-blocks"
-            debug = globals.CONFIG.debug #type:ignore
-            test = globals.CONFIG.debug #type:ignore
-            profile = False
-        
-        configs = load_yaml_config()
-        configs['_rl_temp'] = {}        # Only way to pass additional variables from DexnexGym creation
-        USERNAME = 'alienware'
-        configs['filepaths'] = configs['filepaths'][USERNAME]
-        
-        if not configs['rl_params']['use_rgb'] and configs['rl_params']['use_depth']:
-            print("Training with depth images and not RGB is currently not supported.") 
-            return
-        
-        # If not using left hand, lock left hand joints and leave out of action space
-        if not configs['rl_params']['use_contact_forces']:
-            if 'lh_' not in configs['task_params']['lock_targets']: configs['task_params']['lock_targets'].append('lh_')
-            if 'rh_' not in configs['task_params']['lock_targets']: configs['task_params']['lock_targets'].append('rh_')
+            class Args:
+                task = "box-and-blocks"
+                debug = globals.CONFIG.debug #type:ignore
+                test = globals.CONFIG.debug #type:ignore
+                profile = False
             
-        
-        self.env = gym.make("DexnexGym-v0", configs=configs, args=Args)
-        
-        # setup the evaluator
-        # get the model
-        actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
-        policy = actor.get_model()
-        self.evaluator.set_policy(policy)
+            configs = load_yaml_config()
+            configs['_rl_temp'] = {}        # Only way to pass additional variables from DexnexGym creation
+            USERNAME = 'alienware'
+            configs['filepaths'] = configs['filepaths'][USERNAME]
+            
+            if not configs['rl_params']['use_rgb'] and configs['rl_params']['use_depth']:
+                print("Training with depth images and not RGB is currently not supported.") 
+                return
+            
+            # If not using left hand, lock left hand joints and leave out of action space
+            if not configs['rl_params']['use_contact_forces']:
+                if 'lh_' not in configs['task_params']['lock_targets']: configs['task_params']['lock_targets'].append('lh_')
+                if 'rh_' not in configs['task_params']['lock_targets']: configs['task_params']['lock_targets'].append('rh_')
+                
+            
+            self.env = gym.make("DexnexGym-v0", configs=configs, args=Args)
+
+            # setup the evaluator
+            # get the model
+            actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+            policy = actor.get_ema_model()
+            self.evaluator.set_policy(policy)
     
     def run(self):
         """
@@ -78,7 +83,7 @@ class Rollout:
         """
         
         # if our number is called
-        if utils.StepFreqTrigger(self.freq):
+        if self.use_online_rollout and utils.StepFreqTrigger(self.freq):
             
             # rollout n times per trigger
             for n in range(self.num_rollouts_per_trigger):
@@ -126,8 +131,10 @@ class Rollout:
         done = False
         infos = None
         
-        for action in actions:
-        # step the env
+        m = min(len(actions), self.rollout_num_actions)
+        for i in range(m):
+            action = actions[i]
+            # step the env
             new_obs, rewards, terminated, truncated, infos = self.env.step(action) #type:ignore
             
             # save sample using the old obs

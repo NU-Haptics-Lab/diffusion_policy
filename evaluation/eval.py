@@ -74,7 +74,7 @@ class Inference:
         self.image2_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
         self.state_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
         
-        # make the scheduler
+        # make the scheduler, hard-coded
         self.noise_scheduler = DDIMScheduler(
             beta_end=0.02,
             beta_schedule="squaredcos_cap_v2",
