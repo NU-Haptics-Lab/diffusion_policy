@@ -239,7 +239,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: sim_online_rl2 # could experiment with sim_hitl for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl leaf doesn't have the same penalty as sim_online_rl2?)
+        task_id: sim_hitl # could experiment with sim_hitl for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl leaf doesn't have the same penalty as sim_online_rl2?)
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -276,7 +276,7 @@ common_wbatch_loss:
 
     attractor:
       _target_: diffusion_policy.model.diffusion_ql.attractor.Attractor
-      weight: 0.025
+      weight: 0.0025
 
       # for normalizing
       batch_loader:

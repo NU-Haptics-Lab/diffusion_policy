@@ -87,6 +87,9 @@ class Attractor(nn.Module):
         # gofa hack to account for greater link length
         dr[:, :, 0:6] = dr[:, :, 0:6] * 2.0
         
+        # hack so it'll move its digits
+        dr[:, :, 6:] = dr[:, :, 6:] * 0.00
+        
         # power 3 each element (or 2.0, or 1.0)
         ds3 = torch.pow(dr, 1.0)
         
@@ -120,8 +123,8 @@ class EnergyPenalty(Attractor):
         s = self.RelToAbsActions(state, action)
         
         # get the delta state
-        r_shifted_s = s[:, :, 1:]
-        l_shifted_s = s[:, :, 0:-1]
+        r_shifted_s = s[:, 1:, :]
+        l_shifted_s = s[:, :-1, :]
         
         ds = torch.abs(r_shifted_s - l_shifted_s)
         
@@ -131,8 +134,11 @@ class EnergyPenalty(Attractor):
         # gofa hack to account for greater link mass
         ds2[:, :, 0:6] = ds2[:, :, 0:6] * 4.0
         
-        # sum along the action dim
-        sum1 = torch.sum(ds2, dim = 2)
+        # hack so it'll move its digits
+        ds2[:, :, 6:] = ds2[:, :, 6:] * 0.00
+        
+        # sum along the traj dim
+        sum1 = torch.sum(ds2, dim = 1)
         
         # weight
         l = sum1 * self.weight
