@@ -20,7 +20,7 @@ load:
   - globals
 
 # hack
-resume: true
+resume: false
 resume_tag: latest
 
 tasks_to_use:
@@ -207,7 +207,7 @@ session_trainer:
     # children
     step_trainer: 
       _target_: diffusion_policy.trainers.step_trainer.StepTrainer
-      grad_norm: 0.5
+      grad_norm: 1.0
     
       # weighted batch loss dict
       w_batch_losses:
