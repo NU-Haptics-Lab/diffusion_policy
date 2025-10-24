@@ -220,11 +220,11 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 200 # in steps
+      freq: 300 # in steps
       num_rollouts_per_trigger: 1
       rb_id: sim_online_rl2
       use_online_rollout: true
-      rollout_num_actions: 5
+      rollout_num_actions: 10
 
       evaluator:
         _target_: evaluation.eval.Inference
@@ -239,7 +239,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: sim_hitl # could experiment with sim_hitl for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl leaf doesn't have the same penalty as sim_online_rl2?)
+        task_id: sim_online_rl2 # could experiment with sim_hitl for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl leaf doesn't have the same penalty as sim_online_rl2?)
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -264,7 +264,7 @@ common_wbatch_loss:
   # children
   batch_loss:
     _target_: diffusion_policy.losses.batch_loss.AttractorLoss
-    eta: 1e-3 # weight of the dql actor loss
+    eta: 1e-10 # weight of the dql actor loss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
 
@@ -276,7 +276,7 @@ common_wbatch_loss:
 
     attractor:
       _target_: diffusion_policy.model.diffusion_ql.attractor.Attractor
-      weight: 0.0025
+      weight: 1e-6
 
       # for normalizing
       batch_loader:
@@ -345,7 +345,7 @@ models:
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
-        use_tree: true
+        use_tree: false
         use_denoise: false # freq: {1,1}: false: 6.5 it/s (or maybe 11?) vs true: 1.6 it/s --> false is ~4x faster? or might be 8x
         action_relative_to_state: ${action_relative_to_state} # ... the critic might be struggling with action_relative_to_state, maybe a bug or maybe need to do more runs for better statistics
 
@@ -394,7 +394,7 @@ models:
             - 1504
 
           action_relative_to_state: ${action_relative_to_state}
-          use_tree: true
+          use_tree: false
 
       ema:
         _target_: diffusion_policy.model.model.Ema

@@ -82,22 +82,23 @@ class Attractor(nn.Module):
         ds = s - self.n_js
         
         # divide by radius of region of interest
+        # recall, the units are the normalized joint angles
         dr = ds / 1.0
         
         # gofa hack to account for greater link length
-        dr[:, :, 0:6] = dr[:, :, 0:6] * 2.0
+        dr[:, :, 0:6] = dr[:, :, 0:6] * 1.0
         
         # hack so it'll move its digits
-        dr[:, :, 6:] = dr[:, :, 6:] * 0.00
+        dr[:, :, 6:] = dr[:, :, 6:] * 0.1
         
         # power 3 each element (or 2.0, or 1.0)
-        ds3 = torch.pow(dr, 1.0)
+        ds3 = torch.pow(dr, 3.0)
         
         # abs
         abs1 = torch.abs(ds3)
         
         # sum along the action dim
-        sum1 = torch.sum(abs1, dim = 2)
+        sum1 = torch.mean(abs1, dim = 2)
         
         # weight
         l = sum1 * self.weight
@@ -135,7 +136,46 @@ class EnergyPenalty(Attractor):
         ds2[:, :, 0:6] = ds2[:, :, 0:6] * 4.0
         
         # hack so it'll move its digits
-        ds2[:, :, 6:] = ds2[:, :, 6:] * 0.00
+        ds2[:, :, 6:] = ds2[:, :, 6:] * 0.01
+        
+        # sum along the traj dim
+        sum1 = torch.sum(ds2, dim = 1)
+        
+        # weight
+        l = sum1 * self.weight
+        
+        # done, shape should be [batch size, history size, 1]
+        return l
+    
+class JerkPenalty(Attractor):
+    """
+    Penalize high jerk. This is similar to my energy penalty loss (which might not actually be energy), because that uses pow-2, and this uses pow-3
+    
+    Jerk = m/s^3
+    """
+    def setup(self):
+        # no setup needed
+        self.dt = 0.1
+        pass
+    
+    def forward(self, state, action):
+        """
+        compute the energy usage for
+        """
+        # get next state
+        
+        # if relative
+        s = self.RelToAbsActions(state, action)
+        
+        # get the delta state
+        r_shifted_s = s[:, 1:, :]
+        l_shifted_s = s[:, :-1, :]
+        
+        # units: normalized joint states
+        ds = torch.abs(r_shifted_s - l_shifted_s)
+        
+        # units: normalized joint-state / s^3
+        ds2 = ds / self.dt**3
         
         # sum along the traj dim
         sum1 = torch.sum(ds2, dim = 1)

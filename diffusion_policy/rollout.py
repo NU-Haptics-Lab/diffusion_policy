@@ -74,7 +74,9 @@ class Rollout:
             # setup the evaluator
             # get the model
             actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
-            policy = actor.get_ema_model()
+            
+            # ema or regular model?
+            policy = actor.get_model()
             self.evaluator.set_policy(policy)
     
     def run(self):
