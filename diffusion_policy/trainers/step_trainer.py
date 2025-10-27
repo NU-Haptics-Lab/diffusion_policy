@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.utils
 import diffusion_policy.globals as globals
+from diffusion_policy import utils
 
 from diffusion_policy.losses.batch_loss import WeightedBatchLoss
 from diffusion_policy.losses.losses import Losses
@@ -39,6 +40,10 @@ class StepTrainer:
         if loss == 0.0:
             return
         
+        if grad_norm == 0.0:
+            # don't include this loss if the grad-norm is zero
+            return
+        
         # back propagation
         loss.backward(retain_graph=True)
         
@@ -68,7 +73,19 @@ class StepTrainer:
         
         # first get the bc gradient norm
         globals.MODELS.reset() 
-        bc_grad_norm = fcn("bc")
+        if globals.CONFIG.use_bc_loss:
+            bc_grad_norm = fcn("bc")
+            
+            if bc_grad_norm is not None and bc_grad_norm > 0.0:
+                globals.LOGGER.log_one("actor/grad_max/bc", bc_grad_norm)
+        
+        # just realized it only makes sense to tie dql grad to BC grad for datasets that we're cloning behavior from (aka, non online-rl datasets), because it'll be a very large arbitrary value for online-rl datasets
+        
+        # But I think we still want the online experience to inform the actor via the critic
+        
+        # right now I sum up losses across tasks before this method, perhaps it makes more sense to return all losses for all tasks separately and then choose how to deal with them at this level
+        
+        # that'll require a small rewrite, so for now just reduce the sim_online_rlx task weights
         
         # now get the dql gradient norm
         # globals.MODELS.reset() 
@@ -77,30 +94,35 @@ class StepTrainer:
         # reset the gradients so we can limit the DQL gradient first
         globals.MODELS.reset() 
         
-        self.dql_grad_ratio = 0.1
-        if True and bc_grad_norm is not None:
+        # self.dql_grad_ratio = 0.0 # 0.0001
+        if False and bc_grad_norm is not None:
             dql_grad_clip = bc_grad_norm * self.dql_grad_ratio
             
             # now do scaled dql loss. dql grad's are now 10% of bc's
-            dql_max_grad = fcn("dql", dql_grad_clip)
+        # if my understanding of the math is correct, then reducing grad_norm by 10x is the same as reducing l.r. by 10x, AS LONG as this is the only grad term.
+        dql_max_grad = fcn("dql", grad_norm=0.01)
+            
+        if dql_max_grad is not None and dql_max_grad > 0.0:
+            globals.LOGGER.log_one("actor/grad_max/dql", dql_max_grad)
             
             # if dql_max_grad is not None and dql_max_grad > 0.0:
             #     globals.LOGGER.log_one("actor/grad_max/dql", dql_max_grad)
             
             
         # now that the most constraining gradient has been clipped, add back on the bc gradient, NO GRAD NORMING now
-        bc_grad_norm_2 = fcn("bc", 99.0)
+        if globals.CONFIG.use_bc_loss:
+            bc_grad_norm_2 = fcn("bc", 99.0)
             
         # add on the attractor loss, NO GRAD NORMING now
         attractor_max_grad = fcn("attractor", 99.0)
+        if attractor_max_grad is not None and attractor_max_grad > 0.0:
+            globals.LOGGER.log_one("actor/grad_max/attractor", attractor_max_grad)
         
         # finally, step the model if grad > 0.0
-        if attractor_max_grad is not None and attractor_max_grad > 0.0:
+        if utils.GlobalStepFreqTrigger('actor'):
             model.step()
             
         # logging
-        if bc_grad_norm is not None and bc_grad_norm > 0.0:
-            globals.LOGGER.log_one("actor/grad_max/bc", bc_grad_norm)
         
         pass
         

@@ -83,7 +83,7 @@ class Inference:
             num_train_timesteps=100,
             prediction_type="epsilon"
         )
-        self.noise_scheduler.set_timesteps(20)
+        self.noise_scheduler.set_timesteps(50)
         
     def set_policy(self, policy):
         self.policy = policy
@@ -112,13 +112,13 @@ class Inference:
         # get observation
         obs_dict_np = self.GetObs()
             
-        # replace the policy's scheduler
+        # replace the policy's scheduler for inference
         self.policy.noise_scheduler = self.noise_scheduler
         
         # run inference
         action = self.RunInference(obs_dict_np)
         
-        # put the original back in
+        # put the original back in for training
         self.policy.noise_scheduler = self.original_policy_noise_scheduler
         
         return action

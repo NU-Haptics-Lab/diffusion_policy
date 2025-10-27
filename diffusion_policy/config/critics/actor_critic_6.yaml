@@ -2,15 +2,15 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-5: BC + online RL"
+description: "actor-critic-6: BC sanity check"
 # global controls
-debug: true # 
+debug: false # 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 10001
+total_num_epochs: 4001
 batches_per_epoch: 100
-batch_size: 32
+batch_size: 64
 val_every: 40
 
 ### Global Control Panel ###
@@ -20,16 +20,16 @@ load:
   - globals
 
 # hack
-resume: false
+resume: true
 resume_tag: latest
 
 tasks_to_use:
-  - bnb_2cams
+  # - bnb_2cams
   # - bnb_1cam
   # - block_transfer
-  # - sim_hitl # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
+  - sim_hitl # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
   # - sim_online_rl1 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
-  # - sim_online_rl2 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
+  - sim_online_rl2 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -45,16 +45,16 @@ obs_keys_to_load:
 
 models_to_train:
   - actor
-  # - critic
+  - critic
 
 # irrelevant when using CriticBatchLoss
 models_to_eval:
   - actor
-  # - critic
+  - critic
 
 # higher value means less frequent updates
 step_freqs:
-  actor: 1
+  actor: 2
   critic: 1
 
 # TODO: implement
@@ -62,7 +62,7 @@ max_epochs:
   actor: 1001
   critic: 401 # to prevent overfitting
 
-use_dql: false
+use_dql: true
 use_bc_loss: true
 action_relative_to_state: false
 ### End Global Control Panel ###
@@ -220,11 +220,11 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 1000 # in steps
-      num_rollouts_per_trigger: 1
+      freq: 100 # in steps
+      num_rollouts_per_trigger: 10
       rb_id: sim_online_rl2
       use_online_rollout: true
-      rollout_num_actions: 10
+      rollout_num_actions: 5
 
       evaluator:
         _target_: evaluation.eval.Inference
@@ -264,7 +264,7 @@ common_wbatch_loss:
   # children
   batch_loss:
     _target_: diffusion_policy.losses.batch_loss.AttractorLoss
-    eta: 0.0 # weight of the dql actor loss
+    eta: 1.0 # weight of the dql actor loss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
 
@@ -276,7 +276,7 @@ common_wbatch_loss:
 
     attractor:
       _target_: diffusion_policy.model.diffusion_ql.attractor.Attractor
-      weight: 1e-6
+      weight: 0.0 # 1e-6
 
       # for normalizing
       batch_loader:
@@ -288,7 +288,7 @@ common_wbatch_loss:
 
     energy_penalty:
       _target_: diffusion_policy.model.diffusion_ql.attractor.EnergyPenalty
-      weight: 0.001
+      weight: 0.025
 
 dataloaders:
   block_transfer: ${common_dataset}
@@ -351,8 +351,8 @@ models:
 
         # lr decay
         use_lr_decay: true
-        lr_maxt: 100000
-        lr_min: 2.5e-7
+        lr_maxt: 200000
+        lr_min: 1.0e-6
 
         critic:
           _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic
@@ -419,7 +419,7 @@ models:
             - 0.95
             - 0.999
           eps: 1.0e-08
-          lr: 1e-4 # 1e-4
+          lr: 5e-5 # 1e-4
           weight_decay: 1.0e-06
 
 
@@ -464,14 +464,14 @@ override:
                 rb_id: sim_hitl
 
           sim_online_rl1:
-            weight: 1e-4
+            weight: 5e-1
             batch_loss: 
               batch_loader:
                 rb_id: sim_online_rl1
               use_bc_loss: false
 
           sim_online_rl2:
-            weight: 1e-4
+            weight: 5e-1
             batch_loss: 
               batch_loader:
                 rb_id: sim_online_rl2
@@ -507,7 +507,7 @@ override:
               train_or_val: val
 
         sim_online_rl1:
-          weight: 1e-4
+          weight: 5e-1
           batch_loss: 
             batch_loader:
               rb_id: sim_online_rl1
@@ -515,7 +515,7 @@ override:
             use_bc_loss: false
 
         sim_online_rl2:
-          weight: 1e-4
+          weight: 5e-1
           batch_loss: 
             batch_loader:
               rb_id: sim_online_rl2

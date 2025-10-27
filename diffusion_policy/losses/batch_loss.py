@@ -65,21 +65,26 @@ class BatchLoss:
 
         # we're done
         losses = {
-            'actor': actor_loss
+            'actor': 
+                {
+                    'bc': actor_loss,
+                },
         }
-        return actor_loss
+        return losses
     
     def eval(self):
-        # get batch
-        nbatch = next(self.batch_loader)
-
         # get the actor loss
-        actor_loss, a0 = self.actor.loss(nbatch, self.rb_id)
+        t = self.compute_loss()
+        l = t['actor']['bc']
+        loss = l.cpu()
 
         # get the action mse error
-        action_mse_error = self.actor_model.get_val_action_mse_error(nbatch, task_id=self.rb_id)
+        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
 
-        return actor_loss.cpu(), action_mse_error
+        return loss, action_mse_error
+    
+class BCBatchLoss(BatchLoss):
+    pass
     
 class TTREfficiencyWeightedBatchLoss(BatchLoss):
     """
@@ -391,7 +396,7 @@ class DQLBatchLoss(BatchLoss):
             # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
             if need_dql_actor_loss and dql_actor_loss is not None and utils.StepFreqTrigger(self.freqs['actor']):
                 # add on the DQL actor loss
-                losses['actor']['dql'] = dql_actor_loss
+                losses['actor']['dql'] = self.eta * dql_actor_loss
         
         # we're done
         return losses
@@ -451,11 +456,12 @@ class AttractorLoss(DQLBatchLoss):
         # call the energy penalty
         l = self.energy_penalty.forward(state, a0)
         
-        lmean = l.mean()
+        # sum across all waypoints
+        lsum = l.sum()
         
-        losses['actor']['attractor'] += lmean
+        losses['actor']['attractor'] += lsum
         
-        globals.LOGGER.log_one("AttractorLoss/lmean", lmean)
+        globals.LOGGER.log_one("AttractorLoss/lsum", lsum)
         
         return losses
 
@@ -515,7 +521,9 @@ class WeightedBatchLoss:
         # hack
         wloss = {}
         wloss['actor'] = dict_apply(losses['actor'], lambda x: self.weight * x)
-        wloss['critic'] = losses['critic'] * self.weight
+        
+        if 'critic' in losses:
+            wloss['critic'] = losses['critic'] * self.weight
         
         # apply the weighting to each loss
         # wloss = dict_apply(losses, lambda x: self.weight * x)

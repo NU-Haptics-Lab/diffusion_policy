@@ -12,6 +12,10 @@ def StepFreqTrigger(every: int):
     yes = (globals.STEP % every) == 0
     return yes
 
+def GlobalStepFreqTrigger(key):
+    yes = (globals.STEP % globals.CONFIG.step_freqs[key]) == 0
+    return yes
+
 def InitZeroTensorOnDevice():
     t = torch.tensor(0.0, device=globals.CONFIG.device, dtype=torch.float32) #type: ignore
     return t
