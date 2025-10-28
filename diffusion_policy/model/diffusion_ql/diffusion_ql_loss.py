@@ -43,6 +43,7 @@ class CriticLoss(nn.Module):
                  use_random_num_inference_steps = False,
                  randomizer_fcn = False,
                  use_denoise = True, # whether to denoise using a scheduler, or to use the BC noise vector (many more samples)
+                 use_bc_a0 = False,
                  ) -> None:
         nn.Module.__init__(self)
         """
@@ -55,16 +56,20 @@ class CriticLoss(nn.Module):
         self.use_random_num_inference_steps = use_random_num_inference_steps
         self.randomizer_fcn = lambda : np.random.randint(int(0.5*self.num_inference_steps), int(2.0*self.num_inference_steps))
         self.use_denoise = use_denoise
+        self.use_bc_a0 = not self.use_denoise # whether to re-use the a0 computed by the diffusion model's compute_loss method, or to denoise it from scratch. Set to False to be more similar to the DQL paper
         
-        # the same as a 1-step denoise
-        if not self.use_denoise:
-            self.num_inference_steps = 1
+        # the same as a 1-step denoise DON"T USE THIS, IT"LL RESULT IN NANS
+        # if not self.use_denoise:
+        #     self.num_inference_steps = 1
         
         # set the noise scheduler time steps
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         
         
-    def Denoise(self, nobs_dict, use_ema=False, task_id=None):
+    def Denoise(self, 
+                nobs_dict, 
+                use_ema=False, # must be false if doing learning
+                task_id=None):
         """
         Should use the regular model if doing training
         Should use the ema model if doing inference, or doing critic training
@@ -79,7 +84,7 @@ class CriticLoss(nn.Module):
         
         m: DiffusionModel
         if use_ema:
-            m = actor.get_ema_model()
+            m = actor.get_ema_model() #type:ignore
         else:
             m = actor.get_model()
 
@@ -95,7 +100,8 @@ class CriticLoss(nn.Module):
         return naction_pred
         
     def loss(self, nbatch, task_id, 
-             a0 = None
+             a0 = None,
+             timesteps = None,
              ):
         """
         nbatch - normalized batch dictionary with keys: nobs, naction, nreward, <...>
@@ -110,8 +116,7 @@ class CriticLoss(nn.Module):
         models_to_train: list = globals.CONFIG.models_to_train #type:ignore
         
         # training the actor, so we need to use the actor to denoise an observation
-        # also a0 must be none so we must denoise
-        if "actor" in models_to_train and utils.StepFreqTrigger(globals.CONFIG.step_freqs['actor']) and a0 is None:
+        if "actor" in models_to_train and utils.StepFreqTrigger(globals.CONFIG.step_freqs['actor']) and not self.use_bc_a0:
             # want gradients on this one so we can back-prop from the critic through to the actor
             new_action = self.Denoise(nbatch['obs'], task_id=task_id)
         else:
@@ -124,7 +129,13 @@ class CriticLoss(nn.Module):
                 next_action = self.Denoise(nbatch['obs_next'], use_ema=True)
                     
         # returns loss, metric
-        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, None, task_id, a0=a0)
+        dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, None, task_id, a0=a0, timesteps=timesteps)
+        
+        # if we're using denoising, then we'd expect the gradient to pass through the actor self.num_inference_steps times, so divide the loss by that value so that the same l.r. can be used regardless of num_inference_steps
+        if self.use_denoise:
+            assert(dql_actor_loss is not None)
+            dql_actor_loss = dql_actor_loss / self.num_inference_steps
+            
         
         return dql_actor_loss, dql_critic_loss
         

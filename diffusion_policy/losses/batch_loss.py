@@ -58,7 +58,7 @@ class BatchLoss:
 
         # get the BC loss
         if self.use_bc_loss:
-            actor_loss, a0 = self.actor.loss(nbatch, self.rb_id)
+            actor_loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
             actor_loss = actor_loss.mean()
         else:
             actor_loss = 0.0
@@ -203,7 +203,7 @@ class TTREfficiencyWeightedBatchLoss(BatchLoss):
         self.current_batch = nbatch # save
 
         # # get the BC loss
-        loss, a0 = self.actor.loss(nbatch, self.rb_id)
+        loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
 
         indices = nbatch["rb_index"]
 
@@ -322,19 +322,20 @@ class DQLBatchLoss(BatchLoss):
         # get the BC loss
         bc_loss = utils.InitZeroTensorOnDevice()
         a0 = None
+        timesteps = None
         
         if utils.StepFreqTrigger(self.freqs['actor']) or is_eval:
-            loss_arr, a0 = self.actor.loss(self.current_batch, self.rb_id)
+            loss_arr, a0, timesteps = self.actor.loss(self.current_batch, self.rb_id)
             bc_loss = loss_arr.mean()
             
             # hack
             if is_eval:
-                return bc_loss, a0
+                return bc_loss, a0, timesteps
             
             # log if training
             globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", bc_loss)
             
-        return bc_loss, a0
+        return bc_loss, a0, timesteps
     
     def compute_loss(self, 
                      is_eval=False, 
@@ -371,7 +372,7 @@ class DQLBatchLoss(BatchLoss):
         
         # if we need the BC output
         if True:
-            bc_loss, a0 = self.get_bc_loss(is_eval)
+            bc_loss, a0, timesteps = self.get_bc_loss(is_eval)
             
         # save
         self.a0 = a0
@@ -388,7 +389,7 @@ class DQLBatchLoss(BatchLoss):
         # need critic loss if we're training critic, need actor loss if we're using dql
         if train_critic or need_dql_actor_loss:
             # get the DQL losses
-            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0)
+            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps)
             
             if train_critic:
                 losses['critic'] = dql_critic_loss
@@ -436,38 +437,41 @@ class AttractorLoss(DQLBatchLoss):
                      is_eval=False, 
                      ):
         losses = super().compute_loss(is_eval)
-        
-        # somehow get a0
-        a0 = self.a0
-        state = self.current_batch['obs']['state']
-        
-        # none protection
-        if (a0 is None) or (state is None):
-            return losses
-            
-        # call the attractor
-        l = self.attractor.forward(state, a0)
-        
-        lmean = l.mean()
-        
         losses['actor']['attractor'] = utils.InitZeroTensorOnDevice()
-        losses['actor']['attractor'] += lmean
+        
+        if utils.GlobalStepFreqTrigger('actor'):
+            # somehow get a0
+            a0 = self.a0
+            state = self.current_batch['obs']['state']
             
-        # call the energy penalty
-        l = self.energy_penalty.forward(state, a0)
-        
-        # sum across all waypoints
-        lsum = l.sum()
-        
-        losses['actor']['attractor'] += lsum
-        
-        globals.LOGGER.log_one("AttractorLoss/lsum", lsum)
+            # none protection
+            if (a0 is None) or (state is None):
+                return losses
+                
+            # call the attractor
+            l = self.attractor.forward(state, a0)
+            
+            lmean = l.mean()
+            
+            losses['actor']['attractor'] += lmean
+                
+            # call the energy penalty
+            l = self.energy_penalty.forward(state, a0)
+            
+            # sum across all waypoints
+            lsum = l.sum()
+            
+            losses['actor']['attractor'] += lsum
+            
+            globals.LOGGER.log_one("AttractorLoss/lsum", lsum)
         
         return losses
 
 class CriticBatchLoss(BatchLoss):
     """
     Compute actor and critic loss and return them in a dictionary
+    
+    OUT OF DATE
     """
     
     def compute_loss(self):

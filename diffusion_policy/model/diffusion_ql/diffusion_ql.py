@@ -12,6 +12,7 @@ from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.diffusion_ql.critic_arch import DoubleCritic
 from diffusion_policy.common.pytorch_util import optimizer_to
 from diffusion_policy.common import pytorch_util
+from diffusion_policy import utils
 
 import diffusion_policy.globals as globals
 
@@ -206,12 +207,14 @@ class DiffusionQL(nn.Module):
     
     def LossActor(self, state, new_action, options,
                   a0 = None,
+                  timesteps = None,
                   ):
         """
         Use the uncorrupted (a.k.a. ground truth) state and the denoised action from the actor for that state to obtain a predicted cumulative reward, convert it into a loss, and use it update the actor
         """
         if self.use_denoise:
             actions = new_action
+            assert(actions is not None)
         else:
             assert(a0 is not None)
             actions = a0
@@ -222,6 +225,17 @@ class DiffusionQL(nn.Module):
         else:
             q1_new_action, q2_new_action = self.critic(state, actions, options)
         
+        # if not using denoising, and using the BC a0 instead, then we should scale the actor loss as a function of the timesteps. That way, samples closer to real actions have higher weighting since we'd expect them to be more accurate, and samples closer to the noise have less weighting as we'd expect them to be less accurate.
+        if not self.use_denoise:
+            assert(timesteps is not None)
+            # reshape
+            t = torch.reshape(timesteps, q1_new_action.shape)
+            
+            # add 1 to t to protect from division by zero
+            q1_new_action = q1_new_action / (t + 1)
+            
+            if self.use_double_q:
+                q2_new_action = q2_new_action / (t + 1)
         
         
         # TODO: implement use_double_q flag
@@ -274,7 +288,7 @@ class DiffusionQL(nn.Module):
         return nbatch
         
     def Loss(self, nbatch_dict, new_action, next_action, task_id,
-             a0 = None,
+             a0 = None, timesteps = None
              ):
         """
         new_action - grad-full denoised observation using the actor
@@ -307,9 +321,9 @@ class DiffusionQL(nn.Module):
         state = nbatch_dict['obs']
         
         # training the actor
-        if "actor" in models_to_train and (new_action is not None or a0 is not None):
+        if "actor" in models_to_train and (new_action is not None or a0 is not None) and utils.GlobalStepFreqTrigger('actor'):
             # get the actor loss using (s, a)
-            actor_loss = self.LossActor(state, new_action, options, a0)
+            actor_loss = self.LossActor(state, new_action, options, a0, timesteps)
             
             # actor logging
             dd[self.get_mode_string() + " mode. " + task_id + ": dql_actor_loss"] = actor_loss

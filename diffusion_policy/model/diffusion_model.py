@@ -423,13 +423,13 @@ class DiffusionModel(BaseImagePolicy):
         return nresult
     
     def loss(self, nbatch, task_id):
-        loss2, a0 = self.compute_loss(nbatch, task_id=task_id)
+        loss2, a0, timesteps = self.compute_loss(nbatch, task_id=task_id)
         
         # # logging
         # dd = {task_id + ": bc_actor_loss": loss2}
         # globals.LOGGER.log(dd)
         
-        return loss2, a0
+        return loss2, a0, timesteps
             
     def get_val_action_mse_error(self, nbatch, task_id=None):
         if self.action_relative_to_state:
@@ -573,4 +573,4 @@ class DiffusionModel(BaseImagePolicy):
         loss = loss * loss_mask.type(loss.dtype)
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         # loss = loss.mean()
-        return loss, a0
+        return loss, a0, timesteps

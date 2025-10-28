@@ -2,15 +2,15 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-7: bc + dql, a bit sim_hitl data now"
+description: "actor-critic-7: bc + dql, a bit more sim_hitl data now"
 # global controls
-debug: true # 
+debug: false # 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 3001
+total_num_epochs: 2001
 batches_per_epoch: 100
-batch_size: 64
+batch_size: 32
 val_every: 40
 
 ### Global Control Panel ###
@@ -20,8 +20,8 @@ load:
   - globals
 
 # hack
-resume: false
-resume_tag: latest
+resume: true
+resume_tag: bc_100k
 
 tasks_to_use:
   - bnb_2cams
@@ -30,6 +30,7 @@ tasks_to_use:
   - sim_hitl # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
   # - sim_online_rl1 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
   - sim_online_rl2 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
+  - sim_hitl_failures # to train the critic
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -65,6 +66,7 @@ max_epochs:
 use_dql: true
 use_bc_loss: true
 action_relative_to_state: false
+use_denoise: false
 ### End Global Control Panel ###
 
 
@@ -183,6 +185,7 @@ replay_buffer_loader:
     sim_hitl: ${data_directory}sim_hitl.reward.zarr
     sim_online_rl1: ${data_directory}sim_online_rl1.reward.zarr
     sim_online_rl2: ${data_directory}sim_online_rl2.reward.zarr
+    sim_hitl_failures: ${data_directory}sim_hitl_failures.reward.zarr
 
   modes:
     block_transfer: r
@@ -191,6 +194,7 @@ replay_buffer_loader:
     sim_hitl: r
     sim_online_rl1: r
     sim_online_rl2: a
+    sim_hitl_failures: r
 
 
 
@@ -217,10 +221,11 @@ session_trainer:
         sim_hitl: ${common_wbatch_loss}
         sim_online_rl1: ${common_wbatch_loss}
         sim_online_rl2: ${common_wbatch_loss}
+        sim_hitl_failures: ${common_wbatch_loss}
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 1000 # in steps
+      freq: 400 # in steps
       num_rollouts_per_trigger: 1
       rb_id: sim_online_rl2
       use_online_rollout: true
@@ -254,6 +259,7 @@ session_trainer:
       sim_hitl: ${common_wbatch_loss}
       sim_online_rl1: ${common_wbatch_loss}
       sim_online_rl2: ${common_wbatch_loss}
+      sim_hitl_failures: ${common_wbatch_loss}
 
 
 
@@ -288,7 +294,7 @@ common_wbatch_loss:
 
     energy_penalty:
       _target_: diffusion_policy.model.diffusion_ql.attractor.EnergyPenalty
-      weight: 0.025
+      weight: 0.001
 
 dataloaders:
   block_transfer: ${common_dataset}
@@ -297,6 +303,7 @@ dataloaders:
   sim_hitl: ${common_dataset}
   sim_online_rl1: ${common_dataset}
   sim_online_rl2: ${common_dataset}
+  sim_hitl_failures: ${common_dataset}
 
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
@@ -309,7 +316,7 @@ common_dataset:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 6
+      num_workers: 4
       persistent_workers: true
       pin_memory: true
       shuffle: true
@@ -334,6 +341,11 @@ models:
     critic:
       _target_: diffusion_policy.model.diffusion_ql.diffusion_ql_loss.CriticLoss
 
+      noise_scheduler: ${common_noise_scheduler}
+      num_inference_steps: 20 # perhaps this should be randomized?
+      use_random_num_inference_steps: false
+      use_denoise: ${use_denoise}
+
       # # checkpointer
       # checkpointer: ${common_checkpoint}
 
@@ -345,8 +357,8 @@ models:
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
-        use_tree: true
-        use_denoise: false # freq: {1,1}: false: 6.5 it/s (or maybe 11?) vs true: 1.6 it/s --> false is ~4x faster? or might be 8x
+        use_tree: false
+        use_denoise: ${use_denoise} # freq: {1,1}: false: 6.5 it/s (or maybe 11?) vs true: 1.6 it/s --> false is ~4x faster? or might be 8x
         action_relative_to_state: ${action_relative_to_state} # ... the critic might be struggling with action_relative_to_state, maybe a bug or maybe need to do more runs for better statistics
 
         # lr decay
@@ -366,10 +378,6 @@ models:
             obs_encoder_maker:
               ${common_obs_encoder}
 
-
-      noise_scheduler: ${common_noise_scheduler}
-      num_inference_steps: 10 # perhaps this should be randomized?
-      use_random_num_inference_steps: true
 
     actor:
       _target_: diffusion_policy.model.model.ModelEmaOptim
@@ -394,7 +402,7 @@ models:
             - 1504
 
           action_relative_to_state: ${action_relative_to_state}
-          use_tree: true
+          use_tree: false
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -440,19 +448,19 @@ override:
       step_trainer: 
         w_batch_losses:
           block_transfer: 
-            weight: 0.5
+            weight: 0.1
             batch_loss: 
               batch_loader:
                 rb_id: block_transfer
 
           bnb_1cam:
-            weight: 0.5
+            weight: 0.25
             batch_loss:
               batch_loader:
                 rb_id: bnb_1cam
 
           bnb_2cams:
-            weight: 0.5
+            weight: 0.25
             batch_loss: 
               batch_loader:
                 rb_id: bnb_2cams
@@ -476,24 +484,31 @@ override:
               batch_loader:
                 rb_id: sim_online_rl2
               use_bc_loss: false
+
+          sim_hitl_failures:
+            weight: 5e-1
+            batch_loss: 
+              batch_loader:
+                rb_id: sim_hitl_failures
+              use_bc_loss: false
     epoch_evaluator:
       w_batch_losses:
         block_transfer: 
-          weight: 0.5
+          weight: 0.1
           batch_loss: 
             batch_loader:
               rb_id: block_transfer
               train_or_val: val
 
         bnb_1cam:
-          weight: 0.5
+          weight: 0.25
           batch_loss:
             batch_loader:
               rb_id: bnb_1cam
               train_or_val: val
 
         bnb_2cams:
-          weight: 0.5
+          weight: 0.25
           batch_loss: 
             batch_loader:
               rb_id: bnb_2cams
@@ -522,6 +537,14 @@ override:
               train_or_val: val
             use_bc_loss: false
 
+        sim_hitl_failures:
+          weight: 5e-1
+          batch_loss: 
+            batch_loader:
+              rb_id: sim_hitl_failures
+              train_or_val: val
+            use_bc_loss: false
+
   dataloaders:
     block_transfer:
       sampler:
@@ -541,6 +564,9 @@ override:
     sim_online_rl2:
       sampler:
         rb_id: sim_online_rl2
+    sim_hitl_failures:
+      sampler:
+        rb_id: sim_hitl_failures
 
   models:
     models:

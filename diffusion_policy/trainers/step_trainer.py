@@ -35,6 +35,10 @@ class StepTrainer:
         self.w_batch_losses = w_batch_losses
         self.grad_norm = grad_norm
         
+        # global params
+        self.use_bc_loss = globals.CONFIG.use_bc_loss # type:ignore
+        self.models_to_train = globals.CONFIG.models_to_train # type:ignore
+        
     def backprop_model_loss(self, model, loss: torch.Tensor, grad_norm):
         # can skip backprop if the loss is zero (aka the loss was skipped due to freqs)
         if loss == 0.0:
@@ -53,7 +57,9 @@ class StepTrainer:
             
             # this returns the total_norm, PRE normalization
             norms = torch.nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=grad_norm) #type:ignore
-            max_grad_norm = norms.max().item() # norms is a single value
+            
+            # norms is a single value
+            max_grad_norm = norms.max().item() 
         else:
             max_grad_norm = None 
                     
@@ -61,7 +67,7 @@ class StepTrainer:
         
         
     def train_actor(self, actor_losses):
-        if "actor" not in globals.CONFIG.models_to_train: #type:ignore
+        if "actor" not in self.models_to_train:
             return
         
         model = globals.MODELS["actor"]
@@ -73,7 +79,7 @@ class StepTrainer:
         
         # first get the bc gradient norm
         globals.MODELS.reset() 
-        if globals.CONFIG.use_bc_loss:
+        if self.use_bc_loss:
             bc_grad_norm = fcn("bc")
             
             if bc_grad_norm is not None and bc_grad_norm > 0.0:
@@ -86,21 +92,20 @@ class StepTrainer:
         # right now I sum up losses across tasks before this method, perhaps it makes more sense to return all losses for all tasks separately and then choose how to deal with them at this level
         
         # that'll require a small rewrite, so for now just reduce the sim_online_rlx task weights
-        
-        # now get the dql gradient norm
-        # globals.MODELS.reset() 
-        # dql_max_grad = fcn("dql")
-        
+                
         # reset the gradients so we can limit the DQL gradient first
         globals.MODELS.reset() 
         
-        # self.dql_grad_ratio = 0.0 # 0.0001
-        if False and bc_grad_norm is not None:
-            dql_grad_clip = bc_grad_norm * self.dql_grad_ratio
+        self.dql_grad_ratio = 0.01
+        if True and bc_grad_norm is not None:
+            dql_max_grad = bc_grad_norm * self.dql_grad_ratio
+        else:
+            dql_max_grad = 0.05
             
             # now do scaled dql loss. dql grad's are now 10% of bc's
         # if my understanding of the math is correct, then reducing grad_norm by 10x is the same as reducing l.r. by 10x, AS LONG as this is the only grad term.
-        dql_max_grad = fcn("dql", grad_norm=0.01)
+        # I find that when the BC grad is ~0.1 that the behavior is decent, so set the DQL grad_norm = to 0.05??
+        dql_max_grad = fcn("dql", grad_norm=dql_max_grad)
             
         if dql_max_grad is not None and dql_max_grad > 0.0:
             globals.LOGGER.log_one("actor/grad_max/dql", dql_max_grad)
@@ -110,13 +115,13 @@ class StepTrainer:
             
             
         # now that the most constraining gradient has been clipped, add back on the bc gradient, NO GRAD NORMING now
-        if globals.CONFIG.use_bc_loss:
+        if self.use_bc_loss:
             bc_grad_norm_2 = fcn("bc", 99.0)
             
         # add on the attractor loss, NO GRAD NORMING now
-        attractor_max_grad = fcn("attractor", 99.0)
-        if attractor_max_grad is not None and attractor_max_grad > 0.0:
-            globals.LOGGER.log_one("actor/grad_max/attractor", attractor_max_grad)
+        # attractor_max_grad = fcn("attractor", 99.0)
+        # if attractor_max_grad is not None and attractor_max_grad > 0.0:
+        #     globals.LOGGER.log_one("actor/grad_max/attractor", attractor_max_grad)
         
         # finally, step the model if grad > 0.0
         if utils.GlobalStepFreqTrigger('actor'):
@@ -155,7 +160,7 @@ class StepTrainer:
             if loss == 0.0:
                 continue
             
-            if key not in globals.CONFIG.models_to_train: #type:ignore
+            if key not in self.models_to_train:
                 continue
             
             model = globals.MODELS[key]
