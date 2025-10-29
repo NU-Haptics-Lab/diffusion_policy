@@ -72,6 +72,65 @@ class ObsEncoderMaker():
     def get(self):
         return self.obs_encoder
     
+class WeightedFeature:
+    """
+    
+    """
+    def __init__(self,
+        weight: float
+        ):
+        self.weight = weight
+    
+    # TODO: rename eval to validate
+    def compute_weighted_features(self, features):
+        # this batch_loss should already be in val mode
+        wfeatures = self.weight * features
+        return wfeatures
+    
+def CalcMeanFeature(wfeaturess):
+    catd = torch.cat(wfeaturess)
+    out = torch.mean(catd)
+    return out
+
+class ObsEncoder:
+
+
+
+
+    def w_average_the_history(self, nbatch):
+        """
+        encode obs history by calculating a weighted average
+        """
+        
+        # obs's
+        assert('obss' in nbatch)
+
+        wnobs_featuress = []
+        for nobs in nbatch['obss']:
+            nobs_features = self.one_obs_encoder(nobs)
+
+            # weight
+            weighter = WeightedFeature(w)
+            wnobs_features = weighter.compute_weighted_features(nobs_features)
+
+            # add to list
+            wnobs_featuress.append(wnobs_features)
+
+        # get the avg obs
+        nobs_features = CalcMeanFeature(wnobs_featuress)
+
+        return nobs_features
+    
+    def encode_obs(self, nbatch):
+        if self.average_the_history:
+            nobs_features = self.w_average_the_history(nbatch)
+
+        else:
+            nobs = nbatch['obs']
+            nobs_features = self.one_obs_encoder(nobs)
+
+        return nobs_features
+    
 def test():
     import hydra
     from omegaconf import OmegaConf
