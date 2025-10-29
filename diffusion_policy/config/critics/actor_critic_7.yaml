@@ -225,8 +225,8 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 400 # in steps
-      num_rollouts_per_trigger: 1
+      freq: 1 # 400 # in steps
+      num_rollouts_per_trigger: 10
       rb_id: sim_online_rl2
       use_online_rollout: true
       rollout_num_actions: 8
@@ -294,7 +294,7 @@ common_wbatch_loss:
 
     energy_penalty:
       _target_: diffusion_policy.model.diffusion_ql.attractor.EnergyPenalty
-      weight: 0.001
+      weight: 0.000005 # light touch
 
 dataloaders:
   block_transfer: ${common_dataset}

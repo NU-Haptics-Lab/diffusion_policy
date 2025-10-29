@@ -118,10 +118,10 @@ class StepTrainer:
         if self.use_bc_loss:
             bc_grad_norm_2 = fcn("bc", 99.0)
             
-        # add on the attractor loss, NO GRAD NORMING now
-        # attractor_max_grad = fcn("attractor", 99.0)
-        # if attractor_max_grad is not None and attractor_max_grad > 0.0:
-        #     globals.LOGGER.log_one("actor/grad_max/attractor", attractor_max_grad)
+        # add on the attractor loss
+        attractor_max_grad = fcn("attractor", 99.0)
+        if attractor_max_grad is not None and attractor_max_grad > 0.0:
+            globals.LOGGER.log_one("actor/grad_max/attractor", attractor_max_grad)
         
         # finally, step the model if grad > 0.0
         if utils.GlobalStepFreqTrigger('actor'):
