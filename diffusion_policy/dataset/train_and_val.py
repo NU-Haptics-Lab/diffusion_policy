@@ -88,32 +88,46 @@ class TrainAndVal:
             seed=42,
             val_ratio=0.0,
             max_train_episodes=None,
+            whether_to_use = True,
             ):
         self.sampler = sampler
-        rb_id = sampler.rb_id
+        self.rb_id = sampler.rb_id
         self.options = options
+        self.val_ratio = val_ratio
+        self.seed = seed
+        self.max_train_episodes = max_train_episodes
+        self.whether_to_use = whether_to_use
 
-        # get nb episodes
-        nb_episodes = globals.REPLAY_BUFFER_LOADER[rb_id].n_episodes
+        self.init()
         
+    def init(self):
+        if not self.whether_to_use:
+            return
+        
+        # get nb episodes
+        nb_episodes = globals.REPLAY_BUFFER_LOADER[self.rb_id].n_episodes # type:ignore
+        
+        if nb_episodes == 0:
+            raise
+
         val_mask = get_val_mask(
             n_episodes=nb_episodes, 
-            val_ratio=val_ratio,
-            seed=seed)
+            val_ratio=self.val_ratio,
+            seed=self.seed)
         train_mask = ~val_mask
 
         # downsamples if max_train_episodes is not None
         train_mask = downsample_mask(
             mask=train_mask, 
-            max_n=max_train_episodes, 
-            seed=seed)
+            max_n=self.max_train_episodes, 
+            seed=self.seed)
 
         # make train sampler with train mask
-        self.train_sampler = copy.deepcopy(sampler)
+        self.train_sampler = copy.deepcopy(self.sampler)
         self.train_sampler.Init(train_mask)
 
         # make an exact copy
-        self.val_sampler = copy.deepcopy(sampler)
+        self.val_sampler = copy.deepcopy(self.sampler)
         self.val_sampler.Init(val_mask)
 
         # init the original sampler
@@ -125,10 +139,10 @@ class TrainAndVal:
         self.val_dataset = DexNexDataset(self.val_sampler)
         
         # make the train & val config
-        train_cfg = copy.deepcopy(options.common) # type: ignore
-        val_cfg = copy.deepcopy(options.common) # type: ignore
-        OmegaConf.unsafe_merge(train_cfg, options.train) # type: ignore
-        OmegaConf.unsafe_merge(val_cfg, options.val) # type: ignore
+        train_cfg = copy.deepcopy(self.options.common) # type: ignore
+        val_cfg = copy.deepcopy(self.options.common) # type: ignore
+        OmegaConf.unsafe_merge(train_cfg, self.options.train) # type: ignore
+        OmegaConf.unsafe_merge(val_cfg, self.options.val) # type: ignore
         
         # make the train & val dataloader
         self.train_dataloader = torchDataLoader(
@@ -144,6 +158,9 @@ class TrainAndVal:
         self.dd = {}
         self.dd["train"] = self.train_dataloader
         self.dd["val"] = self.val_dataloader
+        
+        print(self.rb_id + ": len train dataset: {}".format(len(self.train_dataloader)))
+        
         
     def __getitem__(self, key):
         return self.dd[key]

@@ -48,3 +48,6 @@ LOGGER: Logging
 
 """ Checkpointer """
 CHECKPOINTER: TopKCheckpointManager
+
+""" Sim Env? """
+# SIM_ENV

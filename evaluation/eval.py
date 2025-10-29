@@ -51,14 +51,180 @@ from ros2_to_rlds_msgs.msg import Float64array
 from moveit.core.robot_model import RobotModel
 from moveit.core.robot_state import RobotState
 
-class EvalDexNex(Node):
+class Inference:
     def __init__(self,
+                 policy,
+                 batch_loader,
                  debug,
+                 analytics,
+                 task_id,
+                 ) -> None:
+        self.batch_loader = batch_loader
+        self.policy = policy
+        self.debug = debug
+        self.analytics = analytics
+        self.task_id = task_id
+        
+        
+        # save n obs steps
+        self.n_obs_steps = globals.CONFIG.models.models.actor.model.model.n_obs_steps # type:ignore
+        
+        # observation history
+        self.image_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
+        self.image2_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
+        self.state_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
+        
+        # make the scheduler, hard-coded
+        self.noise_scheduler = DDIMScheduler(
+            beta_end=0.02,
+            beta_schedule="squaredcos_cap_v2",
+            beta_start=0.0001,
+            clip_sample=True,
+            num_train_timesteps=100,
+            prediction_type="epsilon"
+        )
+        self.noise_scheduler.set_timesteps(50)
+        
+    def set_policy(self, policy):
+        self.policy = policy
+        self.original_policy_noise_scheduler = self.policy.noise_scheduler
+        
+    def save_data(self,
+        state,
+        img,
+        img2
+    ):  
+        # ensure correct dtype (float)
+        # state = state.astype(np.float32, copy=False)
+        
+        # push data to our queues
+        self.state_history.appendleft(state)
+        self.image_history.appendleft(img)
+        self.image2_history.appendleft(img2)
+        
+    def infer(self):
+        
+        # check that we have states and observations
+        if len(self.state_history) != self.n_obs_steps or len(self.image_history) != self.n_obs_steps:
+            print("No state or obs yet.")
+            return
+        
+        # get observation
+        obs_dict_np = self.GetObs()
+            
+        # replace the policy's scheduler for inference
+        self.policy.noise_scheduler = self.noise_scheduler
+        
+        # run inference
+        action = self.RunInference(obs_dict_np)
+        
+        # put the original back in for training
+        self.policy.noise_scheduler = self.original_policy_noise_scheduler
+        
+        return action
+
+    def RunInference(self, obs_dict_np):
+                
+        # run inference
+        with torch.no_grad():
+            s = time.time()
+            
+            # wrap in a data dict, which is what the batch loader expects
+            dd = {"obs": obs_dict_np}
+            
+            # put into 
+            dd_torch = pytorch_util.dict_to_torch(dd)
+            
+            # must normalize ourselves, here, because of the way co-training works with separate normalizers per dataset
+            ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
+            
+            nobs_torch = ndd_torch['obs']
+            
+            # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
+            naction_gpu, naction_rel_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
+
+            # this is now done in self.policy.infer
+            # # naction doesn't include past actions
+            # naction_gpu = nresult_gpu["naction"]
+
+            # must wrap in a dict
+            naction_gpu_dd = {"action": naction_gpu}
+            naction_rel_gpu_dd = {"action": naction_rel_gpu} # debug
+            
+            # unnormalize
+            action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
+            action_rel_dd = self.batch_loader.unnorm_and_transfer(naction_rel_gpu_dd) # debug
+                        
+            action = action_dd['action']
+            
+            if self.debug or self.analytics:
+                print('Inference latency:', time.time() - s)
+        
+            return action
+
+    """
+    From predict_action::217
+    obs_dict: must include "obs" key THIS IS A LIE!!!! lol
+    
+    From pusht_image_dataset.py::78
+    'obs': {
+                'image': image, # T, 3, 96, 96
+                'agent_pos': agent_pos, # T, state_length
+            },
+    """
+    def GetOb(self, h, is_image=False):
+        # convert deque to list of np arrays. 
+        ls = self.DequeToList(h)
+        
+        # convert to np
+        np1 = np.stack(ls)
+        
+        if is_image:
+            # same preprocessing as dexnex_pusht_image_dataset.py.
+            np2 = np.moveaxis(np1, -1, 1) / 255.0
+        else:
+            np2 = np1
+            
+        return np2
+        
+    def GetObs(self):
+        obs_dict_np = {}
+        hs = {
+            'state': self.state_history,
+            'img': self.image_history,
+            'img2': self.image2_history
+        }
+        is_image = {
+            'state': False,
+            'img': True,
+            'img2': True
+        }
+        
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load #type:ignore
+        
+        for key in obs_keys_to_load:
+            obs_dict_np[key] = self.GetOb(hs[key], is_image[key])
+        
+        # done
+        return obs_dict_np
+        
+    """ Convert deque to list """
+    def DequeToList(self, dq):
+        # Reversed since we `deque.appendleft` the MOST RECENT time step but we want our input obs to go from left-to-right from past-to-present
+        # example: deque.appendleft(1); deque.appendleft(2); deque[0] == 2; deque[1] == 1 so we iterate from max idx value to min idx value
+        out = []
+        for idx in reversed(range(len(dq))):
+            out.append(dq[idx])
+            
+        return out
+    
+
+class EvalDexNex(Node, Inference):
+    def __init__(self,
                  test,
                  node_name,
                  namespace,
                  data_frequency,
-                 analytics,
                  use_custom_inference_steps,
                  num_custom_inference_steps,
                  use_max_action_steps,
@@ -89,15 +255,15 @@ class EvalDexNex(Node):
                  use_ema,
                  noise_scheduler: DDIMScheduler,
                  batch_loader: BatchLoader,
-                 task_id,
+                 *args,
+                 use_ros = True,
                  ):
+        Inference.__init__(self, *args)
         # save inputs
-        self.debug = debug
         self.test = test
         self.node_name = node_name
         self.namespace = namespace
         self.data_frequency = data_frequency
-        self.analytics = analytics
         self.use_custom_inference_steps = use_custom_inference_steps
         self.num_custom_inference_steps = num_custom_inference_steps
         self.use_max_action_steps = use_max_action_steps
@@ -128,7 +294,7 @@ class EvalDexNex(Node):
         self.use_ema = use_ema
         self.noise_scheduler = noise_scheduler
         self.batch_loader = batch_loader
-        self.task_id = task_id
+        self.use_ros = use_ros
 
 
         # calculated from input parameters
@@ -141,26 +307,10 @@ class EvalDexNex(Node):
         self.task_mask[8:12] = True # left ff
         self.task_mask[12:16] = True # left mf
         self.task_mask[25:30] = True # left th
-        
-        # save n obs steps
-        self.n_obs_steps = globals.CONFIG.models.models.actor.model.model.n_obs_steps # type:ignore
 
         # IF DEBUGGING
         if self.debug:
             self.inference_frequency = 0.2
-
-        # init ROS node
-        super().__init__(self.node_name, namespace=self.namespace)
-        
-        # declare ROS2 params
-        # self.declare_parameter('input', , "Path to checkpoint") 
-        # self.declare_parameter('inference_frequency', 10.0, "Control inference_frequency in Hz.")
-        # self.declare_parameter('debug', False, "Whether to debug.")
-        
-        # # get ROS2 params
-        # input = self.get_parameter('input')
-        # inference_frequency = self.get_parameter('inference_frequency')
-        # self.DEBUG = self.get_parameter('debug')
             
         ## Analytics
         if self.analytics:
@@ -175,7 +325,6 @@ class EvalDexNex(Node):
 
         else:
             self.policy = actor.get_model()
-
             
         # setup inference scheduler
         if self.use_custom_inference_steps:
@@ -218,20 +367,12 @@ class EvalDexNex(Node):
         self.m_image2_msg = Image()
         self.m_stamp = None
         
-        # observation history
-        self.image_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
-        self.image2_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
-        self.state_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
-        
         # ensure policy is reset
         with torch.no_grad():
             self.policy.reset() # don't think this actually does anything for a Unet policy
         
         # setup ros
         self.setup_ros()
-        
-        if False:
-            self.timer2_ = self.create_timer(1.0 / self.data_frequency, self.TimerRosData) # MUST be ran at the same rate as the difference between states/obs that the policy was trained on.
         
         # moveit
         self.setup_moveit()
@@ -242,6 +383,22 @@ class EvalDexNex(Node):
                 self.SaveRosData()
         
     def setup_ros(self):
+        if not self.use_ros:
+            return
+        
+        # init ROS node
+        super().__init__(self.node_name, namespace=self.namespace)
+        
+        # declare ROS2 params
+        # self.declare_parameter('input', , "Path to checkpoint") 
+        # self.declare_parameter('inference_frequency', 10.0, "Control inference_frequency in Hz.")
+        # self.declare_parameter('debug', False, "Whether to debug.")
+        
+        # # get ROS2 params
+        # input = self.get_parameter('input')
+        # inference_frequency = self.get_parameter('inference_frequency')
+        # self.DEBUG = self.get_parameter('debug')
+        
         ## ROS2 setup
         # QoS, required for image compat
         qos_profile = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
@@ -400,106 +557,16 @@ class EvalDexNex(Node):
             img_np_resized = self.PreProcessRosImgData(self.m_image2, self.ros_image2_shape)
             
             self.image2_history.appendleft(img_np_resized)
-        
-    """ Convert deque to list """
-    def DequeToList(self, dq):
-        # Reversed since we `deque.appendleft` the MOST RECENT time step but we want our input obs to go from left-to-right from past-to-present
-        # example: deque.appendleft(1); deque.appendleft(2); deque[0] == 2; deque[1] == 1 so we iterate from max idx value to min idx value
-        out = []
-        for idx in reversed(range(len(dq))):
-            out.append(dq[idx])
-            
-        return out
-
-    """
-    From predict_action::217
-    obs_dict: must include "obs" key THIS IS A LIE!!!! lol
-    
-    From pusht_image_dataset.py::78
-    'obs': {
-                'image': image, # T, 3, 96, 96
-                'agent_pos': agent_pos, # T, state_length
-            },
-    """
-    def GetObs(self):
-        # convert deque to list of np arrays. 
-        imgs_ls = self.DequeToList(self.image_history)
-        img2s_ls = self.DequeToList(self.image2_history)
-        states_ls = self.DequeToList(self.state_history)
-            
-        # convert to np
-        imgs_np = np.stack(imgs_ls)
-        img2s_np = np.stack(img2s_ls)
-        states_np = np.stack(states_ls)
-        
-        # same preprocessing as dexnex_pusht_image_dataset.py.
-        image = np.moveaxis(imgs_np, -1, 1) / 255.0
-        image2 = np.moveaxis(img2s_np, -1, 1) / 255.0
-        
-        # construct output dictionary
-        obs_dict_np_all = {
-                'img': image,
-                'img2': image2,
-                'state': states_np, # T, state_length
-            }
-        
-        obs_dict_np = {}
-        
-        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load #type:ignore
-        
-        # reduce to only the used obs keys
-        for key, val in obs_dict_np_all.items():
-            if key in obs_keys_to_load:
-                obs_dict_np[key] = val
-        
-        # done
-        return obs_dict_np
 
     def NewEpisode(self):
         with torch.no_grad():
             self.policy.reset()
 
-    def RunInference(self, obs_dict_np):
-                
-        # run inference
-        with torch.no_grad():
-            s = time.time()
-            
-            # wrap in a data dict, which is what the batch loader expects
-            dd = {"obs": obs_dict_np}
-            
-            # put into 
-            dd_torch = pytorch_util.dict_to_torch(dd)
-            
-            # must normalize ourselves, here, because of the way co-training works with separate normalizers per dataset
-            ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
-            
-            nobs_torch = ndd_torch['obs']
-            
-            # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            naction_gpu, naction_rel_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
-
-            # this is now done in self.policy.infer
-            # # naction doesn't include past actions
-            # naction_gpu = nresult_gpu["naction"]
-
-            # must wrap in a dict
-            naction_gpu_dd = {"action": naction_gpu}
-            naction_rel_gpu_dd = {"action": naction_rel_gpu} # debug
-            
-            # unnormalize
-            action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
-            action_rel_dd = self.batch_loader.unnorm_and_transfer(naction_rel_gpu_dd) # debug
-                        
-            action = action_dd['action']
-            
-            if self.debug or self.analytics:
-                print('Inference latency:', time.time() - s)
-        
-            return action
-
     """  """
     def PublishTrajectory(self, action): 
+        if not self.use_ros:
+            return
+        
         # cast into numpy. 
         action = action.numpy()   
         
@@ -550,39 +617,6 @@ class EvalDexNex(Node):
         self.m_stamp = self.m_joint_states_msg.header.stamp # THIS IS THE SAME STAMP AS WHEN THE DIFFUSION POLICY BEGAN EVALUATION, see comment above
         msg.header.stamp = self.m_joint_states_msg.header.stamp
         self.pub_trajectory.publish(msg)
-        
-
-    """ Ran on a timer """
-    def Run(self):
-        # TEST. just save the most recent data here instead of using the timer
-        if True:
-            self.SaveRosData()
-        
-        # check that we have states and observations
-        if len(self.state_history) != self.n_obs_steps or len(self.image_history) != self.n_obs_steps:
-            print("No state or obs yet.")
-            return
-        
-        # get observation
-        obs_dict_np = self.GetObs()
-        
-        # run inference
-        action = self.RunInference(obs_dict_np)
-        
-        # publish results
-        if False:
-            # TEST - send each waypoint separately. It helps with sync'ing the shadow hand and the arm when using JTC & my custom simple traj player.
-            for i in range(NB_WAYPOINTS_TO_SKIP_TEST, NB_WAYPOINTS_TO_KEEP, 1):
-                action = result['action']
-                dd = {'action': action[:, i:i+1, ...]}
-                self.PublishTrajectory(dd)
-                time.sleep(TEST_WAYPOINT_DT)
-        else:
-            self.PublishTrajectory(action)
-        
-        # analytics
-        if self.analytics:
-            self.CalculateAnalytics()
             
     def CalculateAnalytics(self):
         if len(self.ANALYTICS_telemetry_dt_ls) > 2:
@@ -593,6 +627,23 @@ class EvalDexNex(Node):
             
             # reset list
             self.ANALYTICS_telemetry_dt_ls = []
+
+    """ Ran on a timer """
+    def Run(self):
+        # TEST. just save the most recent data here instead of using the timer
+        if self.use_ros:
+            self.SaveRosData()
+            
+        action = self.infer()
+        
+        # publish results if using ros
+        self.PublishTrajectory(action)
+        
+        # analytics
+        if self.analytics:
+            self.CalculateAnalytics()
+            
+        return action
                 
     def Test(self):
         plt.figure()

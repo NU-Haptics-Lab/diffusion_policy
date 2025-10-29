@@ -10,7 +10,7 @@ class SessionTrainer:
     def __init__(self,
         epoch_trainer: EpochTrainer,
         epoch_evaluator: EpochValidator,
-        nb_epochs: int
+        nb_epochs: int = 0,
         ):
         # 
         self.epoch_trainer = epoch_trainer
@@ -23,7 +23,7 @@ class SessionTrainer:
         """
         globals.LOGGER.log_one("epoch", globals.EPOCH) # edge-case compat for when we save <1 epoch after beginning the session
             
-        while globals.EPOCH < globals.CONFIG.total_num_epochs:
+        while globals.EPOCH < globals.CONFIG.total_num_epochs: #type:ignore
             # train for one epoch
             self.epoch_trainer.train()
             

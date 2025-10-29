@@ -5,6 +5,7 @@ from .common import CalcSumLoss, CalcSumEval
 from diffusion_policy.utils import EveryEpoch
 import tqdm
 import numpy as np
+from diffusion_policy.rollout import Rollout
 
 class Epoch:
     """
@@ -62,12 +63,12 @@ class EpochValidator(Epoch):
             if len(val_losses) > 0:
                 val_loss = torch.mean(torch.tensor(val_losses)).item()
                 # log epoch average validation loss
-                step_log['val_loss'] = val_loss
+                step_log['val/loss'] = val_loss
                 
             if len(val_action_mse_errors) > 0:
                 val_action_mse_error = torch.mean(torch.tensor(val_action_mse_errors)).item()
                 # log epoch average validation loss
-                step_log['val_action_mse_error'] = val_action_mse_error
+                step_log['val/action_mse_error'] = val_action_mse_error
             
             #
             globals.LOGGER.log(step_log)
@@ -83,12 +84,12 @@ class EpochTrainer(Epoch):
 
     def __init__(self,
             step_trainer: StepTrainer,
-            nb_batches: int
+            nb_batches: int,
+            rollouts: Rollout = None,
             ):
         self.step_trainer = step_trainer
         self.nb_batches = nb_batches
-        
-
+        self.rollouts = rollouts
 
     def train(self):
         """
@@ -100,6 +101,10 @@ class EpochTrainer(Epoch):
         for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Training epoch {globals.EPOCH}", leave=False):
             # train for one step
             self.step_trainer.train()
+            
+            # rollouts
+            if self.rollouts is not None:
+                self.rollouts.run()
 
             # update the global step count
             globals.STEP += 1

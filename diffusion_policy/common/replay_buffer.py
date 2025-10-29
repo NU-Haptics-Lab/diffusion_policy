@@ -96,7 +96,11 @@ class ReplayBuffer:
         assert('meta' in root)
         assert('episode_ends' in root['meta'])
         for key, value in root['data'].items():
-            assert(value.shape[0] == root['meta']['episode_ends'][-1])
+            if True:
+                if value.shape[0] != root['meta']['episode_ends'][-1]:
+                    value.resize([root['meta']['episode_ends'][-1]] + list(value.shape[1:]))
+                    pass
+            # assert()
         self.root = root
     
     # ============= create constructors ===============
