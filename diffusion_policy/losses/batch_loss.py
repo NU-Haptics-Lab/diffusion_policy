@@ -318,6 +318,10 @@ class DQLBatchLoss(BatchLoss):
     """
     Compute actor and critic loss and return them in a dictionary
     """
+    def get_bc_losses(self):
+        loss_arr, a0, timesteps = self.actor.loss(self.current_batch, self.rb_id)
+            
+        return loss_arr, a0, timesteps
     
     def get_bc_loss(self, is_eval=False):
         # get the BC loss
@@ -326,15 +330,8 @@ class DQLBatchLoss(BatchLoss):
         timesteps = None
         
         if utils.StepFreqTrigger(self.freqs['actor']) or is_eval:
-            loss_arr, a0, timesteps = self.actor.loss(self.current_batch, self.rb_id)
+            loss_arr, a0, timesteps = self.get_bc_losses()
             bc_loss = loss_arr.mean()
-            
-            # hack
-            if is_eval:
-                return bc_loss, a0, timesteps
-            
-            # log if training
-            globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", bc_loss)
             
         return bc_loss, a0, timesteps
     
@@ -459,53 +456,52 @@ class CriticWeightedBC(DQLBatchLoss):
 
         train_actor = "actor" in models_to_train
         train_critic = "critic" in models_to_train
-        need_dql_actor_loss = train_actor and use_dql
         
         # get the batch from the batch loader
         nbatch = self.get_next_batch()
         
-        a0 = None
+        self.a0 = None
         
         # always need bc-loss and a0 now
-        bc_loss, a0, timesteps = self.get_bc_loss(is_eval)
-            
+        loss_arr, a0, timesteps = self.get_bc_losses()
         # save
         self.a0 = a0
         
-        # if we're training using BC loss
-        if train_actor and self.use_bc_loss:
-            # hack
-            losses['actor']['bc'] = bc_loss
-            
-            # hack
-            if is_eval:
-                return losses
-        
-        # need critic loss if we're training critic, need actor loss if we're using dql
-        if train_critic or need_dql_actor_loss:
+        if utils.StepFreqTrigger(self.freqs['critic']):
             # get the DQL losses
-            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps)
+            _, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps)
             
             if train_critic:
                 losses['critic'] = dql_critic_loss
+        
+        if utils.StepFreqTrigger(self.freqs['actor']) or is_eval:
+            # hack
+            if is_eval:
+                bc_loss = loss_arr.mean()
+                losses['actor']['bc'] = bc_loss
+                return losses
             
-            # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
-            if need_dql_actor_loss and dql_actor_loss is not None and utils.StepFreqTrigger(self.freqs['actor']):
+            
+            ## Critic weighted BC
+            if self.use_bc_loss:
                 # eval each BC sample (no backprop) using a0
-                with torch.no_grad():
-                    m = self.critic.get_model()
-                    state = nbatch['obs']
-                    qvals = m(state, a0) # in [-inf, inf]
+                qvals = self.critic.infer(nbatch, a0)
 
-                    # use sigmoid to convert the range to [0, 1]
-                    s = nn.Sigmoid()
-                    sqvals = s(qvals)
+                # use sigmoid to convert the range to [0, 1]
+                s = nn.Sigmoid()
+                sqvals = s(qvals)
+                sqvals2 = torch.squeeze(sqvals)
+                
+                # could weight sqvals by timestep, but try this first
 
                 # weight BC samples w.r.t the sigmoid qvals
-                assert(sqvals.shape == bc_loss.shape)
-                w_bc_loss = bc_loss * sqvals
+                loss_arr2 = loss_arr.mean(axis=1)
+                assert(sqvals2.shape == loss_arr2.shape)
+                w_bc_loss = loss_arr2 * sqvals2
+                
+                assert(w_bc_loss.shape == loss_arr2.shape)
 
-                losses['actor']['bc'] = w_bc_loss
+                losses['actor']['bc'] = w_bc_loss.mean()
         
         # we're done
         return losses

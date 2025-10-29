@@ -53,7 +53,7 @@ from moveit.core.robot_state import RobotState
 
 class Inference:
     def __init__(self,
-                 policy,
+                 policy: DiffusionModel,
                  batch_loader,
                  debug,
                  analytics,
@@ -107,7 +107,7 @@ class Inference:
         # check that we have states and observations
         if len(self.state_history) != self.n_obs_steps or len(self.image_history) != self.n_obs_steps:
             print("No state or obs yet.")
-            return
+            return None, None
         
         # get observation
         obs_dict_np = self.GetObs()
@@ -116,12 +116,45 @@ class Inference:
         self.policy.noise_scheduler = self.noise_scheduler
         
         # run inference
-        action = self.RunInference(obs_dict_np)
+        action, all_actions = self.RunInference(obs_dict_np)
         
         # put the original back in for training
         self.policy.noise_scheduler = self.original_policy_noise_scheduler
         
-        return action
+        return action, all_actions
+    
+    def norm_gpu_obs(self, obs_dict_np):
+        # wrap in a data dict, which is what the batch loader expects
+        dd = {"obs": obs_dict_np}
+        
+        # put into 
+        dd_torch = pytorch_util.dict_to_torch(dd)
+        
+        # must normalize ourselves, here, because of the way co-training works with separate normalizers per dataset
+        ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
+        
+        nobs_torch = ndd_torch['obs']
+        
+        return nobs_torch
+    
+    def unnorm_cpu_action(self, naction_gpu):
+        naction_gpu_dd = {"action": naction_gpu}
+        
+        action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
+        
+        action_cpu = action_dd['action']
+        
+        return action_cpu
+    
+    def norm_gpu_action(self, action_cpu):
+        action_cpu_dd = {"action": action_cpu}
+        
+        naction_dd = self.batch_loader.transfer_and_norm(action_cpu_dd)
+        
+        naction_gpu = naction_dd['action']
+        
+        return naction_gpu
+        
 
     def RunInference(self, obs_dict_np):
                 
@@ -129,38 +162,19 @@ class Inference:
         with torch.no_grad():
             s = time.time()
             
-            # wrap in a data dict, which is what the batch loader expects
-            dd = {"obs": obs_dict_np}
-            
-            # put into 
-            dd_torch = pytorch_util.dict_to_torch(dd)
-            
-            # must normalize ourselves, here, because of the way co-training works with separate normalizers per dataset
-            ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
-            
-            nobs_torch = ndd_torch['obs']
+            nobs_torch = self.norm_gpu_obs(obs_dict_np)
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            naction_gpu, naction_rel_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
-
-            # this is now done in self.policy.infer
-            # # naction doesn't include past actions
-            # naction_gpu = nresult_gpu["naction"]
-
-            # must wrap in a dict
-            naction_gpu_dd = {"action": naction_gpu}
-            naction_rel_gpu_dd = {"action": naction_rel_gpu} # debug
-            
-            # unnormalize
-            action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
-            action_rel_dd = self.batch_loader.unnorm_and_transfer(naction_rel_gpu_dd) # debug
+            naction_gpu, naction_rel_gpu, all_nactions_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
                         
-            action = action_dd['action']
+            future_actions = self.unnorm_cpu_action(naction_gpu)
+            test = self.unnorm_cpu_action(naction_rel_gpu)
+            all_actions = self.unnorm_cpu_action(all_nactions_gpu)
             
             if self.debug or self.analytics:
                 print('Inference latency:', time.time() - s)
         
-            return action
+            return future_actions, all_actions
 
     """
     From predict_action::217
@@ -203,7 +217,11 @@ class Inference:
         obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load #type:ignore
         
         for key in obs_keys_to_load:
-            obs_dict_np[key] = self.GetOb(hs[key], is_image[key])
+            ob = self.GetOb(hs[key], is_image[key])
+            
+            # add the batch dimension
+            ob2 = np.expand_dims(ob, axis=0)
+            obs_dict_np[key] = ob2
         
         # done
         return obs_dict_np

@@ -218,8 +218,13 @@ class BatchLoader:
         self.use_dataloader = use_dataloader
         self.strict = strict
         
+        # only continue if we're being trained off of or special rb_id of default
+        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+        if (self.rb_id not in tasks_to_use) and not self.rb_id == "default":
+            return
+        
         # if we actually want to use a data-loader. might not when we're doing inference but still need the task-ids
-        if self.use_dataloader:
+        if self.use_dataloader and not self.rb_id == "default":
             # get a handle to the dataloader "Node"
             self.dataloader: DataLoader = globals.DATALOADERS[self.rb_id][self.train_or_val]
         

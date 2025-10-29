@@ -98,7 +98,10 @@ class TrainAndVal:
         self.max_train_episodes = max_train_episodes
         self.whether_to_use = whether_to_use
 
-        self.init()
+        # only init if we're being trained off of
+        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+        if self.rb_id in tasks_to_use:
+            self.init()
         
     def init(self):
         if not self.whether_to_use:

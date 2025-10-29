@@ -4,7 +4,7 @@
 ###################################################
 description: "actor-critic-7: bc + dql, a bit more sim_hitl data now"
 # global controls
-debug: true # 
+debug: false # 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
@@ -20,8 +20,8 @@ load:
   - globals
 
 # hack
-resume: false
-resume_tag: bc_100k
+resume: true
+resume_tag: latest
 
 tasks_to_use:
   # - bnb_2cams
@@ -29,8 +29,8 @@ tasks_to_use:
   # - block_transfer
   - sim_hitl # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
   # - sim_online_rl1 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
-  # - sim_online_rl2 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
-  # - sim_hitl_failures # to train the critic
+  - sim_online_rl2 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
+  - sim_hitl_failures # to train the critic
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -95,7 +95,7 @@ checkpoint:
   resume: ${resume}
   resume_tag: ${resume_tag}
   # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  output_dir: /media/dexnex_ssd/models/actor_critic_7
+  output_dir: /media/dexnex_ssd/models/actor_critic
 
 # common data
 shape_meta:
@@ -225,13 +225,13 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 1 # 400 # in steps
-      num_rollouts_per_trigger: 10
+      freq: 100 # in steps
+      num_rollouts_per_trigger: 1
       rb_id: sim_online_rl2
       use_online_rollout: true
       rollout_num_actions: 99
       use_critic_preferred_actions: true
-      use_critic_preferred_actions_early_exit: true
+      use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 5
 
 
@@ -273,7 +273,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.AttractorLoss
+    _target_: diffusion_policy.losses.batch_loss.CriticWeightedBC
     eta: 1.0 # weight of the dql actor loss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
@@ -284,22 +284,6 @@ common_wbatch_loss:
       _target_: diffusion_policy.dataset.batch_loader.BatchLoader
       rb_id: default # forces a load
       train_or_val: train
-
-    attractor:
-      _target_: diffusion_policy.model.diffusion_ql.attractor.Attractor
-      weight: 0.0 # 1e-6
-
-      # for normalizing
-      batch_loader:
-        _target_: diffusion_policy.dataset.batch_loader.BatchLoader
-        rb_id: default # forces a load
-        train_or_val: eval # unnecessary during inference
-        use_dataloader: false # must be false during inference
-        strict: false # required for inference
-
-    energy_penalty:
-      _target_: diffusion_policy.model.diffusion_ql.attractor.EnergyPenalty
-      weight: 0.000005 # light touch
 
 dataloaders:
   block_transfer: ${common_dataset}

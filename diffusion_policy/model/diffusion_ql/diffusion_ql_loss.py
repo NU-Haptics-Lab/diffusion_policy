@@ -138,6 +138,18 @@ class CriticLoss(nn.Module):
             
         
         return dql_actor_loss, dql_critic_loss
+    
+    def infer(self, nbatch, a0):
+        
+        with torch.no_grad():
+            m = self.critic.get_model()
+            state = nbatch['obs']
+            
+            m.eval()
+            qvals1, qvals2 = m(state, a0) # in [-inf, inf]
+            m.train()
+            
+        return qvals1
         
     def step(self):
         # I'm only in charge of the critic

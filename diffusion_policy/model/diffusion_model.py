@@ -276,19 +276,22 @@ class DiffusionModel(BaseImagePolicy):
         """
         setup for predict_action. Squeeze all tensors, then add the appropriate dimensions
         """
-        for key, val in nobs_dict.items():
-            val = torch.squeeze(val)
+        # for key, val in nobs_dict.items():
+        #     val = torch.squeeze(val)
             
-            # predict_action expects a batch dimension, and a history dimension, so add two axes
-            val = torch.reshape(val, [1, 1] + list(val.shape))
+        #     # predict_action expects a batch dimension, and a history dimension, so add two axes
+        #     val = torch.reshape(val, [1, 1] + list(val.shape))
             
-            nobs_dict[key] = val
+        #     nobs_dict[key] = val
             
+        self.eval()
         nresult = self.predict_action(nobs_dict, task_id=task_id)
+        self.train()
         
         # naction doesn't include past actions
         naction = nresult["naction"]
         naction_og = naction.clone() # for debugging
+        all_nactions = nresult['naction_pred']
         
         if self.action_relative_to_state:
             # requires action and obs
@@ -302,7 +305,7 @@ class DiffusionModel(BaseImagePolicy):
             naction = nbatch['action']
             
         # done
-        return naction, naction_og
+        return naction, naction_og, all_nactions
 
     def predict_action(self, 
                        nobs_dict: Dict[str, torch.Tensor],

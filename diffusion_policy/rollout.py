@@ -9,6 +9,7 @@ from diffusion_policy.common.sarsa_sampler import DatasetSampler
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
+from diffusion_policy.common import pytorch_util
 
 import numpy as np
 import gymnasium as gym
@@ -36,6 +37,7 @@ class Rollout:
                  use_online_rollout = True,
                  rollout_num_actions = 10,
                  use_critic_preferred_actions = False,
+                 use_critic_preferred_actions_early_exit = True,
                  critic_preferred_actions_nb = 5,
                  ) -> None:
         self.evaluator = evaluator
@@ -45,6 +47,7 @@ class Rollout:
         self.use_online_rollout = use_online_rollout
         self.rollout_num_actions = rollout_num_actions
         self.use_critic_preferred_actions = use_critic_preferred_actions
+        self.use_critic_preferred_actions_early_exit = use_critic_preferred_actions_early_exit
         self.critic_preferred_actions_nb = critic_preferred_actions_nb
 
         # refs
@@ -89,7 +92,7 @@ class Rollout:
             self.evaluator.set_policy(policy)
 
             # get the critic
-            critic: CriticLoss = globals.MODELS["actor"] #type:ignore
+            critic: CriticLoss = globals.MODELS["critic"] #type:ignore
             self.critic = critic.get_model()
 
     
@@ -171,47 +174,81 @@ class Rollout:
             
         return samples, new_obs, total_reward, done, infos
     
-    def eval_actions(self, actions):
+    def eval_actions(self, actionss):
         # get the state
-        state = self.evaluator.GetObs()
+        obs_dict_np = self.evaluator.GetObs()
+        
+        # put on gpu and norm
+        nobs = self.evaluator.norm_gpu_obs(obs_dict_np)
+        
+        # tile each entry
+        nb = actionss.shape[0]
+        def f(x):
+            dims = [nb] + (len(x.shape)-1) * [1]
+            return torch.tile(x, dims=dims)
+        
+        nobs = pytorch_util.dict_apply(nobs, f)
+        
+        # put actionss on gpu and norm
+        nactionss = self.evaluator.norm_gpu_action(actionss)
+        
+        # squeeze out the history dim (not needed for the critic)
+        na2 = torch.squeeze(nactionss, dim=1)
 
         with torch.no_grad():
             assert(self.critic is not None)
-            qval = self.critic(state, actions)
+            
+            # critic is expecting norm'd obs and actions of the form [batch, history, ...]
+            self.critic.eval()
+            qvals1, qvals2 = self.critic(nobs, na2)
+            self.critic.train()
 
-            # float it
-            qval = float(qval)
-
-        return qval
+        return qvals1
     
     def infer_action(self) -> torch.Tensor:
         if self.use_critic_preferred_actions:
-            actionss = []
-            qvals = []
+            # actionss = []
+            # qvals = []
+            
+            best_actions = None
+            qval = -999.0
 
             # infer n times
             for i in range(self.critic_preferred_actions_nb):
-                actions = self.evaluator.infer()
+                # this returns unnorm'd actions on cpu
+                actions, all_actions = self.evaluator.infer()
 
-                actionss.append(actions)
+                # actionss.append(all_actions)
+                
+                # batch eval
+                # stack and add batch dim
+                actionss2 = torch.stack([all_actions])
+                qvals = self.eval_actions(actionss2)
+                qvalp = qvals.squeeze()
 
-            # eval all actionss
-            for actions in actionss:
-                qval = self.eval_actions(actions)
+                assert(actionss2.shape[0] == qvals.shape[0])
+                
+                # update best action
+                if qvalp > qval:
+                    qval = qvalp
+                    best_actions = actions
+                
+                if self.use_critic_preferred_actions_early_exit:
+                    # exit if qval is positive
+                    if qval > 0.0:
+                        break
 
-                qvals.append(qval)
+            # # get the argmax of qvals
+            # idx = torch.argmin(qvals)
 
-            assert(len(actionss) == len(qvals))
-
-            # get the argmax of qvals
-            idx = np.argmax(qvals)
-
-            # get the action
-            best_actions = actionss[idx]
+            # # get the action
+            # best_actions = actionss[idx]
 
             return best_actions
         else:
-            return self.evaluator.infer() #type:ignore
+            actions, all_actions = self.evaluator.infer()
+            assert(actions is not None)
+            return actions
         
     def one_rollout(self):
         """
