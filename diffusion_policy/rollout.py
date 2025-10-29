@@ -8,6 +8,8 @@ from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.common.sarsa_sampler import DatasetSampler
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
+from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
+
 import numpy as np
 import gymnasium as gym
 import torch
@@ -33,6 +35,8 @@ class Rollout:
                  rb_id = "sim_online_rl",
                  use_online_rollout = True,
                  rollout_num_actions = 10,
+                 use_critic_preferred_actions = False,
+                 critic_preferred_actions_nb = 5,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -40,7 +44,12 @@ class Rollout:
         self.rb_id = rb_id
         self.use_online_rollout = use_online_rollout
         self.rollout_num_actions = rollout_num_actions
-        
+        self.use_critic_preferred_actions = use_critic_preferred_actions
+        self.critic_preferred_actions_nb = critic_preferred_actions_nb
+
+        # refs
+        self.critic = None
+
         self.setup()
         
     def setup(self):
@@ -78,6 +87,11 @@ class Rollout:
             # ema or regular model?
             policy = actor.get_ema_model()
             self.evaluator.set_policy(policy)
+
+            # get the critic
+            critic: CriticLoss = globals.MODELS["actor"] #type:ignore
+            self.critic = critic.get_model()
+
     
     def run(self):
         """
@@ -156,6 +170,48 @@ class Rollout:
                 break
             
         return samples, new_obs, total_reward, done, infos
+    
+    def eval_actions(self, actions):
+        # get the state
+        state = self.evaluator.GetObs()
+
+        with torch.no_grad():
+            assert(self.critic is not None)
+            qval = self.critic(state, actions)
+
+            # float it
+            qval = float(qval)
+
+        return qval
+    
+    def infer_action(self) -> torch.Tensor:
+        if self.use_critic_preferred_actions:
+            actionss = []
+            qvals = []
+
+            # infer n times
+            for i in range(self.critic_preferred_actions_nb):
+                actions = self.evaluator.infer()
+
+                actionss.append(actions)
+
+            # eval all actionss
+            for actions in actionss:
+                qval = self.eval_actions(actions)
+
+                qvals.append(qval)
+
+            assert(len(actionss) == len(qvals))
+
+            # get the argmax of qvals
+            idx = np.argmax(qvals)
+
+            # get the action
+            best_actions = actionss[idx]
+
+            return best_actions
+        else:
+            return self.evaluator.infer() #type:ignore
         
     def one_rollout(self):
         """
@@ -166,7 +222,7 @@ class Rollout:
         done = False
         while not done:
             # get the action trajectory
-            actions: torch.tensor = self.evaluator.infer() #type:ignore
+            actions: torch.Tensor = self.infer_action() 
             actions = torch.squeeze(actions)
             actions = actions.numpy()
             

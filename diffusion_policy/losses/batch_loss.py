@@ -2,6 +2,7 @@ import numpy as np
 from collections import defaultdict
 
 import torch
+from torch import nn
 
 import diffusion_policy.globals as globals
 
@@ -416,6 +417,98 @@ class DQLBatchLoss(BatchLoss):
         
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error
+    
+class CriticWeightedBC(DQLBatchLoss):
+    """
+    Train the actor via weighted BC and train the critic like normal.
+    BC weighting comes from how good the critic thinks a sample is.
+    Normally in SAC we back-propagate the critic directly into the actor, but I don't like that in high-dimensions because I think it leads to adversarial actors too easily.
+    So this is a way for the critic to inform the policy without being directly connected and thereby risking critic exploitation.
+    """
+    def init_losses(self):
+        losses = {}
+        
+        # for key in models_to_train:
+        #     losses[key] = utils.InitZeroTensorOnDevice()
+        losses = {
+            'critic': utils.InitZeroTensorOnDevice(),
+            'actor': {
+                'bc': utils.InitZeroTensorOnDevice(),
+                'dql': utils.InitZeroTensorOnDevice(),
+                'attractor': utils.InitZeroTensorOnDevice(),
+            }
+        }
+        return losses
+    
+    def get_next_batch(self):
+        nbatch = next(self.batch_loader)
+        self.current_batch = nbatch
+        return self.current_batch
+
+    def compute_loss(self, 
+                     is_eval=False, 
+                     ):
+        """
+        compute loss for one batch.
+        """
+        losses = self.init_losses()
+
+        # flags
+        models_to_train: list = globals.CONFIG.models_to_train # type: ignore
+        use_dql: bool = globals.CONFIG.use_dql # type: ignore
+
+        train_actor = "actor" in models_to_train
+        train_critic = "critic" in models_to_train
+        need_dql_actor_loss = train_actor and use_dql
+        
+        # get the batch from the batch loader
+        nbatch = self.get_next_batch()
+        
+        a0 = None
+        
+        # always need bc-loss and a0 now
+        bc_loss, a0, timesteps = self.get_bc_loss(is_eval)
+            
+        # save
+        self.a0 = a0
+        
+        # if we're training using BC loss
+        if train_actor and self.use_bc_loss:
+            # hack
+            losses['actor']['bc'] = bc_loss
+            
+            # hack
+            if is_eval:
+                return losses
+        
+        # need critic loss if we're training critic, need actor loss if we're using dql
+        if train_critic or need_dql_actor_loss:
+            # get the DQL losses
+            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps)
+            
+            if train_critic:
+                losses['critic'] = dql_critic_loss
+            
+            # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
+            if need_dql_actor_loss and dql_actor_loss is not None and utils.StepFreqTrigger(self.freqs['actor']):
+                # eval each BC sample (no backprop) using a0
+                with torch.no_grad():
+                    m = self.critic.get_model()
+                    state = nbatch['obs']
+                    qvals = m(state, a0) # in [-inf, inf]
+
+                    # use sigmoid to convert the range to [0, 1]
+                    s = nn.Sigmoid()
+                    sqvals = s(qvals)
+
+                # weight BC samples w.r.t the sigmoid qvals
+                assert(sqvals.shape == bc_loss.shape)
+                w_bc_loss = bc_loss * sqvals
+
+                losses['actor']['bc'] = w_bc_loss
+        
+        # we're done
+        return losses
     
 class AttractorLoss(DQLBatchLoss):
     """

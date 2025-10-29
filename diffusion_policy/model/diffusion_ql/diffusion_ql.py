@@ -354,5 +354,5 @@ class DiffusionQL(nn.Module):
     def reset(self):
         self.critic_optimizer.zero_grad()
         
-    def get_model(self):
+    def get_model(self, want_target_network=False):
         return self.critic
