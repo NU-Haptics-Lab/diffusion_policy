@@ -18,7 +18,7 @@ class Attractor(nn.Module):
     def __init__(self,
                  weight,
                  *args, 
-                 batch_loader: BatchLoader = None,
+                 batch_loader: BatchLoader,
                  **kwargs) -> None:
         super().__init__(*args, **kwargs)
         

@@ -24,7 +24,7 @@ class ModelandEMA:
             self.ema_model = copy.deepcopy(self.model.get_model())
 
         # configure ema
-        self.ema: EMAModel = None
+        self.ema: EMAModel | None = None
         if self.use_ema:
             assert(self.ema_model is not None)
                 
@@ -47,6 +47,7 @@ class ModelandEMA:
     
     def update_ema(self):
         if self.use_ema:
+            assert(self.ema is not None)
             self.ema.step(self.model.get_model())
             
     def eval(self):

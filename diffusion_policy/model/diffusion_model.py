@@ -307,10 +307,10 @@ class DiffusionModel(BaseImagePolicy):
         # done
         return naction, naction_og, all_nactions
 
-    def predict_action(self, 
+    def predict_action(self, # type:ignore
                        nobs_dict: Dict[str, torch.Tensor],
                         task_id = None,
-                       ) -> Dict[str, torch.Tensor]:
+                       ) -> Dict[str, torch.Tensor]: 
         return self.predict_action_impl(
             nobs_dict,
             self.noise_scheduler,
@@ -488,25 +488,28 @@ class DiffusionModel(BaseImagePolicy):
     def encode_one_nobs(self, nobs):
         """
         nobs keys example: state, img, img2
+
+        NOT FINISHED
         """
+        pass
 
-        if self.obs_as_global_cond:
-            # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, 
-                lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(batch_size, -1)
-        else:
-            # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, T, Do
-            nobs_features = nobs_features.reshape(batch_size, horizon, -1)
-            cond_data = torch.cat([nactions, nobs_features], dim=-1)
-            trajectory = cond_data.detach()
+        # if self.obs_as_global_cond:
+        #     # reshape B, T, ... to B*T
+        #     this_nobs = dict_apply(nobs, 
+        #         lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+        #     nobs_features = self.obs_encoder(this_nobs)
+        #     # reshape back to B, Do
+        #     global_cond = nobs_features.reshape(batch_size, -1)
+        # else:
+        #     # reshape B, T, ... to B*T
+        #     this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
+        #     nobs_features = self.obs_encoder(this_nobs)
+        #     # reshape back to B, T, Do
+        #     nobs_features = nobs_features.reshape(batch_size, horizon, -1)
+        #     cond_data = torch.cat([nactions, nobs_features], dim=-1)
+        #     trajectory = cond_data.detach()
 
-        return nobs_features
+        # return nobs_features
 
     # ========= training  ============
     def compute_loss(self, nbatch, task_id):

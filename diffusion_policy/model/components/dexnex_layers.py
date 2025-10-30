@@ -63,6 +63,9 @@ class BasicBlock(nn.Module):
             raise ValueError("BasicBlock only supports groups=1 and base_width=64")
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
+        
+        assert(norm_layer is not None)
+        
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = norm_layer(planes)
@@ -155,6 +158,8 @@ class ResNetSlice(rmbn.ConvBase):
         # net = vision_models.resnet18()
 
         if input_coord_conv:
+            # not used
+            raise
             net.conv1 = CoordConv2d(
                     input_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)
         elif input_channel != 3:
@@ -407,7 +412,8 @@ class HybridCNNViT(rmbn.ConvBase):
         layers = 12
         width = 504 # i.e. nb "channels", must be divisible by nb heads. The input "image" will be upscaled in nb of channels to the width value using a Conv2d. Width slows down training less than sequence length
         
-        #
+        # TODO: finish
+        raise
         
         # patch size of 1 means we don't lose any spatial resolution
         patch_size = 1

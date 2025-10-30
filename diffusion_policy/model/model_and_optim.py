@@ -9,9 +9,9 @@ class ModelandOptim:
     Convenience class which bundles a model, an optimizer, and a learning rate scheduler
     """
     def __init__(self,
-                 model: torch.nn.Module = None,
-                 optimizer_target: str = None,
-                 optimizer_cfg: dict = None,
+                 model: torch.nn.Module,
+                 optimizer_target: str,
+                 optimizer_cfg: dict,
                  lr_scheduler = "cosine",
                  lr_warmup_steps = 500,
                  gradient_accumulate_every = 1,
