@@ -145,7 +145,7 @@ def main(cfg: OmegaConf):
             globals.CHECKPOINTER.force_save()
     print("Done")
 
-if __name__ == "__main__":
-    # only need the following if using my meta dataset
-    # torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
-    main()
+# if __name__ == "__main__":
+#     # only need the following if using my meta dataset
+#     # torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
+#     main()

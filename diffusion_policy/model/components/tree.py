@@ -9,11 +9,11 @@ class Tree(nn.Module):
     a Tree-style nn module, where it has a common trunk and separate leafs (a.k.a. heads) for each dataset.
     """
     def __init__(self,
-            rootcaps: nn.ModuleDict = None,
-            roots: nn.ModuleDict = None,
-            trunk: nn.Module = None,
-            branches: nn.ModuleDict = None,
-            leafs: nn.ModuleDict = None,
+            rootcaps: nn.ModuleDict | None = None,
+            roots: nn.ModuleDict | None = None,
+            trunk: nn.Module | None = None,
+            branches: nn.ModuleDict | None = None,
+            leafs: nn.ModuleDict | None = None,
 
             # options
             input_leaf_append = False, # whether to append the input to x before passing through the leaf
@@ -67,7 +67,7 @@ class Tree(nn.Module):
 
         return x
     
-    def forward_options(self, inputs, options: dict = None):
+    def forward_options(self, inputs, options: dict | None = None):
         """
         extract keywords and values from options, if they exist
         """

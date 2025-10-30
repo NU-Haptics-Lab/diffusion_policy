@@ -79,6 +79,7 @@ class StepTrainer:
         
         # first get the bc gradient norm
         globals.MODELS.reset() 
+        bc_grad_norm = None
         if self.use_bc_loss:
             bc_grad_norm = fcn("bc")
             

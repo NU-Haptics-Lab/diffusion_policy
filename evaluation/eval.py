@@ -343,6 +343,8 @@ class EvalDexNex(Node, Inference):
 
         else:
             self.policy = actor.get_model()
+
+        assert(self.policy is not None)
             
         # setup inference scheduler
         if self.use_custom_inference_steps:
@@ -780,7 +782,7 @@ def main(eval_cfg: OmegaConf, args=None):
     ### End ROS2
 
 
-if __name__ == "__main__":
-    # only need the following if using my meta dataset
-    # torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
-    main()
+# if __name__ == "__main__":
+#     # only need the following if using my meta dataset
+#     # torch.multiprocessing.set_start_method('spawn') # or 'forkserver'
+#     main()

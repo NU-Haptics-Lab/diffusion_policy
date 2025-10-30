@@ -85,7 +85,7 @@ class EpochTrainer(Epoch):
     def __init__(self,
             step_trainer: StepTrainer,
             nb_batches: int,
-            rollouts: Rollout = None,
+            rollouts: Rollout | None = None,
             ):
         self.step_trainer = step_trainer
         self.nb_batches = nb_batches

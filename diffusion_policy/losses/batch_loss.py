@@ -48,6 +48,26 @@ class BatchLoss:
 
         # my members
         self.current_batch: dict
+        
+    def init_losses(self):
+        losses = {}
+        
+        # for key in models_to_train:
+        #     losses[key] = utils.InitZeroTensorOnDevice()
+        losses = {
+            'critic': utils.InitZeroTensorOnDevice(),
+            'actor': {
+                'bc': utils.InitZeroTensorOnDevice(),
+                'dql': utils.InitZeroTensorOnDevice(),
+                'attractor': utils.InitZeroTensorOnDevice(),
+            }
+        }
+        return losses
+    
+    def get_next_batch(self):
+        nbatch = next(self.batch_loader)
+        self.current_batch = nbatch
+        return self.current_batch
 
     def compute_loss(self):
         """
@@ -65,12 +85,8 @@ class BatchLoss:
             actor_loss = 0.0
 
         # we're done
-        losses = {
-            'actor': 
-                {
-                    'bc': actor_loss,
-                },
-        }
+        losses = self.init_losses()
+        losses['actor']['bc'] = actor_loss
         return losses
     
     def eval(self):
@@ -431,26 +447,6 @@ class CriticWeightedBC(DQLBatchLoss):
         super().__init__(*args, **kwargs)
         self.sqval_scale = sqval_scale
         self.sqval_offset = sqval_offset
-        
-    def init_losses(self):
-        losses = {}
-        
-        # for key in models_to_train:
-        #     losses[key] = utils.InitZeroTensorOnDevice()
-        losses = {
-            'critic': utils.InitZeroTensorOnDevice(),
-            'actor': {
-                'bc': utils.InitZeroTensorOnDevice(),
-                'dql': utils.InitZeroTensorOnDevice(),
-                'attractor': utils.InitZeroTensorOnDevice(),
-            }
-        }
-        return losses
-    
-    def get_next_batch(self):
-        nbatch = next(self.batch_loader)
-        self.current_batch = nbatch
-        return self.current_batch
 
     def compute_loss(self, 
                      is_eval=False, 
@@ -608,7 +604,12 @@ class CriticBatchLoss(BatchLoss):
     
     # TODO: rename all eval to validate
     def eval(self):
-        loss = self.compute_loss()['actor']['bc'].cpu()
+        losses = self.compute_loss()
+        
+        assert(losses is not None)
+        assert(losses['actor'] is not None)
+
+        loss = losses['actor']['bc'].cpu()
         
         # get the action mse error
         action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
@@ -638,7 +639,12 @@ class WeightedBatchLoss:
         wloss['actor'] = dict_apply(losses['actor'], lambda x: self.weight * x)
         
         if 'critic' in losses:
-            wloss['critic'] = losses['critic'] * self.weight
+            v = losses['critic']
+
+            # type protection
+            assert(isinstance(v, float))
+
+            wloss['critic'] = v * self.weight
         
         # apply the weighting to each loss
         # wloss = dict_apply(losses, lambda x: self.weight * x)

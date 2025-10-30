@@ -98,7 +98,7 @@ class QLModel(nn.Module):
 
         # trunk
         # MLP based off obs encoder output shape. Output is a list, should be 1 long, so extract the first and only element
-        dense_input = self.obs_encoder.output_shape()[0] + len(globals.CONFIG.action_rel_indices) * globals.CONFIG.shape_meta.action.shape[0]
+        dense_input = self.obs_encoder.output_shape()[0] + len(globals.CONFIG.action_rel_indices) * globals.CONFIG.shape_meta.action.shape[0] #type:ignore
         self.trunk_denser = QLDenser(dense_input, hidden_dim=trunk_hidden_dim)
         trunk = self.trunk_denser
         
@@ -143,7 +143,7 @@ class QLModel(nn.Module):
         ch = self.obs_encoder_maker.ch
         cw = self.obs_encoder_maker.cw
 
-        len_history = len(globals.CONFIG.obs_rel_indices)
+        len_history = len(globals.CONFIG.obs_rel_indices) #type:ignore
 
         # iterate over keys
         for key, val in list(rgbs.items()) + list(lowdims.items()):
@@ -179,7 +179,7 @@ class QLModel(nn.Module):
         
         return x
 
-    def forward(self, state_dict, action, options: dict = None):
+    def forward(self, state_dict, action, options = None):
         # stack the state history
         if self.if_stack_history:
             state_dict = self.StackHistory(state_dict)
@@ -214,7 +214,7 @@ class QLModelSimple(QLModel):
                 nn.Linear(hidden_dim, 1) # critic must output a single q-value
             )
         
-    def forward(self, state_dict, action, options: dict = None):
+    def forward(self, state_dict, action, options: dict | None = None):
             
         # encode the inputs
         x = self.obs_encoder(state_dict)
@@ -241,7 +241,7 @@ class DoubleCritic(nn.Module, BaseCritic):
 
         print_nb_params(self.q1_model, "Critic params")
     
-    def forward(self, state_dict, action, options: dict = None):
+    def forward(self, state_dict, action, options: dict | None = None):
         q1 = self.q1_model(state_dict, action, options)
         
         if self.use_double_q:
@@ -318,7 +318,7 @@ qlmodel:
         pass
     
     globals.REPLAY_BUFFER_LOADER = Obj()
-    globals.REPLAY_BUFFER_LOADER.rbs = {"test1": 1, "test2": 2}
+    globals.REPLAY_BUFFER_LOADER.rbs = {"test1": 1, "test2": 2} #type:ignore
 
     x: DoubleCritic = hydra.utils.instantiate(config)
     

@@ -223,7 +223,9 @@ class Rollout:
                 
                 # batch eval
                 # stack and add batch dim
-                actionss2 = torch.stack([all_actions])
+                # actionss2 = torch.stack([all_actions])
+                assert(all_actions is not None)
+                actionss2 = torch.unsqueeze(all_actions, dim=0)
                 qval = self.eval_actions(actionss2)
                 
                 qvalp = qval.squeeze()

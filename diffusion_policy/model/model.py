@@ -52,7 +52,7 @@ class Ema(Base):
         self.use_ema = use_ema
         self.ema_cfg = ema_cfg
             
-    def setup(self, model):
+    def setup(self, model: DiffusionModel):
         self.model = model
 
         self.ema_model = None
@@ -102,7 +102,7 @@ class Optim(Base):
         self.gradient_accumulate_every = gradient_accumulate_every
         self.optimizer_target = optimizer_target
         self.optimizer_cfg = optimizer_cfg
-        self.lr_scheduler = lr_scheduler
+        self.lr_scheduler_type = lr_scheduler
         self.lr_warmup_steps = lr_warmup_steps
         self.grad_norm = grad_norm
         
@@ -125,7 +125,7 @@ class Optim(Base):
         
         # make the LR scheduler
         self.lr_scheduler = get_scheduler(
-            self.lr_scheduler,
+            self.lr_scheduler_type,
             optimizer=self.optimizer,
             num_warmup_steps = self.lr_warmup_steps,
             num_training_steps=(
