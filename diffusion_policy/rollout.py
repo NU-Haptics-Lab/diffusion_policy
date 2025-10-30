@@ -94,6 +94,7 @@ class Rollout:
             # get the critic
             critic: CriticLoss = globals.MODELS["critic"] #type:ignore
             self.critic = critic.get_model()
+            self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
 
     
     def run(self):
@@ -200,7 +201,7 @@ class Rollout:
             
             # critic is expecting norm'd obs and actions of the form [batch, history, ...]
             self.critic.eval()
-            qvals1, qvals2 = self.critic(nobs, na2)
+            qvals1, qvals2 = self.critic.forward(nobs, na2, self.critic_ops)
             self.critic.train()
 
         return qvals1
@@ -208,10 +209,10 @@ class Rollout:
     def infer_action(self) -> torch.Tensor:
         if self.use_critic_preferred_actions:
             # actionss = []
-            # qvals = []
+            qvals = []
             
             best_actions = None
-            qval = -999.0
+            best_qval = -999.0
 
             # infer n times
             for i in range(self.critic_preferred_actions_nb):
@@ -223,14 +224,16 @@ class Rollout:
                 # batch eval
                 # stack and add batch dim
                 actionss2 = torch.stack([all_actions])
-                qvals = self.eval_actions(actionss2)
-                qvalp = qvals.squeeze()
-
-                assert(actionss2.shape[0] == qvals.shape[0])
+                qval = self.eval_actions(actionss2)
+                
+                qvalp = qval.squeeze()
+                qvals.append(qvalp)
+                
+                assert(actionss2.shape[0] == qval.shape[0])
                 
                 # update best action
-                if qvalp > qval:
-                    qval = qvalp
+                if qvalp > best_qval:
+                    best_qval = qvalp
                     best_actions = actions
                 
                 if self.use_critic_preferred_actions_early_exit:
@@ -243,7 +246,12 @@ class Rollout:
 
             # # get the action
             # best_actions = actionss[idx]
+            
+            # logging
+            globals.LOGGER.log_one("rollout/best_qval", best_qval)
 
+
+            assert(best_actions is not None)
             return best_actions
         else:
             actions, all_actions = self.evaluator.infer()
@@ -289,7 +297,7 @@ class Rollout:
                 # logging
                 total_reward += rewards
                 
-        # logging
+        # logging ... doesn't work with multiple rollouts because the STEP doesn't change ... see inside log_one
         globals.LOGGER.log_one("rollout/ep_reward", total_reward)
             
         return samples

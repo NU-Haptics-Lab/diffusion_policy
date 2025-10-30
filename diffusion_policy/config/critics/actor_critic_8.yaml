@@ -24,7 +24,7 @@ resume: true
 resume_tag: latest
 
 tasks_to_use:
-  # - bnb_2cams
+  - bnb_2cams
   # - bnb_1cam
   # - block_transfer
   - sim_hitl # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
@@ -225,7 +225,7 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 100 # in steps
+      freq: 400 # in steps
       num_rollouts_per_trigger: 1
       rb_id: sim_online_rl2
       use_online_rollout: true
@@ -275,6 +275,8 @@ common_wbatch_loss:
   batch_loss:
     _target_: diffusion_policy.losses.batch_loss.CriticWeightedBC
     eta: 1.0 # weight of the dql actor loss
+    sqval_scale: 10.0 # how much to scale the qvals before running offsetting. 
+    sqval_offset: -2.0 # how much to offset qvals2 before sigmoiding. A value of -2.0 means any qval < 0.0 has <12% weighting
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
 
@@ -346,7 +348,7 @@ models:
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
-        use_tree: false
+        use_tree: true
         use_denoise: ${use_denoise} # freq: {1,1}: false: 6.5 it/s (or maybe 11?) vs true: 1.6 it/s --> false is ~4x faster? or might be 8x
         action_relative_to_state: ${action_relative_to_state} # ... the critic might be struggling with action_relative_to_state, maybe a bug or maybe need to do more runs for better statistics
 
@@ -461,25 +463,25 @@ override:
                 rb_id: sim_hitl
 
           sim_online_rl1:
-            weight: 5e-1
+            weight: 0.1
             batch_loss: 
               batch_loader:
                 rb_id: sim_online_rl1
-              use_bc_loss: false
+              use_bc_loss: ${use_bc_loss}
 
           sim_online_rl2:
-            weight: 5e-1
+            weight: 0.1
             batch_loss: 
               batch_loader:
                 rb_id: sim_online_rl2
-              use_bc_loss: false
+              use_bc_loss: ${use_bc_loss}
 
           sim_hitl_failures:
-            weight: 5e-1
+            weight: 0.1
             batch_loss: 
               batch_loader:
                 rb_id: sim_hitl_failures
-              use_bc_loss: false
+              use_bc_loss: ${use_bc_loss}
     epoch_evaluator:
       w_batch_losses:
         block_transfer: 
@@ -511,28 +513,28 @@ override:
               train_or_val: val
 
         sim_online_rl1:
-          weight: 5e-1
+          weight: 0.1
           batch_loss: 
             batch_loader:
               rb_id: sim_online_rl1
               train_or_val: val
-            use_bc_loss: false
+            use_bc_loss: ${use_bc_loss}
 
         sim_online_rl2:
-          weight: 5e-1
+          weight: 0.1
           batch_loss: 
             batch_loader:
               rb_id: sim_online_rl2
               train_or_val: val
-            use_bc_loss: false
+            use_bc_loss: ${use_bc_loss}
 
         sim_hitl_failures:
-          weight: 5e-1
+          weight: 0.1
           batch_loss: 
             batch_loader:
               rb_id: sim_hitl_failures
               train_or_val: val
-            use_bc_loss: false
+            use_bc_loss: ${use_bc_loss}
 
   dataloaders:
     block_transfer:

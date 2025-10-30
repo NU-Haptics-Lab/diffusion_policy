@@ -422,6 +422,16 @@ class CriticWeightedBC(DQLBatchLoss):
     Normally in SAC we back-propagate the critic directly into the actor, but I don't like that in high-dimensions because I think it leads to adversarial actors too easily.
     So this is a way for the critic to inform the policy without being directly connected and thereby risking critic exploitation.
     """
+    def __init__(self, 
+                 sqval_scale,
+                 sqval_offset,
+                 *args,
+                 **kwargs
+                 ):
+        super().__init__(*args, **kwargs)
+        self.sqval_scale = sqval_scale
+        self.sqval_offset = sqval_offset
+        
     def init_losses(self):
         losses = {}
         
@@ -485,12 +495,24 @@ class CriticWeightedBC(DQLBatchLoss):
             ## Critic weighted BC
             if self.use_bc_loss:
                 # eval each BC sample (no backprop) using a0
-                qvals = self.critic.infer(nbatch, a0)
+                qvals = self.critic.infer(nbatch, a0, self.rb_id)
+                
+                globals.LOGGER.log_one("cbc/avg_qval/" + self.rb_id, qvals.mean())
 
                 # use sigmoid to convert the range to [0, 1]
                 s = nn.Sigmoid()
-                sqvals = s(qvals)
+                
+                # scale qvals 
+                qvals2 = qvals * self.sqval_scale
+                
+                # offset qvals
+                qvals3 = qvals2 + self.sqval_offset
+                
+                # sigmoid the scaled qvals
+                sqvals = s(qvals3)
                 sqvals2 = torch.squeeze(sqvals)
+                
+                globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
                 
                 # could weight sqvals by timestep, but try this first
 
