@@ -206,7 +206,7 @@ class Rollout:
 
         return qvals1
     
-    def infer_action(self) -> torch.Tensor:
+    def infer_action(self) -> tuple[torch.Tensor, float]:
         if self.use_critic_preferred_actions:
             # actionss = []
             qvals = []
@@ -250,15 +250,15 @@ class Rollout:
             # best_actions = actionss[idx]
             
             # logging
-            globals.LOGGER.log_one("rollout/best_qval", best_qval)
+            globals.LOGGER.log_one("rollout/avg_qval", best_qval)
 
 
             assert(best_actions is not None)
-            return best_actions
+            return best_actions, best_qval
         else:
             actions, all_actions = self.evaluator.infer()
             assert(actions is not None)
-            return actions
+            return actions, 0.0
         
     def one_rollout(self):
         """
@@ -266,12 +266,14 @@ class Rollout:
         """
         samples = []
         total_reward = 0.0
+        best_qvals = []
         done = False
         while not done:
             # get the action trajectory
-            actions: torch.Tensor = self.infer_action() 
+            actions, best_qval = self.infer_action() 
             actions = torch.squeeze(actions)
             actions = actions.numpy()
+            best_qvals.append(best_qval)
             
             # none protection
             if actions is not None:
@@ -301,6 +303,7 @@ class Rollout:
                 
         # logging ... doesn't work with multiple rollouts because the STEP doesn't change ... see inside log_one
         globals.LOGGER.log_one("rollout/ep_reward", total_reward)
+        globals.LOGGER.log_one("rollout/avg_best_qval", np.array(best_qvals).mean())
             
         return samples
     

@@ -108,7 +108,7 @@ class QLModel(nn.Module):
         if self.use_tree:
             leafs = nn.ModuleDict()
 
-            input_dim = float(self.trunk_denser.output_shape())
+            input_dim = int(self.trunk_denser.output_shape())
 
             if self.input_leaf_append:
                 # have to add on the input size

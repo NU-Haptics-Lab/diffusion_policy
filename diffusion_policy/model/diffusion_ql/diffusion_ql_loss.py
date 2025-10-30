@@ -116,7 +116,7 @@ class CriticLoss(nn.Module):
         models_to_train: list = globals.CONFIG.models_to_train #type:ignore
         
         # training the actor, so we need to use the actor to denoise an observation
-        if "actor" in models_to_train and utils.StepFreqTrigger(globals.CONFIG.step_freqs['actor']) and not self.use_bc_a0:
+        if "actor" in models_to_train and utils.StepFreqTrigger(globals.CONFIG.step_freqs['actor']) and self.use_denoise:
             # want gradients on this one so we can back-prop from the critic through to the actor
             new_action = self.Denoise(nbatch['obs'], task_id=task_id)
         else:

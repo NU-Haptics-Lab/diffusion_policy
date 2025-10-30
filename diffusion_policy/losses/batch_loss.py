@@ -466,21 +466,19 @@ class CriticWeightedBC(DQLBatchLoss):
         # get the batch from the batch loader
         nbatch = self.get_next_batch()
         
-        self.a0 = None
+        self.a0 = nbatch['action']
         
-        # always need bc-loss and a0 now
-        loss_arr, a0, timesteps = self.get_bc_losses()
-        # save
-        self.a0 = a0
+        # always need bc-loss
+        loss_arr, _, timesteps = self.get_bc_losses()
         
         if utils.StepFreqTrigger(self.freqs['critic']):
             # get the DQL losses
-            _, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps)
+            _, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, None, timesteps)
             
             if train_critic:
                 losses['critic'] = dql_critic_loss
         
-        if utils.StepFreqTrigger(self.freqs['actor']) or is_eval:
+        if utils.StepFreqTrigger(self.freqs['cbc']) or is_eval:
             # hack
             if is_eval:
                 bc_loss = loss_arr.mean()
@@ -490,8 +488,8 @@ class CriticWeightedBC(DQLBatchLoss):
             
             ## Critic weighted BC
             if self.use_bc_loss:
-                # eval each BC sample (no backprop) using a0
-                qvals = self.critic.infer(nbatch, a0, self.rb_id)
+                # eval each BC sample (no backprop) using the g.t. a0
+                qvals = self.critic.infer(nbatch, self.a0, self.rb_id)
                 
                 globals.LOGGER.log_one("cbc/avg_qval/" + self.rb_id, qvals.mean())
 
@@ -642,7 +640,7 @@ class WeightedBatchLoss:
             v = losses['critic']
 
             # type protection
-            assert(isinstance(v, float))
+            assert(isinstance(v, torch.Tensor))
 
             wloss['critic'] = v * self.weight
         
