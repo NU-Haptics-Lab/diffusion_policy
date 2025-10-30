@@ -73,12 +73,15 @@ class QLModel(nn.Module):
                  if_stack_history: bool = True,
                  trunk_hidden_dim = 256,
                  leaf_hidden_dim = 128,
-                 use_tree = False
+                 use_tree = False,
+
+                 input_leaf_append = False, # whether to append the input to x before passing through the leaf
                  ):
         super().__init__()
         self.obs_encoder_maker = obs_encoder_maker
         self.if_stack_history = if_stack_history
         self.use_tree = use_tree
+        self.input_leaf_append = input_leaf_append
         
         # if we're stacking the history
         if self.if_stack_history:
@@ -104,9 +107,16 @@ class QLModel(nn.Module):
         # leafs
         if self.use_tree:
             leafs = nn.ModuleDict()
+
+            input_dim = float(self.trunk_denser.output_shape())
+
+            if self.input_leaf_append:
+                # have to add on the input size
+                input_dim += dense_input
+
             for key, val in globals.REPLAY_BUFFER_LOADER.rbs.items():
                 leafs[key] = nn.Sequential(
-                    QLDenser(self.trunk_denser.output_shape(), hidden_dim=leaf_hidden_dim),
+                    QLDenser(input_dim, hidden_dim=leaf_hidden_dim),
                     nn.Linear(leaf_hidden_dim, 1) # critic must output a single q-value
                 )
 

@@ -14,6 +14,9 @@ class Tree(nn.Module):
             trunk: nn.Module = None,
             branches: nn.ModuleDict = None,
             leafs: nn.ModuleDict = None,
+
+            # options
+            input_leaf_append = False, # whether to append the input to x before passing through the leaf
             ):
         super().__init__()
         
@@ -22,7 +25,11 @@ class Tree(nn.Module):
         self.trunk = trunk
         self.branches = branches
         self.leafs = leafs
+
+        # options
+        self.input_leaf_append = input_leaf_append
         
+        # setup
         self.use_trunk = False
         if self.trunk is not None:
             self.use_trunk = True
@@ -48,6 +55,10 @@ class Tree(nn.Module):
 
         if leaf is not None:
             assert(self.leafs is not None)
+
+            if self.input_leaf_append:
+                x = torch.concat(x, inputs)
+
             x = self.leafs[leaf](x)
             
             # if x._version == 1:
