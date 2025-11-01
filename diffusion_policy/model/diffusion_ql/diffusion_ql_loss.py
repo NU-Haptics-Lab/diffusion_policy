@@ -139,17 +139,25 @@ class CriticLoss(nn.Module):
         
         return dql_actor_loss, dql_critic_loss
     
-    def infer(self, nbatch, a0, rb_id):
+    def infer_impl(self, nbatch, a0, rb_id):
+        m = self.critic.get_model()
+        state = nbatch['obs']
         
-        with torch.no_grad():
-            m = self.critic.get_model()
-            state = nbatch['obs']
-            
-            ops = self.critic.MakeOptions(rb_id)
-            
-            m.eval()
-            qvals1, qvals2 = m.forward(state, a0, ops) # in [-inf, inf]
-            m.train()
+        ops = self.critic.MakeOptions(rb_id)
+        
+        m.eval()
+        qvals1, qvals2 = m.forward(state, a0, ops) # in [-inf, inf]
+        m.train()
+
+        return qvals1
+    
+    def infer(self, nbatch, a0, rb_id, use_grads=False):
+        
+        if use_grads:
+            qvals1 = self.infer_impl(nbatch, a0, rb_id)
+        else:
+            with torch.no_grad():
+                qvals1 = self.infer_impl(nbatch, a0, rb_id)
             
         return qvals1
         

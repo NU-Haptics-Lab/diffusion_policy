@@ -441,12 +441,80 @@ class CriticWeightedBC(DQLBatchLoss):
     def __init__(self, 
                  sqval_scale,
                  sqval_offset,
+                 use_gradient_weighting,
                  *args,
                  **kwargs
                  ):
         super().__init__(*args, **kwargs)
         self.sqval_scale = sqval_scale
         self.sqval_offset = sqval_offset
+        self.use_gradient_weighting = use_gradient_weighting
+
+    def compute_gradient_weighting(self, nbatch):
+        # forward pass WITH gradients enabled
+        qvals = self.critic.infer(nbatch, self.a0, self.rb_id, use_grads=True)
+
+        # loss is the negated qvals (because we want to maximize the qvals)
+        L = -1.0 * qvals
+
+        # backprop to get dL/d_{inputs} a.k.a. the derivative of the inputs w.r.t. the loss
+        L.backward()
+
+        # extract the action gradients
+        a0_grads = None
+
+        # could normalize grads w.r.t. the input statistics (analogous to batch norm)
+        if True:
+            # dim is the dim over which all inputs refer to the same input ... which is gonna be the batch dimension
+            dim = 0
+            eps = 1e-4
+            x: torch.Tensor = a0_grads
+
+            # normalize, https://discuss.pytorch.org/t/pytorch-tensor-scaling/38576 
+            m = x.mean(dim=dim, keepdim=True)
+            s = x.std(dim=dim, unbiased=False, keepdim=True)
+            x -= m
+            x /= (s + eps)
+
+            a0_grads2 = x
+
+        # else, just use the a0_grads directly (this assumes are normalization of actions has relatively similar statistics across all inputs ... which is probably not true)
+        else:
+            a0_grads2 = a0_grads
+
+        # scale and offset ?
+        a0_grads3 = a0_grads2
+
+        # map to [0, 1] using sigmoid
+        sqvals = nn.Sigmoid()(a0_grads3)
+        sqvals2 = torch.squeeze(sqvals)
+        
+        globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
+
+        # we're done
+        return sqvals2
+
+    def compute_simple_weighting(self, nbatch):
+        # eval each BC sample (no backprop) using the g.t. a0
+        qvals = self.critic.infer(nbatch, self.a0, self.rb_id)
+
+        # use sigmoid to convert the range to [0, 1]
+        s = nn.Sigmoid()
+        
+        # scale qvals 
+        qvals2 = qvals * self.sqval_scale
+        
+        # offset qvals
+        qvals3 = qvals2 + self.sqval_offset
+        
+        # sigmoid the scaled qvals
+        sqvals = s(qvals3)
+        sqvals2 = torch.squeeze(sqvals)
+        
+        globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
+
+        return sqvals2
+
 
     def compute_loss(self, 
                      is_eval=False, 
@@ -488,25 +556,10 @@ class CriticWeightedBC(DQLBatchLoss):
             
             ## Critic weighted BC
             if self.use_bc_loss:
-                # eval each BC sample (no backprop) using the g.t. a0
-                qvals = self.critic.infer(nbatch, self.a0, self.rb_id)
-                
-                globals.LOGGER.log_one("cbc/avg_qval/" + self.rb_id, qvals.mean())
-
-                # use sigmoid to convert the range to [0, 1]
-                s = nn.Sigmoid()
-                
-                # scale qvals 
-                qvals2 = qvals * self.sqval_scale
-                
-                # offset qvals
-                qvals3 = qvals2 + self.sqval_offset
-                
-                # sigmoid the scaled qvals
-                sqvals = s(qvals3)
-                sqvals2 = torch.squeeze(sqvals)
-                
-                globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
+                if self.use_gradient_weighting:
+                    sqvals2 = self.compute_gradient_weighting(nbatch)
+                else:
+                    sqvals2 = self.compute_simple_weighting(nbatch)
                 
                 # could weight sqvals by timestep, but try this first
 
