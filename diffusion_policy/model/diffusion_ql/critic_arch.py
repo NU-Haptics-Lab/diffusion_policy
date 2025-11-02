@@ -32,31 +32,6 @@ class BaseCritic:
 TODO - understand how to use the same weights for multiple image inputs while ensuring proper forward/backward passes are done, and the weights are updated correctly. I know this repo does it, just need to study it a bit
 """
 
-
-class SimpleModel(nn.Module):
-    def __init__(self, input_dim, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        
-        self.model = rmbn.MLP(
-            input_dim = input_dim,
-            output_dim = 1,   
-            layer_dims = [64, 64, 64]
-        )
-        
-    def forward(self, state_dict, action, options = None):
-        # only use the state
-        
-        # concat them all
-        x = torch.concat([state_dict['state'], action])
-        
-        # if options is not None:
-            
-        
-        # model
-        x = self.model(x)
-        
-        return x
-
 class QLDenser(nn.Module):
     """
     Standard MLP ... could just use robomimic's
@@ -65,7 +40,9 @@ class QLDenser(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         
-        self.model = nn.Sequential(nn.Linear(input_dim, hidden_dim),
+        self.model = nn.Sequential(
+                    nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now
+                    nn.Linear(input_dim, hidden_dim),
                     nn.Mish(),
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
@@ -232,7 +209,8 @@ class QLModelSimple(QLModel):
         self.obs_encoder: ObservationEncoder = self.obs_encoder_maker.get()
         
         # just the observation, no actions
-        dense_input = self.obs_encoder.output_shape()[0]
+        # dense_input = self.obs_encoder.output_shape()[0]
+        dense_input = self.obs_encoder.output_shape()[0] + len(globals.CONFIG.action_rel_indices) * globals.CONFIG.shape_meta.action.shape[0] #type:ignore
         
         self.dense = nn.Sequential(
                 QLDenser(dense_input, hidden_dim = hidden_dim),
@@ -242,7 +220,7 @@ class QLModelSimple(QLModel):
     def forward(self, state_dict, action, options: dict | None = None):
             
         # encode the inputs
-        x = self.obs_encoder(state_dict)
+        x = self.forward_obs(state_dict, action)
 
         x = self.dense(x)
         
@@ -275,6 +253,11 @@ class DoubleCritic(nn.Module, BaseCritic):
             q2 = None
             
         return q1, q2
+    
+    def infer(self, state_dict, action, options: dict | None = None):
+        q1 = self.q1_model(state_dict, action, options)
+            
+        return q1
                
     def q1(self, state_dict, action):
         return self.q1_model(state_dict, action)

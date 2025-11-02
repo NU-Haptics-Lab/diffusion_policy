@@ -146,7 +146,7 @@ class CriticLoss(nn.Module):
         ops = self.critic.MakeOptions(rb_id)
         
         m.eval()
-        qvals1, qvals2 = m.forward(state, a0, ops) # in [-inf, inf]
+        qvals1 = m.infer(state, a0, ops) # in [-inf, inf]
         m.train()
 
         return qvals1

@@ -5,12 +5,12 @@
 description: "actor-critic-10: simple diffusion model and critic"
 # global controls
 debug: false # 
-action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 total_num_epochs: 2001
 batches_per_epoch: 100
-batch_size: 64
+batch_size: 128
 val_every: 40
 
 ### Global Control Panel ###
@@ -20,17 +20,17 @@ load:
   - globals
 
 # hack
-resume: false
+resume: true
 resume_tag: latest
 
 tasks_to_use:
-  - bnb_2cams
+  # - bnb_2cams
   # - bnb_1cam
   # - block_transfer
   - sim_hitl_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
-  - sim_hitl_not_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
-  - sim_online_rl2 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
-  - sim_hitl_failures # to train the critic
+  # - sim_hitl_not_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  - online_rl3 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  # - sim_hitl_failures # to train the critic
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -186,7 +186,7 @@ replay_buffer_loader:
     sim_hitl_toby: ${data_directory}sim_hitl_toby.reward.zarr
     sim_hitl_not_toby: ${data_directory}sim_hitl_not_toby.reward.zarr
     sim_online_rl1: ${data_directory}sim_online_rl1.reward.zarr
-    sim_online_rl2: ${data_directory}sim_online_rl2.reward.zarr
+    online_rl3: ${data_directory}online_rl3.reward.zarr
     sim_hitl_failures: ${data_directory}sim_hitl_failures.reward.zarr
 
   modes:
@@ -196,7 +196,7 @@ replay_buffer_loader:
     sim_hitl_toby: r
     sim_hitl_not_toby: r
     sim_online_rl1: r
-    sim_online_rl2: a
+    online_rl3: a
     sim_hitl_failures: r
 
 
@@ -224,19 +224,19 @@ session_trainer:
         sim_hitl_toby: ${common_wbatch_loss}
         sim_hitl_not_toby: ${common_wbatch_loss}
         sim_online_rl1: ${common_wbatch_loss}
-        sim_online_rl2: ${common_wbatch_loss}
+        online_rl3: ${common_wbatch_loss}
         sim_hitl_failures: ${common_wbatch_loss}
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
       freq: 400 # in steps
       num_rollouts_per_trigger: 1
-      rb_id: sim_online_rl2
+      rb_id: online_rl3
       use_online_rollout: true
       rollout_num_actions: 8
       use_critic_preferred_actions: true
       use_critic_preferred_actions_early_exit: false
-      critic_preferred_actions_nb: 5
+      critic_preferred_actions_nb: 1
 
 
       evaluator:
@@ -252,7 +252,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: sim_online_rl2 # could experiment with sim_hitl_toby for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl_toby leaf doesn't have the same penalty as sim_online_rl2?)
+        task_id: sim_hitl_toby # could experiment with sim_hitl_toby for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl_toby leaf doesn't have the same energy penalty as online_rl3?)
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -267,7 +267,7 @@ session_trainer:
       sim_hitl_toby: ${common_wbatch_loss}
       sim_hitl_not_toby: ${common_wbatch_loss}
       sim_online_rl1: ${common_wbatch_loss}
-      sim_online_rl2: ${common_wbatch_loss}
+      online_rl3: ${common_wbatch_loss}
       sim_hitl_failures: ${common_wbatch_loss}
 
 
@@ -284,6 +284,7 @@ common_wbatch_loss:
     sqval_offset: -1.0 # how much to offset qvals2 before sigmoiding. A value of -2.0 means any qval < 0.0 has <12% weighting
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
+    use_gradient_weighting: true
 
     # children
     # for normalizing
@@ -299,7 +300,7 @@ dataloaders:
   sim_hitl_toby: ${common_dataset}
   sim_hitl_not_toby: ${common_dataset}
   sim_online_rl1: ${common_dataset}
-  sim_online_rl2: ${common_dataset}
+  online_rl3: ${common_dataset}
   sim_hitl_failures: ${common_dataset}
 
 common_dataset:
@@ -354,7 +355,7 @@ models:
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
-        use_tree: true
+        use_tree: false
         use_denoise: ${use_denoise} # freq: {1,1}: false: 6.5 it/s (or maybe 11?) vs true: 1.6 it/s --> false is ~4x faster? or might be 8x
         action_relative_to_state: ${action_relative_to_state} # ... the critic might be struggling with action_relative_to_state, maybe a bug or maybe need to do more runs for better statistics
 
@@ -392,13 +393,14 @@ models:
           obs_encoder_group_norm: true
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
-            - 376
-            - 752
-            - 1504
+            - 128
+            - 192
+            - 256
+          diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}
           use_tree: false
-          use_simple_model: true
+          use_simple_model: false
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -423,7 +425,7 @@ models:
             - 0.95
             - 0.999
           eps: 1.0e-08
-          lr: 5e-5 # 1e-4
+          lr: 5e-4 # 1e-4
           weight_decay: 1.0e-06
 
 
@@ -480,11 +482,11 @@ override:
                 rb_id: sim_online_rl1
               use_bc_loss: ${use_bc_loss}
 
-          sim_online_rl2:
+          online_rl3:
             weight: 0.1
             batch_loss: 
               batch_loader:
-                rb_id: sim_online_rl2
+                rb_id: online_rl3
               use_bc_loss: ${use_bc_loss}
 
           sim_hitl_failures:
@@ -538,11 +540,11 @@ override:
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
 
-        sim_online_rl2:
+        online_rl3:
           weight: 0.1
           batch_loss: 
             batch_loader:
-              rb_id: sim_online_rl2
+              rb_id: online_rl3
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
 
@@ -573,9 +575,9 @@ override:
     sim_online_rl1:
       sampler:
         rb_id: sim_online_rl1
-    sim_online_rl2:
+    online_rl3:
       sampler:
-        rb_id: sim_online_rl2
+        rb_id: online_rl3
     sim_hitl_failures:
       sampler:
         rb_id: sim_hitl_failures

@@ -452,16 +452,17 @@ class CriticWeightedBC(DQLBatchLoss):
 
     def compute_gradient_weighting(self, nbatch):
         # forward pass WITH gradients enabled
-        qvals = self.critic.infer(nbatch, self.a0, self.rb_id, use_grads=True)
+        a0 = torch.tensor(self.a0, requires_grad=True)
+        qvals = self.critic.infer(nbatch, a0, self.rb_id, use_grads=True)
 
         # loss is the negated qvals (because we want to maximize the qvals)
-        L = -1.0 * qvals
+        L = (-1.0 * qvals).mean()
 
         # backprop to get dL/d_{inputs} a.k.a. the derivative of the inputs w.r.t. the loss
         L.backward()
 
         # extract the action gradients
-        a0_grads = None
+        a0_grads = a0.grad
 
         # could normalize grads w.r.t. the input statistics (analogous to batch norm)
         if True:
@@ -485,8 +486,8 @@ class CriticWeightedBC(DQLBatchLoss):
         # scale and offset ?
         a0_grads3 = a0_grads2
 
-        # map to [0, 1] using sigmoid
-        sqvals = nn.Sigmoid()(a0_grads3)
+        # map to [0, 1] using a scaled tanh
+        sqvals = nn.Tanh()(a0_grads3) / 2 + 0.5
         sqvals2 = torch.squeeze(sqvals)
         
         globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
@@ -565,11 +566,11 @@ class CriticWeightedBC(DQLBatchLoss):
                 # could weight sqvals by timestep, but try this first
 
                 # weight BC samples w.r.t the sigmoid qvals
-                loss_arr2 = loss_arr.mean(axis=1)
-                assert(sqvals2.shape == loss_arr2.shape)
-                w_bc_loss = loss_arr2 * sqvals2
+                # loss_arr2 = loss_arr.mean(axis=1)
+                assert(sqvals2.shape == loss_arr.shape)
+                w_bc_loss = loss_arr * sqvals2
                 
-                assert(w_bc_loss.shape == loss_arr2.shape)
+                assert(w_bc_loss.shape == loss_arr.shape)
 
                 losses['actor']['bc'] = w_bc_loss.mean()
                 

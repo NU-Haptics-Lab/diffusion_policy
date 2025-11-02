@@ -646,8 +646,11 @@ class DiffusionModel(BaseImagePolicy):
         if pred_type == 'epsilon':
             target = noise
             
-            # must use the noise scheduler to compute the original sample
-            a0 = ForNoiseStep(self.noise_scheduler, pred, timesteps, noisy_trajectory)
+            # must use the noise scheduler to compute the original sample. TODO: only do if DQL is used
+            if False:
+                a0 = ForNoiseStep(self.noise_scheduler, pred, timesteps, noisy_trajectory)
+            else:
+                a0 = None
             
         # model prediction is the original trajectory of actions
         elif pred_type == 'sample':
@@ -660,15 +663,15 @@ class DiffusionModel(BaseImagePolicy):
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)
         
-        # testing weighing the gofa joints more than hand joints since their link lengths are larger
-        if True:
+        # testing weighing the gofa joints more than hand joints since their link lengths are larger -> ehh... idk.. didn't really work
+        if False:
             loss[:, :, 0:6] = loss[:, :, 0:6] * 10.0
         
         # testing weighing the earlier waypoints higher because those are the ones we tend to execute before replanning
-        if True:
+        if False:
             loss[:, 0:8, :] = loss[:, 0:8, :] * 2.5
             
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
+        # loss = reduce(loss, 'b ... -> b (...)', 'mean')
         # loss = loss.mean()
         
             
