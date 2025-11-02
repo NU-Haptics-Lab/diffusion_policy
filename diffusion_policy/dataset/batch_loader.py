@@ -360,11 +360,11 @@ class BatchLoader:
         # except can occur from a timeout or a StopIteration
         # I'm still not sure why the timeout's are occuring, but this will get around it
         except Exception as e:
-            print("next(iterator) except: ")
-            print(e)
+            # print("next(iterator) except: ")
+            # print(e)
             
-            # reset
-            print("shuffle")
+            # # reset
+            # print("shuffle")
             self.reset()
             
             # get a new batch

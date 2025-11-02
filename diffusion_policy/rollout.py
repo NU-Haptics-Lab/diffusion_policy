@@ -96,14 +96,19 @@ class Rollout:
             self.critic = critic.get_model()
             self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
 
-    
-    def run(self):
+    def run_rollouts(self):
+        self.run()
+    def run(self): # aka run_rollouts
         """
         Run one portion of rollout
         """
-        
         # if our number is called
         if self.use_online_rollout and utils.StepFreqTrigger(self.freq):
+            
+            # inits
+            successes = 0.0
+            total_reward = 0.0
+            avg_best_qval = 0.0
             
             # rollout n times per trigger
             for n in range(self.num_rollouts_per_trigger):
@@ -111,14 +116,27 @@ class Rollout:
                 self.rollout_prep()
             
                 # one rollout
-                samples = self.one_rollout()
+                samples, reward, best_qvals = self.one_rollout()
                 
                 # dump the samples to the replay buffer
                 self.save_episode(samples)
                 
+                # save vals
+                total_reward += reward
+                avg_best_qval += np.array(best_qvals).mean()
+                
+                # success?
+                if reward > 0.0:
+                    successes += 1
+                
             # must re-index the sampler
             sampler: TrainAndVal = globals.DATALOADERS[self.rb_id]
             sampler.init()
+            
+            # logging
+            globals.LOGGER.log_one("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
+            globals.LOGGER.log_one("rollout/avg_success_rate", successes / self.num_rollouts_per_trigger)
+            globals.LOGGER.log_one("rollout/avg_best_qval", avg_best_qval / self.num_rollouts_per_trigger)
                 
     def rollout_prep(self):
         # update the eval class
@@ -206,7 +224,7 @@ class Rollout:
 
         return qvals1
     
-    def infer_action(self) -> tuple[torch.Tensor, float]:
+    def infer_action(self) -> tuple[torch.Tensor, torch.Tensor]:
         if self.use_critic_preferred_actions:
             # actionss = []
             qvals = []
@@ -244,13 +262,13 @@ class Rollout:
                         break
 
             # # get the argmax of qvals
-            # idx = torch.argmin(qvals)
+            # idx = torch.argmax(qvals)
 
             # # get the action
             # best_actions = actionss[idx]
             
             # logging
-            globals.LOGGER.log_one("rollout/avg_qval", best_qval)
+            # globals.LOGGER.log_one("rollout/avg_qval", best_qval)
 
 
             assert(best_actions is not None)
@@ -273,7 +291,7 @@ class Rollout:
             actions, best_qval = self.infer_action() 
             actions = torch.squeeze(actions)
             actions = actions.numpy()
-            best_qvals.append(best_qval)
+            best_qvals.append(best_qval.cpu())
             
             # none protection
             if actions is not None:
@@ -300,12 +318,8 @@ class Rollout:
                     
                 # logging
                 total_reward += rewards
-                
-        # logging ... doesn't work with multiple rollouts because the STEP doesn't change ... see inside log_one
-        globals.LOGGER.log_one("rollout/ep_reward", total_reward)
-        globals.LOGGER.log_one("rollout/avg_best_qval", np.array(best_qvals).mean())
             
-        return samples
+        return samples, total_reward, best_qvals
     
     def save_samples(self, actions, rewards, samples):
         # save the sample using the old obs, current action, current reward
@@ -397,16 +411,19 @@ class Rollout:
         
         # make a write-able copy
         left_cam_rgb = obs['left_cam_rgb'].copy()
+        left_wrist_cam_rgb = obs['left_wrist_cam_rgb'].copy()
         
         # convert to float
         left_cam_rgb = np.array(left_cam_rgb, dtype='float')
+        left_wrist_cam_rgb = np.array(left_wrist_cam_rgb, dtype='float')
+        
+        # these images are coming from Drake (unnormalized), not the dataset (normalized), so we must normalize the images here
+        left_cam_rgb /= 255.0
+        left_wrist_cam_rgb /= 255.0
         
         # must moveaxis because that bug is still in the gen dataset script
         img = np.moveaxis(left_cam_rgb, -1, 1)
-        img /= 255.0
-        
-        # currently no wrist cam is active
-        img2 = np.zeros_like(img)
+        img2 = np.moveaxis(left_wrist_cam_rgb, -1, 1)
         
         return out_state, img, img2
         

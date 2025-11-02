@@ -483,6 +483,7 @@ class CriticWeightedBC(DQLBatchLoss):
             if is_eval:
                 bc_loss = loss_arr.mean()
                 losses['actor']['bc'] = bc_loss
+                
                 return losses
             
             
@@ -518,6 +519,8 @@ class CriticWeightedBC(DQLBatchLoss):
                 assert(w_bc_loss.shape == loss_arr2.shape)
 
                 losses['actor']['bc'] = w_bc_loss.mean()
+                
+                globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", w_bc_loss.mean())
         
         # we're done
         return losses

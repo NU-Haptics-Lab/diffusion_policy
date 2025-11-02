@@ -32,6 +32,31 @@ class BaseCritic:
 TODO - understand how to use the same weights for multiple image inputs while ensuring proper forward/backward passes are done, and the weights are updated correctly. I know this repo does it, just need to study it a bit
 """
 
+
+class SimpleModel(nn.Module):
+    def __init__(self, input_dim, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        
+        self.model = rmbn.MLP(
+            input_dim = input_dim,
+            output_dim = 1,   
+            layer_dims = [64, 64, 64]
+        )
+        
+    def forward(self, state_dict, action, options = None):
+        # only use the state
+        
+        # concat them all
+        x = torch.concat([state_dict['state'], action])
+        
+        # if options is not None:
+            
+        
+        # model
+        x = self.model(x)
+        
+        return x
+
 class QLDenser(nn.Module):
     """
     Standard MLP ... could just use robomimic's

@@ -1,4 +1,7 @@
 from typing import Dict
+from typing import Union
+
+
 import math
 import torch
 import torch.nn as nn
@@ -91,6 +94,54 @@ def VectorNoiseStep(noise_scheduler,
     out = batched_func(pred, timesteps, noisy_trajectory)
     return out
 
+class SimpleModel(nn.Module):
+    def __init__(self, input_dim, action_dim, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        
+        self.model = rmbn.MLP(
+            input_dim = input_dim,
+            output_dim = action_dim,   
+            layer_dims = [64, 64, 64]
+        )
+        
+    def forward(self, 
+            sample: torch.Tensor, 
+            timestep: Union[torch.Tensor, float, int], 
+            local_cond=None, global_cond=None, **kwargs):
+        
+        # flatten the traj, keep the batch dim
+        s = torch.reshape(sample, [sample.shape[0], -1])
+        
+        if isinstance(timestep, torch.Tensor):
+            # this happens during eval, and timestep is on cpu
+            if len(timestep.shape) == 0:
+                ts = torch.unsqueeze(timestep, dim=0)
+                ts = torch.tile(torch.Tensor(timestep), [sample.shape[0], 1])
+                ts = ts.to(globals.CONFIG.device)
+            else:
+                ts = torch.reshape(timestep, [sample.shape[0], 1])
+        else:
+            # tile it
+            ts = torch.tile(torch.Tensor(timestep), [sample.shape[0], 1])
+        
+        # concat them all along the not-batch dim
+        x = torch.concat([s, ts], dim=1)
+        
+        if local_cond is not None:
+            x = torch.concat([x, local_cond], dim=1)
+            
+        if global_cond is not None:
+            x = torch.concat([x, global_cond], dim=1)
+            
+        # model
+        x = self.model(x)
+        
+        # reshape
+        x = torch.reshape(x, sample.shape)
+        
+        return x
+            
+
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
             action_shape: dict,
@@ -107,6 +158,7 @@ class DiffusionModel(BaseImagePolicy):
             eval_fixed_crop=False,
             action_relative_to_state = False,
             use_tree = False,
+            use_simple_model = False,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -117,6 +169,7 @@ class DiffusionModel(BaseImagePolicy):
         
         self.action_relative_to_state = action_relative_to_state
         self.use_tree = use_tree
+        self.use_simple_model = use_simple_model
 
         # parse shape_meta
         assert len(action_shape) == 1
@@ -160,16 +213,22 @@ class DiffusionModel(BaseImagePolicy):
             input_dim = action_dim
             global_cond_dim = obs_feature_dim * n_obs_steps
 
-        model = ConditionalUnet1D(
-            input_dim=input_dim,
-            local_cond_dim=None,
-            global_cond_dim=global_cond_dim,
-            diffusion_step_embed_dim=diffusion_step_embed_dim,
-            down_dims=down_dims,
-            kernel_size=kernel_size,
-            n_groups=n_groups,
-            cond_predict_scale=cond_predict_scale
-        )
+        if self.use_simple_model:
+            nb_inps = action_dim * self.horizon + obs_feature_dim + 1 # trajectory, obs, timestep
+            model = SimpleModel(nb_inps, action_dim * self.horizon)
+            pass
+            
+        else:
+            model = ConditionalUnet1D(
+                input_dim=input_dim,
+                local_cond_dim=None,
+                global_cond_dim=global_cond_dim,
+                diffusion_step_embed_dim=diffusion_step_embed_dim,
+                down_dims=down_dims,
+                kernel_size=kernel_size,
+                n_groups=n_groups,
+                cond_predict_scale=cond_predict_scale
+            )
         #### end trunk
         
         if self.use_tree:
@@ -600,6 +659,17 @@ class DiffusionModel(BaseImagePolicy):
         # calculate the loss
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)
+        
+        # testing weighing the gofa joints more than hand joints since their link lengths are larger
+        if True:
+            loss[:, :, 0:6] = loss[:, :, 0:6] * 10.0
+        
+        # testing weighing the earlier waypoints higher because those are the ones we tend to execute before replanning
+        if True:
+            loss[:, 0:8, :] = loss[:, 0:8, :] * 2.5
+            
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         # loss = loss.mean()
+        
+            
         return loss, a0, timesteps

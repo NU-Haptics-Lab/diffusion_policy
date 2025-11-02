@@ -2,13 +2,13 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-7: bc + dql, a bit more sim_hitl_toby data now"
+description: "actor-critic-10: simple diffusion model and critic"
 # global controls
 debug: false # 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 5001
+total_num_epochs: 2001
 batches_per_epoch: 100
 batch_size: 64
 val_every: 40
@@ -27,8 +27,9 @@ tasks_to_use:
   - bnb_2cams
   # - bnb_1cam
   # - block_transfer
-  - sim_hitl_toby # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
-  - sim_online_rl2 # haptics values not consistent w.r.t. real life. TODO: MUST VALIDATE
+  - sim_hitl_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  - sim_hitl_not_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  - sim_online_rl2 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
   - sim_hitl_failures # to train the critic
 
 # which obs the obs_encoder will use
@@ -54,9 +55,9 @@ models_to_eval:
 
 # higher value means less frequent updates
 step_freqs:
-  actor: 2
+  actor: 1
   critic: 1
-  cbc: 2 # critic-informed BC
+  cbc: 1 # critic-informed BC
 
 # TODO: implement
 max_epochs:
@@ -95,7 +96,7 @@ checkpoint:
   resume: ${resume}
   resume_tag: ${resume_tag}
   # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  output_dir: /media/dexnex_ssd/models/actor_critic
+  output_dir: /media/dexnex_ssd/models/actor_critic_10
 
 # common data
 shape_meta:
@@ -134,7 +135,7 @@ logging:
   wandb_cfg:
     group: null
     id: null
-    mode: online
+    mode: online # don't change this
     name: 2025.diffusion_ql
     project: dexnex_diffusion
     resume: true # wandb automatic resume
@@ -183,6 +184,7 @@ replay_buffer_loader:
     bnb_1cam: ${data_directory}1cam.reward.zarr
     bnb_2cams: ${data_directory}2cams.reward.zarr
     sim_hitl_toby: ${data_directory}sim_hitl_toby.reward.zarr
+    sim_hitl_not_toby: ${data_directory}sim_hitl_not_toby.reward.zarr
     sim_online_rl1: ${data_directory}sim_online_rl1.reward.zarr
     sim_online_rl2: ${data_directory}sim_online_rl2.reward.zarr
     sim_hitl_failures: ${data_directory}sim_hitl_failures.reward.zarr
@@ -192,6 +194,7 @@ replay_buffer_loader:
     bnb_1cam: r
     bnb_2cams: r
     sim_hitl_toby: r
+    sim_hitl_not_toby: r
     sim_online_rl1: r
     sim_online_rl2: a
     sim_hitl_failures: r
@@ -219,6 +222,7 @@ session_trainer:
         bnb_1cam: ${common_wbatch_loss}
         bnb_2cams: ${common_wbatch_loss}
         sim_hitl_toby: ${common_wbatch_loss}
+        sim_hitl_not_toby: ${common_wbatch_loss}
         sim_online_rl1: ${common_wbatch_loss}
         sim_online_rl2: ${common_wbatch_loss}
         sim_hitl_failures: ${common_wbatch_loss}
@@ -261,6 +265,7 @@ session_trainer:
       bnb_1cam: ${common_wbatch_loss}
       bnb_2cams: ${common_wbatch_loss}
       sim_hitl_toby: ${common_wbatch_loss}
+      sim_hitl_not_toby: ${common_wbatch_loss}
       sim_online_rl1: ${common_wbatch_loss}
       sim_online_rl2: ${common_wbatch_loss}
       sim_hitl_failures: ${common_wbatch_loss}
@@ -292,6 +297,7 @@ dataloaders:
   bnb_1cam: ${common_dataset}
   bnb_2cams: ${common_dataset}
   sim_hitl_toby: ${common_dataset}
+  sim_hitl_not_toby: ${common_dataset}
   sim_online_rl1: ${common_dataset}
   sim_online_rl2: ${common_dataset}
   sim_hitl_failures: ${common_dataset}
@@ -362,10 +368,7 @@ models:
           use_double_q: ${..use_double_q}
 
           qlmodel:
-            _target_: diffusion_policy.model.diffusion_ql.critic_arch.QLModel
-            trunk_hidden_dim: 512
-            leaf_hidden_dim: 64
-            use_tree: ${...use_tree}
+            _target_: diffusion_policy.model.diffusion_ql.critic_arch.QLModelSimple
 
             obs_encoder_maker:
               ${common_obs_encoder}
@@ -395,6 +398,7 @@ models:
 
           action_relative_to_state: ${action_relative_to_state}
           use_tree: false
+          use_simple_model: true
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -463,6 +467,12 @@ override:
               batch_loader:
                 rb_id: sim_hitl_toby
 
+          sim_hitl_not_toby:
+            weight: 0.5
+            batch_loss: 
+              batch_loader:
+                rb_id: sim_hitl_not_toby
+
           sim_online_rl1:
             weight: 0.1
             batch_loss: 
@@ -513,6 +523,13 @@ override:
               rb_id: sim_hitl_toby
               train_or_val: val
 
+        sim_hitl_not_toby:
+          weight: 0.5
+          batch_loss: 
+            batch_loader:
+              rb_id: sim_hitl_not_toby
+              train_or_val: val
+
         sim_online_rl1:
           weight: 0.1
           batch_loss: 
@@ -550,6 +567,9 @@ override:
     sim_hitl_toby:
       sampler:
         rb_id: sim_hitl_toby
+    sim_hitl_not_toby:
+      sampler:
+        rb_id: sim_hitl_not_toby
     sim_online_rl1:
       sampler:
         rb_id: sim_online_rl1

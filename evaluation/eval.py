@@ -195,7 +195,9 @@ class Inference:
         
         if is_image:
             # same preprocessing as dexnex_pusht_image_dataset.py.
-            np2 = np.moveaxis(np1, -1, 1) / 255.0
+            # np2 = np.moveaxis(np1, -1, 1) / 255.0
+            np2 = np.moveaxis(np1, 2, 1)
+            
         else:
             np2 = np1
             

@@ -33,6 +33,8 @@ class DexNexDataset(BaseImageDataset):
         for key in obs_keys_to_use:
             if "img" in key:
                 obs[key] = np.moveaxis(obs[key], 2, 1)
+                
+        # now each image should be [batch, history, channels, pixelsx, pixelsy]
 
     def _sample_to_data(self, sample):
         """
