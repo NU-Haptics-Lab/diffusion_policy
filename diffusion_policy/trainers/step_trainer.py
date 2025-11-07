@@ -101,7 +101,7 @@ class StepTrainer:
         if True and bc_grad_norm is not None:
             dql_max_grad = bc_grad_norm * self.dql_grad_ratio
         else:
-            dql_max_grad = 0.05
+            dql_max_grad = 1.0 # 0.05 # keep at 1.0 to be just like the original DQL paper's code
             
             # now do scaled dql loss. dql grad's are now 10% of bc's
         # if my understanding of the math is correct, then reducing grad_norm by 10x is the same as reducing l.r. by 10x, AS LONG as this is the only grad term.
@@ -190,3 +190,8 @@ class StepTrainer:
         
         # reset optimizer gradients
         globals.MODELS.reset() 
+            
+    def reset(self):
+        # reset batch losses
+        for k, v in self.w_batch_losses.items():
+            v.reset()

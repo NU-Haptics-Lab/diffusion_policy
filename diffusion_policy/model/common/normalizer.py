@@ -165,6 +165,13 @@ class LinearNormalizer(DictOfTensorMixin):
 class SingleFieldLinearNormalizer(DictOfTensorMixin):
     avaliable_modes = ['limits', 'gaussian']
     
+    def __init__(self, params_dict=None,
+                 clamp = False,
+                 ):
+        super().__init__(params_dict)
+        
+        self.clamp = clamp
+    
     @torch.no_grad()
     def fit(self,
             data: Union[torch.Tensor, np.ndarray, zarr.Array],

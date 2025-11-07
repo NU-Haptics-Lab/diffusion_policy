@@ -455,6 +455,12 @@ class DiffusionModel(BaseImagePolicy):
         
         # unnormalize elsewhere
         naction_pred = nsample[...,:Da]
+        
+        # should be used with DQL ... but I don't use DQL directly anymore
+        if False:
+            act = nn.Tanh() # map [-inf, inf] to [-1, 1]. It's like a soft version of clamping. Do this because I clamp actions before execution so the actor should be aware of that somehow.
+            
+            naction_pred = act(naction_pred)
 
         # get action
         start = np.argmax(np.array(self.action_rel_indices) >= 0)
@@ -658,7 +664,7 @@ class DiffusionModel(BaseImagePolicy):
             a0 = pred
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
-        
+
         # calculate the loss
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)

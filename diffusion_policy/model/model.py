@@ -132,7 +132,7 @@ class Optim(Base):
                 nb_batches * total_num_epochs) // self.gradient_accumulate_every,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
-            last_epoch=globals.STEP-1
+            last_epoch=globals.STEP-1 -1 # -2 to work with the initial step value of 1
         )
         
         

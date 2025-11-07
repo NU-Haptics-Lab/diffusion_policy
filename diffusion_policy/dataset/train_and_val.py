@@ -3,18 +3,22 @@ from omegaconf import OmegaConf
 
 from typing import Dict
 import torch
+from torch import nn
 from torch.utils.data import DataLoader as torchDataLoader
+from torch.utils.data import WeightedRandomSampler
 import numpy as np
 import copy
+from diffusion_policy import utils
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.common.sars_sampler import (
+from diffusion_policy.common.sarsa_sampler import (
     DatasetSampler, get_val_mask, downsample_mask, get_not_done)
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
 from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
 import diffusion_policy.globals as globals
+from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 # TODO: move this class to its own file
 class DexNexDataset(BaseImageDataset):
@@ -70,6 +74,14 @@ class DexNexDataset(BaseImageDataset):
     def __len__(self) -> int:
         return len(self.sampler)
     
+    def get_key(self, key):
+        return self.sampler.get_key(key)
+    
+    def get_qvals(self):
+        return self.sampler.get_qvals()
+        
+        
+    
 
 class TrainAndVal:
     """
@@ -91,6 +103,7 @@ class TrainAndVal:
             val_ratio=0.0,
             max_train_episodes=None,
             whether_to_use = True,
+            use_weighted_dataloader = False,
             ):
         self.sampler = sampler
         self.rb_id = sampler.rb_id
@@ -99,11 +112,108 @@ class TrainAndVal:
         self.seed = seed
         self.max_train_episodes = max_train_episodes
         self.whether_to_use = whether_to_use
+        self.use_weighted_dataloader = use_weighted_dataloader
 
         # only init if we're being trained off of
         tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
         if self.rb_id in tasks_to_use:
             self.init()
+            
+    # def compute_weights(self, dataset: DexNexDataset):
+    #     """
+    #     Use critic to compute weights 
+    #     """
+    #     critic: CriticLoss = globals.MODELS["critic"] #type:ignore
+    #     qvals = []
+        
+    #     a = dataset.get_key('action')
+    #     s = dataset.get_key('state')
+        
+    #     # add history dim
+    #     s2 = np.expand_dims(s, axis=1)
+        
+    #     b = {'obs':
+    #             {'state': s2
+    #             }
+    #         }
+        
+    #     # note: this won't work if padding is not zero...
+    #     # for batch in samples:
+    #         #
+    #         # a = batch['action']
+            
+    #         # # add batch dim
+    #         # batch2 = utils.add_batch_dim(batch)
+    #         # a2 = torch.unsqueeze(a, dim=0)
+            
+    #     nbatch, na = utils.norm_gpu_critic(b, a)
+                    
+    #     # get the qval
+    #     qvals = critic.infer(nbatch, na, self.rb_id)
+            
+    #         #
+    #         # qvals.append(qval)
+            
+    #     # range: [-inf, 1], but more likely [-100, 1]
+    #     # qvals = torch.tensor(qvals)
+        
+    #     # map to range [0, 1]
+    #     sqvals = nn.Tanh()(qvals) / 2.0 + 0.5
+    #     sqvals2 = torch.squeeze(sqvals)
+            
+    #     weights = sqvals2.cpu().numpy()
+        
+    #     return weights
+    
+    
+    def compute_weights(self, dataset: DexNexDataset):
+        """
+        Use qvals to compute weights
+        """
+        qvals = dataset.get_qvals()
+        
+        # map to range [0, 1]
+        sqvals = np.tanh(qvals) / 2.0 + 0.5
+        # sqvals2 = torch.squeeze(sqvals)
+            
+        # weights = sqvals2.cpu().numpy()
+        weights = sqvals
+        
+        return weights
+        
+        
+    def make_dataloader(self, dataset, cfg):
+        use = self.use_weighted_dataloader
+        
+        # if MODELS hasn't been initialized yet, just use the regular dataloader until it is
+        # use = use and globals.MODELS is not None
+        
+        # only do if we're training from it
+        
+        
+        if use:
+            # get the weights
+            weights = self.compute_weights(dataset)
+            
+            assert(len(weights) == len(dataset))
+            
+            sampler = WeightedRandomSampler(list(weights), len(dataset))
+            
+            # make the sampler
+            dataloader = torchDataLoader(
+                dataset,
+                sampler=sampler,
+                **cfg
+                )
+            
+        else:
+            dataloader = torchDataLoader(
+                dataset,
+                **cfg
+                )
+        
+        return dataloader
+            
         
     def init(self):
         if not self.whether_to_use:
@@ -150,14 +260,8 @@ class TrainAndVal:
         OmegaConf.unsafe_merge(val_cfg, self.options.val) # type: ignore
         
         # make the train & val dataloader
-        self.train_dataloader = torchDataLoader(
-            self.train_dataset,
-            **train_cfg
-        )
-        self.val_dataloader = torchDataLoader(
-            self.val_dataset,
-            **val_cfg
-        )
+        self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
+        self.val_dataloader = self.make_dataloader(self.val_dataset, val_cfg)
         
         # dict access
         self.dd = {}
@@ -166,6 +270,27 @@ class TrainAndVal:
         
         print(self.rb_id + ": len train dataset: {}".format(len(self.train_dataloader)))
         
+    def reinit(self):
+        if utils.GlobalStepFreqTrigger('reinit'):
+            # only init if we're being trained off of
+            tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+            if self.rb_id in tasks_to_use:
+                self.init()
+        
         
     def __getitem__(self, key):
         return self.dd[key]
+    
+
+class DataLoaders:
+    def __init__(self,
+                 d: dict[int, TrainAndVal]
+                 ) -> None:
+        self.d = d
+        
+    def __getitem__(self, key):
+        return self.d[key]
+        
+    def reinit(self):
+        for key, d in self.d.items():
+            d.reinit()

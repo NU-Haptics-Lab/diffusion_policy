@@ -58,6 +58,9 @@ class Attractor(nn.Module):
         pass
         
     def RelToAbsActions(self, state, action):
+        """
+        ONLY ABSOLUTE ACTIONS IMPLEMENTED RN
+        """
         if False:
             # rel_a = action
             # s = state[:, ] + rel_a

@@ -10,6 +10,7 @@ from diffusion_policy.common.normalize_util import get_image_range_normalizer
 from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
 from diffusion_policy.common.normalize_util import get_identity_normalizer_from_stat
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
+from diffusion_policy.dataset.train_and_val import TrainAndVal
 
 """ 
 joint limits for the normalizer. Only thing that matters is the scale and offset. stat's aren't used in normalization
@@ -22,10 +23,10 @@ can use normalize_util.get_range_normalizer_from_stat to do the math for us, jus
 # https://www.shadowrobot.com/wp-content/uploads/2022/03/shadow_dexterous_hand_e_technical_specification.pdf
 JOINT_LIMITS = np.array([ 
     [0.52, 2.5], # gofa
+    [-1.0, 2.5], # gofa
+    [-2.5, 1.1], # gofa
     [-1.0, 2.0], # gofa
-    [-1.0, 1.1], # gofa
-    [-1.0, 1.1], # gofa
-    [-0.6, 2.0], # gofa
+    [-1.04, 2.0], # gofa
     [-2.5, 2.5], # gofa
     [-0.489, 0.140], # lh_WRJ2
     [-0.698, 0.489], # lh_WRJ1
@@ -51,6 +52,21 @@ mins = [0.2193,  1.1434,  0.1246,  0.2273,  1.1635,  0.1175, 0.2029,  1.1771,  0
 maxs = [0.5204, 1.3973, 0.4805, 0.5474, 1.4750, 0.5378, 0.5411, 1.4861, 0.5283]
 FINGERTIP_POS = np.stack((np.floor(mins), np.ceil(maxs)), axis=1)
 
+"""
+From validate_rewards for fingertip pos's
+range: 0.10214976966381073, 0.6771937012672424
+range: 1.1958625316619873, 1.5864757299423218
+range: 0.060191262513399124, 0.5472645163536072
+range: 0.0736096128821373, 0.7232524156570435
+range: 1.251955509185791, 1.6685783863067627
+range: 0.05885033309459686, 0.598027229309082
+range: 0.04745176061987877, 0.7142849564552307
+range: 1.2671566009521484, 1.6714200973510742
+range: 0.05856914445757866, 0.5928069353103638
+"""
+
+
+
 LIMITS = np.concatenate((JOINT_LIMITS, HAPTICS, FINGERTIP_POS), axis=0, dtype='float32')
 
 
@@ -61,11 +77,13 @@ class DataArray:
     def __init__(self, 
                  normalizer: SingleFieldLinearNormalizer,
                  descriptor = "",
-                 strict: bool = True
+                 strict: bool = True,
+                 clamp = True, # whether to clamp the normalized values to [-1, 1]
                  ):
         self.normalizer = normalizer
         self.descriptor = descriptor
         self.strict = strict
+        self.clamp = clamp
         
         # transfer to device, since I own normalizer
         # if hasattr(globals.CONFIG, "device"):
@@ -99,6 +117,13 @@ class DataArray:
             return
 
         self.datapoint = self.normalizer.normalize(self.datapoint)
+        
+        if self.clamp:
+            self.datapoint = torch.clamp(self.datapoint, -1.0, 1.0)
+            
+            pass
+            
+            
     
     def unnormalize(self):
         if self.strict and self.datapoint is None:
@@ -107,6 +132,11 @@ class DataArray:
         
         if self.datapoint is None:
             return
+        
+        if self.clamp:
+            self.datapoint = torch.clamp(self.datapoint, -1.0, 1.0)
+            
+            pass
 
         self.datapoint = self.normalizer.unnormalize(self.datapoint)
     
@@ -164,7 +194,7 @@ class NestedDataArray:
         for key, val in nested_normalizers.items():
             # leaf
             if isinstance(val, SingleFieldLinearNormalizer):
-                da = DataArray(val, descriptor=key, strict=self.strict)
+                da = DataArray(val, descriptor=key, strict=self.strict, clamp=val.clamp)
                 self.nest[key] = da
 
             # another branch
@@ -177,6 +207,7 @@ class NestedDataArray:
     @torch.no_grad()
     def normalize(self):
         # works whether val is a NestedDataArray or a DataArray since the syntax is the same
+        val: NestedDataArray | DataArray
         for key, val in self.nest.items():
             val.normalize()
 
@@ -218,6 +249,8 @@ class BatchLoader:
         self.use_dataloader = use_dataloader
         self.strict = strict
         
+        self.dataloaders = None
+        
         # only continue if we're being trained off of or special rb_id of default
         tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
         if (self.rb_id not in tasks_to_use) and not self.rb_id == "default":
@@ -225,8 +258,8 @@ class BatchLoader:
         
         # if we actually want to use a data-loader. might not when we're doing inference but still need the task-ids
         if self.use_dataloader and not self.rb_id == "default":
-            # get a handle to the dataloader "Node"
-            self.dataloader: DataLoader = globals.DATALOADERS[self.rb_id][self.train_or_val]
+            # get a handle to the dataloader "Node".
+            self.dataloaders: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         self.nested_data_array = NestedDataArray("top-level", strict=self.strict)
         
@@ -262,6 +295,11 @@ class BatchLoader:
                 {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
                 )
         
+        rb_index = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        rb_index.clamp = False
+        
         nn = {
             'obs': obs,
             'obs_next': obs,
@@ -273,9 +311,7 @@ class BatchLoader:
             'reward': get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
                 ),
-            'rb_index': get_identity_normalizer_from_stat(
-                {'min': np.array([0], dtype=np.float32)}
-                ),
+            'rb_index': rb_index,
         }
         
         self.nested_data_array.set_normalizers(nn)
@@ -285,8 +321,11 @@ class BatchLoader:
         self.count = 0
 
         # forces a reshuffle
-        if self.use_dataloader:
-            self.iterator = iter(self.dataloader)
+        if self.use_dataloader and self.dataloaders is not None:
+            dataloader = self.dataloaders[self.train_or_val]
+            self.iterator = iter(dataloader)
+            
+            # print("New len iterator: {}".format(len(dataloader)))
         else:
             self.iterator = None
 

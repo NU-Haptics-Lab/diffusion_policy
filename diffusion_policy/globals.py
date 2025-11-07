@@ -16,6 +16,9 @@ from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.model.models import Models
 from diffusion_policy.common.checkpointer import TopKCheckpointManager
 from diffusion_policy.common.logging import Logging
+from diffusion_policy.dataset.train_and_val import DataLoaders
+from diffusion_policy.dataset.batch_loader import BatchLoader
+from diffusion_policy.trainers.session_trainer import SessionTrainer
 
 """
 Global config access
@@ -30,18 +33,18 @@ REPLAY_BUFFER_LOADER: ReplayBufferLoader
 """
 Contains both train and val data loaders
 """
-DATALOADERS: dict
+DATALOADERS: DataLoaders
 
 """
 Contains all models used in training
 """
-MODELS: Models
+MODELS: Models = None # type:ignore
 
 """ Epoch count """
 EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoch
 
 """ Training step count """
-STEP = 0
+STEP = 1 # start on 1 so that rollouts won't trigger immediately
 
 """ Logger """
 LOGGER: Logging
@@ -49,5 +52,8 @@ LOGGER: Logging
 """ Checkpointer """
 CHECKPOINTER: TopKCheckpointManager
 
-""" Sim Env? """
-# SIM_ENV
+""" Default batch loader for normalizing """
+DEFAULT_BATCH_LOADER: BatchLoader
+
+
+SESSION_TRAINER: SessionTrainer

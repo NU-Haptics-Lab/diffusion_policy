@@ -118,6 +118,10 @@ def main(cfg: OmegaConf):
     # spin up the dataloaders
     globals.DATALOADERS = hydra.utils.instantiate(globals.CONFIG.dataloaders) # type: ignore
     print("Dataloaders spun.")
+    
+    # spin up the dataloaders
+    globals.DEFAULT_BATCH_LOADER = hydra.utils.instantiate(globals.CONFIG.default_batch_loader) # type: ignore
+    print("DEFAULT_BATCH_LOADER spun.")
         
     # spin up the models
     globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models) # type: ignore
@@ -129,7 +133,7 @@ def main(cfg: OmegaConf):
 
     # spin up the session trainer
     # cls = hydra.utils.get_class(cfg._target_)
-    session_trainer: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer) # type: ignore
+    globals.SESSION_TRAINER: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer) # type: ignore
     print("Session Trainer spun.")
     
     # if resuming, load
@@ -138,7 +142,7 @@ def main(cfg: OmegaConf):
     # run it
     print("Begin running.")
     try:
-        session_trainer.run()
+        globals.SESSION_TRAINER.run()
     except KeyboardInterrupt:
         if input("Save a checkpoint? y/n ") == 'y':
             # checkpoints

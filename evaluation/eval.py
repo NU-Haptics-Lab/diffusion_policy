@@ -54,16 +54,17 @@ from moveit.core.robot_state import RobotState
 class Inference:
     def __init__(self,
                  policy: DiffusionModel,
-                 batch_loader,
                  debug,
                  analytics,
                  task_id,
                  ) -> None:
-        self.batch_loader = batch_loader
         self.policy = policy
         self.debug = debug
         self.analytics = analytics
         self.task_id = task_id
+        
+        # save a handle
+        self.batch_loader = globals.DEFAULT_BATCH_LOADER
         
         
         # save n obs steps

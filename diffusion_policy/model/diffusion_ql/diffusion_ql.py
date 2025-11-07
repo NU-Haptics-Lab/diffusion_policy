@@ -113,6 +113,12 @@ class DiffusionQL(nn.Module):
         reward = nbatch_dict['reward']
         not_done = nbatch_dict['not_done']
         
+        # can't train when batch length is 1
+        if True:
+            if len(action) <= 1:
+                critic_loss = utils.InitZeroTensorOnDevice()
+                return critic_loss
+        
         # hack TODO: fix. squeeze the dims
         # state = pytorch_util.dict_of_tensor_copy(state)
         # for key, val in state.items():
@@ -355,4 +361,7 @@ class DiffusionQL(nn.Module):
         self.critic_optimizer.zero_grad()
         
     def get_model(self, want_target_network=False):
-        return self.critic
+        if want_target_network and self.use_target_network:
+            return self.critic_target
+        else:
+            return self.critic

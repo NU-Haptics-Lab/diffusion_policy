@@ -10,6 +10,7 @@ from diffusion_policy.dataset.train_and_val import TrainAndVal
 
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.common import pytorch_util
+from diffusion_policy.model.diffusion_ql.attractor import JerkPenalty
 
 import numpy as np
 import gymnasium as gym
@@ -93,7 +94,7 @@ class Rollout:
 
             # get the critic
             critic: CriticLoss = globals.MODELS["critic"] #type:ignore
-            self.critic = critic.get_model()
+            self.critic = critic.get_model(want_target_network=True)
             self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
 
     def run_rollouts(self):
@@ -109,6 +110,8 @@ class Rollout:
             successes = 0.0
             total_reward = 0.0
             avg_best_qval = 0.0
+            avg_jerk = 0.0
+            ttc = 0.0
             
             # rollout n times per trigger
             for n in range(self.num_rollouts_per_trigger):
@@ -116,7 +119,7 @@ class Rollout:
                 self.rollout_prep()
             
                 # one rollout
-                samples, reward, best_qvals = self.one_rollout()
+                samples, reward, best_qvals, jerk = self.one_rollout()
                 
                 # dump the samples to the replay buffer
                 self.save_episode(samples)
@@ -124,24 +127,39 @@ class Rollout:
                 # save vals
                 total_reward += reward
                 avg_best_qval += np.array(best_qvals).mean()
+                avg_jerk += np.array(jerk).mean()
                 
                 # success?
                 if reward > 0.0:
                     successes += 1
+                    
+                    # add on episode length
+                    ttc += len(samples)
                 
             # must re-index the sampler
             sampler: TrainAndVal = globals.DATALOADERS[self.rb_id]
             sampler.init()
             
+            # all dataloader iterators are now invalid, so each Batchloader class must now reset
+            globals.SESSION_TRAINER.reset()
+            
             # logging
             globals.LOGGER.log_one("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
             globals.LOGGER.log_one("rollout/avg_success_rate", successes / self.num_rollouts_per_trigger)
             globals.LOGGER.log_one("rollout/avg_best_qval", avg_best_qval / self.num_rollouts_per_trigger)
+            globals.LOGGER.log_one("rollout/avg_jerk", avg_jerk / self.num_rollouts_per_trigger)
+            
+            if successes > 0:
+                avg_ttc = ttc / successes
+                globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
                 
     def rollout_prep(self):
         # update the eval class
         
         # reset the sim class
+        obs, info = self.env.reset()
+        
+        # resetting once doesn't reset everything, so as a hack we can just reset again
         obs, info = self.env.reset()
                 
         # convert the obs
@@ -169,9 +187,18 @@ class Rollout:
         done = False
         infos = None
         
+        # initial state
+        state = self.state
+        
+        total_jerk = 0.0
+        
         m = min(len(actions), self.rollout_num_actions)
         for i in range(m):
             action = actions[i]
+            
+            # get jerk
+            total_jerk += utils.compute_jerk(state, action)
+            
             # step the env
             new_obs, rewards, terminated, truncated, infos = self.env.step(action) #type:ignore
             
@@ -191,7 +218,7 @@ class Rollout:
             if done:
                 break
             
-        return samples, new_obs, total_reward, done, infos
+        return samples, new_obs, total_reward, done, infos, total_jerk
     
     def eval_actions(self, actionss):
         # get the state
@@ -224,7 +251,7 @@ class Rollout:
 
         return qvals1
     
-    def infer_action(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def infer_action(self) -> tuple[torch.Tensor, float]:
         if self.use_critic_preferred_actions:
             # actionss = []
             qvals = []
@@ -272,7 +299,7 @@ class Rollout:
 
 
             assert(best_actions is not None)
-            return best_actions, best_qval
+            return best_actions, best_qval.cpu()
         else:
             actions, all_actions = self.evaluator.infer()
             assert(actions is not None)
@@ -285,18 +312,20 @@ class Rollout:
         samples = []
         total_reward = 0.0
         best_qvals = []
+        total_jerk = 0.0
+        
         done = False
         while not done:
             # get the action trajectory
             actions, best_qval = self.infer_action() 
             actions = torch.squeeze(actions)
             actions = actions.numpy()
-            best_qvals.append(best_qval.cpu())
+            best_qvals.append(best_qval)
             
             # none protection
             if actions is not None:
                 # execute the full trajectory
-                new_samples, new_obs, rewards, dones, infos = self.step_trajectory(actions)
+                new_samples, new_obs, rewards, dones, infos, jerk = self.step_trajectory(actions)
                 
                 # append all new samples
                 samples += new_samples
@@ -318,8 +347,12 @@ class Rollout:
                     
                 # logging
                 total_reward += rewards
+                total_jerk += jerk
+                
+        # normalize jerk by episode length
+        total_jerk /= len(samples)
             
-        return samples, total_reward, best_qvals
+        return samples, total_reward, best_qvals, total_jerk
     
     def save_samples(self, actions, rewards, samples):
         # save the sample using the old obs, current action, current reward

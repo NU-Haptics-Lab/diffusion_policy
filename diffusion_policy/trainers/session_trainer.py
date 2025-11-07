@@ -41,3 +41,8 @@ class SessionTrainer:
 
         # end of session stuff
         pass
+            
+    def reset(self):
+        self.epoch_trainer.reset()
+        
+        self.epoch_evaluator.reset()

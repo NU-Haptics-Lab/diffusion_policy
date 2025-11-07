@@ -41,7 +41,7 @@ class QLDenser(nn.Module):
         self.hidden_dim = hidden_dim
         
         self.model = nn.Sequential(
-                    nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now
+                    nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now. FTR I added tanh on the prediction output in diffusion_model.py
                     nn.Linear(input_dim, hidden_dim),
                     nn.Mish(),
                     nn.Linear(hidden_dim, hidden_dim),
@@ -76,12 +76,13 @@ class QLModel(nn.Module):
                  trunk_hidden_dim = 256,
                  leaf_hidden_dim = 128,
                  use_tree = False,
-
                  input_leaf_append = False, # whether to append the input to x before passing through the leaf
                  ):
         super().__init__()
         self.obs_encoder_maker = obs_encoder_maker
         self.if_stack_history = if_stack_history
+        self.trunk_hidden_dim = trunk_hidden_dim
+        self.leaf_hidden_dim = leaf_hidden_dim
         self.use_tree = use_tree
         self.input_leaf_append = input_leaf_append
         
@@ -196,6 +197,28 @@ class QLModel(nn.Module):
         
         return x
     
+    def copy(self):
+        """
+        Make a copy with the same parameters, but different weights
+        """
+        # other = copy.deepcopy(self.q1_model)
+        
+        # # re-init for new weight values
+        # with torch.no_grad():
+        #     nn.Module.__init__(other)
+        
+        other = QLModel(
+                        self.obs_encoder_maker,
+                        self.if_stack_history,
+                        self.trunk_hidden_dim,
+                        self.leaf_hidden_dim,
+                        self.use_tree,
+                        self.input_leaf_append
+        )
+        
+        return other
+        
+    
 class QLModelSimple(QLModel):
     def __init__(self,
                  obs_encoder_maker: ObsEncoderMaker,
@@ -204,6 +227,7 @@ class QLModelSimple(QLModel):
         nn.Module.__init__(self)
         
         self.obs_encoder_maker = obs_encoder_maker
+        self.hidden_dim = hidden_dim
 
         # get the robomimic obs-encoder
         self.obs_encoder: ObservationEncoder = self.obs_encoder_maker.get()
@@ -226,6 +250,23 @@ class QLModelSimple(QLModel):
         
         return x
     
+    def copy(self):
+        """
+        Make a copy with the same parameters, but different weights
+        """
+        # other = copy.deepcopy(self.q1_model)
+        
+        # # re-init for new weight values
+        # with torch.no_grad():
+        #     nn.Module.__init__(other)
+        
+        other = QLModelSimple(
+                        self.obs_encoder_maker,
+                        self.hidden_dim
+        )
+        
+        return other
+    
             
         
 
@@ -240,7 +281,9 @@ class DoubleCritic(nn.Module, BaseCritic):
         self.q1_model = qlmodel
         
         if self.use_double_q:
-            self.q2_model = copy.deepcopy(self.q1_model)
+            # can't deep copy because that'll copy the weight values, and then q2 will just be exactly like q1 ...
+            # must init a new one
+            self.q2_model = self.q1_model.copy()
 
         print_nb_params(self.q1_model, "Critic params")
     

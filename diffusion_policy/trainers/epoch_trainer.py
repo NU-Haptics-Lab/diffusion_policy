@@ -75,7 +75,11 @@ class EpochValidator(Epoch):
         
             # switch to training mode
             self.models.train()
-    
+            
+    def reset(self):
+        # reset batch losses
+        for k, v in self.w_batch_losses.items():
+            v.reset()
     
 class EpochTrainer(Epoch):
     """
@@ -102,6 +106,9 @@ class EpochTrainer(Epoch):
             # train for one step
             self.step_trainer.train()
             
+            # reindex dataloader
+            globals.DATALOADERS.reinit()
+            
             # rollouts
             if self.rollouts is not None:
                 self.rollouts.run()
@@ -120,3 +127,6 @@ class EpochTrainer(Epoch):
         #     "epoch_avg_loss": np.mean(losses),
         # }
         # globals.LOGGER.log(log)
+            
+    def reset(self):
+        self.step_trainer.reset()

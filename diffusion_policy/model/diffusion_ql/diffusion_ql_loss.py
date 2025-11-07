@@ -15,6 +15,7 @@ import diffusion_policy.globals as globals
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.model.diffusion_model import DiffusionModel
 from diffusion_policy import utils
+from diffusion_policy import utils
 
 """
 reference paper: https://arxiv.org/pdf/2208.06193
@@ -131,16 +132,18 @@ class CriticLoss(nn.Module):
         # returns loss, metric
         dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, None, task_id, a0=a0, timesteps=timesteps)
         
-        # if we're using denoising, then we'd expect the gradient to pass through the actor self.num_inference_steps times, so divide the loss by that value so that the same l.r. can be used regardless of num_inference_steps
-        if self.use_denoise:
-            assert(dql_actor_loss is not None)
-            dql_actor_loss = dql_actor_loss / self.num_inference_steps
+        # if we're using denoising, then we'd expect the gradient to pass through the actor self.num_inference_steps times and in torch the gradients sum, so divide the loss by that value so that the same l.r. can be used regardless of num_inference_steps
+        if self.use_denoise and utils.GlobalStepFreqTrigger('actor'):
+            if False: # false to be just like the original DQL paper's code
+                assert(dql_actor_loss is not None)
+                dql_actor_loss = dql_actor_loss / self.num_inference_steps
             
         
         return dql_actor_loss, dql_critic_loss
     
     def infer_impl(self, nbatch, a0, rb_id):
-        m = self.critic.get_model()
+        # usually inference implies NOT training, so we want the more stable target network
+        m = self.critic.get_model(want_target_network=True)
         state = nbatch['obs']
         
         ops = self.critic.MakeOptions(rb_id)
@@ -168,5 +171,5 @@ class CriticLoss(nn.Module):
     def reset(self):
         self.critic.reset()
         
-    def get_model(self):
-        return self.critic.get_model()
+    def get_model(self, want_target_network=False):
+        return self.critic.get_model(want_target_network)

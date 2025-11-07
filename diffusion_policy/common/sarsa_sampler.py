@@ -247,6 +247,12 @@ class Indices:
 
         return rb_indices
     
+    def get_all_rb_indices(self):
+        indices = self.indices
+        all_rb_indices = self.get_rb_indices(indices)
+        
+        return all_rb_indices
+    
     def get_sequence_by_indices_and_key(self, indices, key):
         """
         The caller requests data from `indices`, which may or may not exist in the episode this instance is associated with.
@@ -264,6 +270,7 @@ class Indices:
         # ig = itemgetter(*list(rb_indices))
         ls = []
         for i in rb_indices:
+
             ls.append(input_arr[i])
 
         # index the sample
@@ -447,8 +454,8 @@ class EpisodeSampler:
         reward = self.get_key_sample("reward", ep_idx) # adds a dimension
         
         # TESTING -- reduce the existence penalty so I don't have to regen the dataset
-        # FOR NOW -- negative rewards are not allowed because double-q uses min(q-val) so negative reward would mess up the underestimation mechanic
-        reward[ reward < 0.0] = 0.0
+        if False:
+            reward[ reward < 0.0] = 0.0
         
         # convert to np array
         reward = np.array(reward)
@@ -479,6 +486,8 @@ class EpisodeSampler:
         # iterate over obs keys
         for key in self.obs_keys:
             sample[key] = self.indices.get_sequence_by_indices_and_key(indices, key)
+            
+            # the haptics values can be fraught ......
             
         return sample
     
@@ -528,6 +537,31 @@ class EpisodeSampler:
         sample["rb_index"] = self.get_rb_index(ep_idx)
 
         return sample
+    
+    def get_all_rb_indices(self):
+        return self.indices.get_all_rb_indices()
+    
+    def get_qvals(self):
+        # get rewards
+        indices = self.indices.indices
+        rewards = self.indices.get_sequence_by_indices_and_key(indices, "reward")
+        
+        qvals = []
+        qval = 0.0
+        
+        discount = 0.975
+        
+        for indice in reversed(indices):
+            qval = rewards[indice] + discount * qval
+            
+            qvals.append(qval)
+            
+        qvals2 = np.array(qvals)
+        
+        # reverse
+        qvals3 = np.flip(qvals2)
+        
+        return qvals3
 
 class DatasetSampler:
     """
@@ -549,6 +583,10 @@ class DatasetSampler:
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
         
         self.initd = False
+        self.ep_mask = None
+        self.ep_samplers: list[EpisodeSampler] = []
+        self.my_indices = []
+        self.qvals = []
 
     def Init(self,
               ep_mask
@@ -573,6 +611,9 @@ class DatasetSampler:
         self.tr_ep_offsets = []
         rb_offset = 0
         tr_ep_offset = 0
+        
+        my_indices = np.array([])
+        qvals = np.array([])
 
         # one episode sampler per episode
         for idx, episode_end in enumerate(self.replay_buffer.episode_ends):
@@ -590,9 +631,18 @@ class DatasetSampler:
 
                 # add the length of the training episode
                 tr_ep_offset += len(ep_sampler)
+                
+                # save the indices
+                my_indices = np.concatenate([my_indices, ep_sampler.get_all_rb_indices()])
+                qvals = np.concatenate([qvals, ep_sampler.get_qvals()])
 
             # set rb offset to the old episode_end
             rb_offset = episode_end
+            
+            
+        # convert to np
+        self.my_indices = np.array(my_indices, dtype=int)
+        self.qvals = np.array(qvals)
 
     @property
     def episodes(self):
@@ -634,3 +684,13 @@ class DatasetSampler:
             count += len(ep)
 
         return count
+    
+    def get_key(self, key):
+        assert(self.replay_buffer is not None)
+        all_samples = self.replay_buffer[key]
+        
+        s = all_samples[self.my_indices]
+        return s
+    
+    def get_qvals(self):
+        return self.qvals

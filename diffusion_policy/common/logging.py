@@ -39,7 +39,8 @@ class Logging:
             wandb.config.update(
                 {
                     "output_dir": self.output_dir,
-                }
+                },
+                allow_val_change=True
             )
             
     def reset(self):

@@ -47,7 +47,7 @@ class BatchLoss:
         self.rb_id = self.batch_loader.rb_id
 
         # my members
-        self.current_batch: dict
+        self.current_batch: dict = None #type:ignore
         
     def init_losses(self):
         losses = {}
@@ -73,34 +73,47 @@ class BatchLoss:
         """
         Train for one batch.
         """
-        # get the batch from the batch loader
-        nbatch = next(self.batch_loader)
-        self.current_batch = nbatch # save
+        
+        actor_loss = utils.InitZeroTensorOnDevice()
 
         # get the BC loss
         if self.use_bc_loss:
+            # get the batch from the batch loader
+            nbatch = next(self.batch_loader)
+            self.current_batch = nbatch # save
+            
+            # compute loss
             actor_loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
+            
+            # mean it
             actor_loss = actor_loss.mean()
-        else:
-            actor_loss = 0.0
 
         # we're done
         losses = self.init_losses()
         losses['actor']['bc'] = actor_loss
+        
+        globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", actor_loss)
         return losses
     
     def eval(self):
+        loss = 0.0
+        action_mse_error = 0.0
+        
         # get the actor loss
         t = self.compute_loss()
         l = t['actor']['bc']
         loss = l.cpu()
 
         # get the action mse error
-        action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
+        if self.current_batch is not None:
+            action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=self.rb_id)
 
         return loss, action_mse_error
     
-class BCBatchLoss(BatchLoss):
+    def reset(self):
+        self.batch_loader.reset()
+    
+class BC(BatchLoss):
     pass
     
 class TTREfficiencyWeightedBatchLoss(BatchLoss):
@@ -357,23 +370,12 @@ class DQLBatchLoss(BatchLoss):
         """
         compute loss for one batch.
         """
-        losses = {}
+        losses = self.init_losses()
         
         # flags
         models_to_train: list = globals.CONFIG.models_to_train # type: ignore
         use_dql: bool = globals.CONFIG.use_dql # type: ignore
         
-        # for key in models_to_train:
-        #     losses[key] = utils.InitZeroTensorOnDevice()
-        losses = {
-            'critic': utils.InitZeroTensorOnDevice(),
-            'actor': {
-                'bc': utils.InitZeroTensorOnDevice(),
-                'dql': utils.InitZeroTensorOnDevice(),
-                'attractor': utils.InitZeroTensorOnDevice(),
-            }
-        }
-
         train_actor = "actor" in models_to_train
         train_critic = "critic" in models_to_train
         need_dql_actor_loss = train_actor and use_dql
@@ -382,9 +384,13 @@ class DQLBatchLoss(BatchLoss):
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch
         
+        # protection against batches with only 1 sample
+        if nbatch['action'].shape[0]  <= 1:
+            return losses
+        
         a0 = None
         
-        # if we need the BC output
+        # we always need the BC output
         if True:
             bc_loss, a0, timesteps = self.get_bc_loss(is_eval)
             
@@ -410,8 +416,11 @@ class DQLBatchLoss(BatchLoss):
             
             # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
             if need_dql_actor_loss and dql_actor_loss is not None and utils.StepFreqTrigger(self.freqs['actor']):
+                # scale by the BC loss, don't add to graph
+                scale = (self.eta * bc_loss).detach()
+                
                 # add on the DQL actor loss
-                losses['actor']['dql'] = self.eta * dql_actor_loss
+                losses['actor']['dql'] = scale * dql_actor_loss
         
         # we're done
         return losses
@@ -430,6 +439,10 @@ class DQLBatchLoss(BatchLoss):
         
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error
+    
+# alias
+class DQL(DQLBatchLoss):
+    pass
     
 class CriticWeightedBC(DQLBatchLoss):
     """
@@ -455,7 +468,7 @@ class CriticWeightedBC(DQLBatchLoss):
         a0 = torch.tensor(self.a0, requires_grad=True)
         qvals = self.critic.infer(nbatch, a0, self.rb_id, use_grads=True)
 
-        # loss is the negated qvals (because we want to maximize the qvals)
+        # loss is the negated qvals (because we want to maximize the qvals). Actually sign doesn't matter because we're simply finding which grads make the biggest impact on loss (torch.abs below)
         L = (-1.0 * qvals).mean()
 
         # backprop to get dL/d_{inputs} a.k.a. the derivative of the inputs w.r.t. the loss
@@ -469,7 +482,7 @@ class CriticWeightedBC(DQLBatchLoss):
             # dim is the dim over which all inputs refer to the same input ... which is gonna be the batch dimension
             dim = 0
             eps = 1e-4
-            x: torch.Tensor = a0_grads
+            x: torch.Tensor = a0_grads.clone()
 
             # normalize, https://discuss.pytorch.org/t/pytorch-tensor-scaling/38576 
             m = x.mean(dim=dim, keepdim=True)
@@ -483,17 +496,38 @@ class CriticWeightedBC(DQLBatchLoss):
         else:
             a0_grads2 = a0_grads
 
-        # scale and offset ?
-        a0_grads3 = a0_grads2
+        # abs so then large negative gradients are highly weighted
+        a0_grads3 = torch.abs(a0_grads2)
 
-        # map to [0, 1] using a scaled tanh
-        sqvals = nn.Tanh()(a0_grads3) / 2 + 0.5
+        # maps to [0, 1]. Scale by 2x for greater separation for grad values between [0, 1]
+        sqvals = nn.Tanh()(a0_grads3 * 2.0)
         sqvals2 = torch.squeeze(sqvals)
         
-        globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
+        # scale by q-val for each sample, too. This way we don't poison our BC from rollouts by learning to imitate shit actions.
+        if True:
+            # no grad
+            with torch.no_grad():
+                # qvals are in [-inf, 1]
+                sample_weights = qvals.clone()
+                
+                # clamp to [0, 1], basically meaning that if a qval is < 0.0 (aka will pretty much never get a reward), give 0 weighting to its sample
+                sample_weights2 = torch.clamp(sample_weights, 0, 1)
+                
+                # scale to [0.5, 1] I guess. Seems right to do.
+                sample_weights3 = sample_weights2 / 2.0 + 0.5
+                
+                # reshape for broadcasting ... probably wasn't necessary to do explicitly
+                sample_weights4 = torch.reshape(sample_weights3, [-1] + [1] * (len(sqvals2.shape)-1))
+                
+                # weight the sqvals
+                sqvals3 = sqvals2 * sample_weights4
+            
+            
+        
+        globals.LOGGER.log_one("cibc/sqvals/" + self.rb_id, sqvals3.mean())
 
         # we're done
-        return sqvals2
+        return sqvals3
 
     def compute_simple_weighting(self, nbatch):
         # eval each BC sample (no backprop) using the g.t. a0
@@ -512,7 +546,7 @@ class CriticWeightedBC(DQLBatchLoss):
         sqvals = s(qvals3)
         sqvals2 = torch.squeeze(sqvals)
         
-        globals.LOGGER.log_one("cbc/sqvals/" + self.rb_id, sqvals2.mean())
+        globals.LOGGER.log_one("cibc/sqvals/" + self.rb_id, sqvals2.mean())
 
         return sqvals2
 
@@ -547,7 +581,7 @@ class CriticWeightedBC(DQLBatchLoss):
             if train_critic:
                 losses['critic'] = dql_critic_loss
         
-        if utils.StepFreqTrigger(self.freqs['cbc']) or is_eval:
+        if utils.StepFreqTrigger(self.freqs['cibc']) or is_eval:
             # hack
             if is_eval:
                 bc_loss = loss_arr.mean()
@@ -578,6 +612,10 @@ class CriticWeightedBC(DQLBatchLoss):
         
         # we're done
         return losses
+    
+# alias name
+class CIBC(CriticWeightedBC):
+    pass
     
 class AttractorLoss(DQLBatchLoss):
     """
@@ -710,3 +748,6 @@ class WeightedBatchLoss:
         # this batch_loss should already be in val mode
         wevals = self.weight * np.array(self.batch_loss.eval())
         return wevals
+            
+    def reset(self):
+        self.batch_loss.reset()
