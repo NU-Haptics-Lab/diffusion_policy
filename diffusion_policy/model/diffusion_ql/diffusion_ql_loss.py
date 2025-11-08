@@ -103,6 +103,7 @@ class CriticLoss(nn.Module):
     def loss(self, nbatch, task_id, 
              a0 = None,
              timesteps = None,
+             use_actor_loss = True,
              ):
         """
         nbatch - normalized batch dictionary with keys: nobs, naction, nreward, <...>
@@ -117,7 +118,7 @@ class CriticLoss(nn.Module):
         models_to_train: list = globals.CONFIG.models_to_train #type:ignore
         
         # training the actor, so we need to use the actor to denoise an observation
-        if "actor" in models_to_train and utils.StepFreqTrigger(globals.CONFIG.step_freqs['actor']) and self.use_denoise:
+        if "actor" in models_to_train and utils.GlobalStepFreqTrigger('dql') and self.use_denoise and use_actor_loss:
             # want gradients on this one so we can back-prop from the critic through to the actor
             new_action = self.Denoise(nbatch['obs'], task_id=task_id)
         else:
@@ -133,7 +134,7 @@ class CriticLoss(nn.Module):
         dql_actor_loss, dql_critic_loss = self.critic.Loss(nbatch, new_action, None, task_id, a0=a0, timesteps=timesteps)
         
         # if we're using denoising, then we'd expect the gradient to pass through the actor self.num_inference_steps times and in torch the gradients sum, so divide the loss by that value so that the same l.r. can be used regardless of num_inference_steps
-        if self.use_denoise and utils.GlobalStepFreqTrigger('actor'):
+        if self.use_denoise and utils.GlobalStepFreqTrigger('dql'):
             if False: # false to be just like the original DQL paper's code
                 assert(dql_actor_loss is not None)
                 dql_actor_loss = dql_actor_loss / self.num_inference_steps

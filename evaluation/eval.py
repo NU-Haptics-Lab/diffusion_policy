@@ -84,7 +84,7 @@ class Inference:
             num_train_timesteps=100,
             prediction_type="epsilon"
         )
-        self.noise_scheduler.set_timesteps(50)
+        self.noise_scheduler.set_timesteps(globals.CONFIG.num_inference_steps) # type:ignore
         
     def set_policy(self, policy):
         self.policy = policy
@@ -122,6 +122,7 @@ class Inference:
         # put the original back in for training
         self.policy.noise_scheduler = self.original_policy_noise_scheduler
         
+        assert(not np.isnan(all_actions).any())
         return action, all_actions
     
     def norm_gpu_obs(self, obs_dict_np):

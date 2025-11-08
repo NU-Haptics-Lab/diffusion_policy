@@ -40,6 +40,7 @@ class Rollout:
                  use_critic_preferred_actions = False,
                  use_critic_preferred_actions_early_exit = True,
                  critic_preferred_actions_nb = 5,
+                 only_save_successful_episodes = False,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -50,6 +51,7 @@ class Rollout:
         self.use_critic_preferred_actions = use_critic_preferred_actions
         self.use_critic_preferred_actions_early_exit = use_critic_preferred_actions_early_exit
         self.critic_preferred_actions_nb = critic_preferred_actions_nb
+        self.only_save_successful_episodes = only_save_successful_episodes
 
         # refs
         self.critic = None
@@ -121,8 +123,16 @@ class Rollout:
                 # one rollout
                 samples, reward, best_qvals, jerk = self.one_rollout()
                 
+                successful = reward > 0.0
+                
+                if self.only_save_successful_episodes:
+                    save = successful
+                else:
+                    save = True
+                
                 # dump the samples to the replay buffer
-                self.save_episode(samples)
+                if save:
+                    self.save_episode(samples)
                 
                 # save vals
                 total_reward += reward
@@ -130,7 +140,7 @@ class Rollout:
                 avg_jerk += np.array(jerk).mean()
                 
                 # success?
-                if reward > 0.0:
+                if successful:
                     successes += 1
                     
                     # add on episode length

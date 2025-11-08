@@ -329,6 +329,7 @@ class DiffusionModel(BaseImagePolicy):
         # finally make sure conditioning is enforced
         trajectory[condition_mask] = condition_data[condition_mask]        
 
+        assert(not torch.isnan(trajectory).any())
         return trajectory
     
     def infer(self, nobs_dict: dict, task_id=None):
@@ -433,6 +434,7 @@ class DiffusionModel(BaseImagePolicy):
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
         else:
+            raise
             # condition through impainting
             this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
@@ -487,7 +489,8 @@ class DiffusionModel(BaseImagePolicy):
             import matplotlib.pyplot as plt
             
             plt.plot(x, y, '*')
-            
+        
+        assert(not torch.isnan(naction_pred).any())
         return nresult
     
     def loss(self, nbatch, task_id):

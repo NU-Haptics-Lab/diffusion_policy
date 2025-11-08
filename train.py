@@ -66,9 +66,12 @@ def main(cfg: OmegaConf):
     
     # whether we're debugging
     if globals.CONFIG.debug:  # type: ignore
+        # no resuming
+        globals.CONFIG.resume = False # type:ignore
+        
         globals.CONFIG.common_dataset.options.common.batch_size = 4 # type: ignore
         globals.CONFIG.total_num_epochs = 4 # type: ignore
-        globals.CONFIG.batches_per_epoch = 4 # type: ignore
+        globals.CONFIG.batches_per_epoch = 400 # type: ignore
         globals.CONFIG.common_dataset.options.train.num_workers = 0 # type: ignore
         globals.CONFIG.common_dataset.options.train.persistent_workers = False # type: ignore
         # globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10 # type: ignore

@@ -295,10 +295,16 @@ class BatchLoader:
                 {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
                 )
         
+        ## rb index
         rb_index = get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
                 )
         rb_index.clamp = False
+        
+        ## qvals, clamp to [-1, 1]
+        qval = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
         
         nn = {
             'obs': obs,
@@ -312,6 +318,7 @@ class BatchLoader:
                 {'min': np.array([0], dtype=np.float32)}
                 ),
             'rb_index': rb_index,
+            'qval': qval,
         }
         
         self.nested_data_array.set_normalizers(nn)

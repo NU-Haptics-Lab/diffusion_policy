@@ -68,6 +68,28 @@ class BatchLoss:
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch
         return self.current_batch
+    
+    def save_bc_loss(self, losses, actor_loss):
+        """
+        Save and Log
+        """
+        assert(not actor_loss.isnan().any())
+        losses['actor']['bc'] = actor_loss
+        
+        globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", actor_loss)
+    
+    def compute_sample_loss(self):
+        # get the batch from the batch loader
+        nbatch = next(self.batch_loader)
+        self.current_batch = nbatch # save
+        
+        # compute loss
+        actor_loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
+        
+        sample_loss = torch.mean(actor_loss, dim=(1, 2))
+        sample_loss = sample_loss.squeeze()
+        
+        return sample_loss, a0, timesteps
 
     def compute_loss(self):
         """
@@ -75,24 +97,18 @@ class BatchLoss:
         """
         
         actor_loss = utils.InitZeroTensorOnDevice()
+        losses = self.init_losses()
 
         # get the BC loss
         if self.use_bc_loss:
-            # get the batch from the batch loader
-            nbatch = next(self.batch_loader)
-            self.current_batch = nbatch # save
-            
-            # compute loss
-            actor_loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
+            sample_loss, a0, timesteps = self.compute_sample_loss()
             
             # mean it
-            actor_loss = actor_loss.mean()
+            actor_loss = sample_loss.mean()
 
-        # we're done
-        losses = self.init_losses()
-        losses['actor']['bc'] = actor_loss
-        
-        globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", actor_loss)
+            # save and log
+            self.save_bc_loss(losses, actor_loss)
+            
         return losses
     
     def eval(self):
@@ -342,6 +358,59 @@ class QvalWBatchLoss(TTREfficiencyWeightedBatchLoss):
         TTREfficiencyWeightedBatchLoss.is_setup[self.rb_id] = True
         
         pass
+    
+# alias - Q Val Weighted
+class QVW(BatchLoss):
+    
+    @torch.no_grad()
+    def compute_weights(self, qvals):
+        """
+        weighting relative to the batch
+        """
+        if len(qvals) > 0:
+            # https://discuss.pytorch.org/t/how-to-efficiently-normalize-a-batch-of-tensor-to-0-1/65122
+            A = qvals.clone()
+            A -= A.min()
+            A /= (A.max() + 1e-5) # protection against divide by zero
+            
+            # A: [0, 1]. Scale to [0.5, 1]
+            w = A / 2.0 + 0.5
+        else:
+            w = torch.ones_like(qvals)
+            
+        # there's an unlikely case that each qval is identical ... in which case all weights will be zero. Shouldn't crash
+        
+        return w
+        
+        
+    def compute_loss(self):
+        """
+        weight each sample loss by qval
+        """
+        actor_loss = utils.InitZeroTensorOnDevice()
+        losses = self.init_losses()
+
+        # get the BC loss
+        if self.use_bc_loss:
+            # get the sample losses
+            sample_loss, _, _ = self.compute_sample_loss()
+            
+            # qvals, range: [-1, +1]
+            qvals = self.current_batch['qval']
+            qvals = qvals.squeeze()
+            assert(qvals.shape == sample_loss.shape)
+            
+            # compute a weighting
+            weights = self.compute_weights(qvals)
+            assert(weights.shape == sample_loss.shape)
+            
+            w_loss = sample_loss * weights
+            
+            loss = w_loss.mean()
+            
+            self.save_bc_loss(losses, loss)
+            
+        return losses
         
 class DQLBatchLoss(BatchLoss):
     """
@@ -389,9 +458,11 @@ class DQLBatchLoss(BatchLoss):
             return losses
         
         a0 = None
+        bc_loss = utils.InitZeroTensorOnDevice()
+        timesteps = None
         
-        # we always need the BC output
-        if True:
+        # we need the a0 and timesteps
+        if self.use_bc_loss:
             bc_loss, a0, timesteps = self.get_bc_loss(is_eval)
             
         # save
@@ -409,13 +480,13 @@ class DQLBatchLoss(BatchLoss):
         # need critic loss if we're training critic, need actor loss if we're using dql
         if train_critic or need_dql_actor_loss:
             # get the DQL losses
-            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps)
+            dql_actor_loss, dql_critic_loss = self.critic.loss(nbatch, self.rb_id, a0, timesteps, use_actor_loss=self.use_bc_loss)
             
             if train_critic:
                 losses['critic'] = dql_critic_loss
             
             # dql_actor_loss shouldn't be None as long as need_dql_actor_loss is True, but I had to add it for pylance
-            if need_dql_actor_loss and dql_actor_loss is not None and utils.StepFreqTrigger(self.freqs['actor']):
+            if need_dql_actor_loss and dql_actor_loss is not None and utils.GlobalStepFreqTrigger('dql'):
                 # scale by the BC loss, don't add to graph
                 scale = (self.eta * bc_loss).detach()
                 

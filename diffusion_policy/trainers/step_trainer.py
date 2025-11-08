@@ -143,17 +143,25 @@ class StepTrainer:
         dd = {}
         
         # actor must be first, else you'll get an in-place operation error
-        # if "actor" in total_losses.keys():
-        #     # can fix by re-ordering in the yaml
-        #     assert("actor" == list(total_losses.keys())[0])
-            
-        # actor
         if "actor" in total_losses.keys():
-            self.train_actor(total_losses['actor'])
+            # can fix by re-ordering in the yaml
+            assert("actor" == list(total_losses.keys())[0])
+            
+            # hackish
+            actor_losses = total_losses['actor']
+            loss_sum = actor_losses['dql'] + actor_losses['bc'] + actor_losses['attractor']
+            
+            # hack sum up losses
+            total_losses['actor'] = loss_sum
+            
+        # # actor
+        # if "actor" in total_losses.keys():
+        #     self.train_actor(total_losses['actor'])
         
         # do one at a time
         # hack
-        for key, loss in [('critic', total_losses['critic'])]:
+        # for key, loss in [('critic', total_losses['critic'])]:
+        for key, loss in total_losses.items():
             # reset optimizer gradients
             globals.MODELS.reset() 
             

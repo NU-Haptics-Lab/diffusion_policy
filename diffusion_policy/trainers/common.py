@@ -10,12 +10,12 @@ def CalcSumLoss(w_batch_losses):
     # initialize a zero loss torch tensor
     # TODO: make the shape not hard coded
     total_losses = {
-        'critic': torch.tensor([0.0], requires_grad=True),
         'actor': {
             'bc': torch.tensor([0.0], requires_grad=True),
             'dql': torch.tensor([0.0], requires_grad=True),
             'attractor': torch.tensor([0.0], requires_grad=True),
-        }
+        },
+        'critic': torch.tensor([0.0], requires_grad=True),
     }
     
     # for key in globals.CONFIG.models_to_train:

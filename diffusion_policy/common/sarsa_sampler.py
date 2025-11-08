@@ -14,8 +14,14 @@ import diffusion_policy.globals as globals
 
 
 def get_lower_bound_idx(sorted_array, value):
-    lb = np.searchsorted(sorted_array, value) - 1
-    return lb
+    # I believe value must be incremented by 1, otherwise we get an off-by-one error
+    lb = np.searchsorted(sorted_array, value + 1)
+    
+    # must subtract by 1 because the sorted_array includes 0 as the first element
+    lb2 = lb - 1
+    
+    # lb should be in [0, len(sorted_array)-1]
+    return lb2
     
 
 def get_history_indices(
@@ -221,6 +227,9 @@ class Indices:
     #     self.indices = indices
 
     def __len__(self):
+        """
+        This len includes padding. For a length that doesn't, use self.ep_length
+        """
         return len(self.indices)
     
     # def key_zero_fill(self, key):
@@ -231,6 +240,10 @@ class Indices:
     #     return data
 
     def get_rb_indices(self, indices):
+        """
+        indices - episode-relative indices. Uses fill-back & fill-forward for indices out of bounds
+        """
+        
         # ensure it's numpy
         valid_indices = np.array(indices)
 
@@ -406,8 +419,11 @@ class EpisodeSampler:
         self.rb_offset = rb_offset
         self.rb_ep_end = rb_ep_end
         
+        # my members
+        self.qvals: np.ndarray = None # type:ignore
+        
         # copy config for indices
-        indices_cfg = copy.deepcopy(globals.CONFIG.common_indices)
+        indices_cfg = copy.deepcopy(globals.CONFIG.common_indices) #type:ignore
         
         # update indices cfg
         with open_dict(indices_cfg):
@@ -517,14 +533,26 @@ class EpisodeSampler:
         index = self.indices.get_rb_indices(indices)
 
         return np.array(index)
+    
+    def get_qval(self, ep_idx) -> np.ndarray:
+        qval = self.qvals[ep_idx]
+
+        assert(not np.isnan(qval))
+        return np.array([qval])
 
     
     def get_sample(self, ep_idx):
         """
         return dict with keys (obs, action, reward, not_done, obs_next)
         """
+        assert(ep_idx >= 0)
+        # assert(ep_idx <= len(self)-2) # must be -2 since we get the next obs & action
+        assert(ep_idx <= len(self)-1) # allow ep_idx to be == len(self)-1. In that case, obs_next will be a repeat of obs
+        
         sample = {}
         sample["obs"] = self.get_obs_sample(ep_idx)
+        
+        # TODO: only load next obs (and action) if we're doing QL, otherwise it's a slowdown
         sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
 
         sample["action"] = self.get_action_sample(ep_idx)
@@ -535,6 +563,9 @@ class EpisodeSampler:
         sample["not_done"] = self.get_not_done(ep_idx)
 
         sample["rb_index"] = self.get_rb_index(ep_idx)
+        
+        # explicit q-val
+        sample["qval"] = self.get_qval(ep_idx)
 
         return sample
     
@@ -549,7 +580,7 @@ class EpisodeSampler:
         qvals = []
         qval = 0.0
         
-        discount = 0.975
+        discount = 0.975 # same as config
         
         for indice in reversed(indices):
             qval = rewards[indice] + discount * qval
@@ -561,6 +592,9 @@ class EpisodeSampler:
         # reverse
         qvals3 = np.flip(qvals2)
         
+        self.qvals = qvals3
+        
+        assert(not np.any(np.isnan(self.qvals)))
         return qvals3
 
 class DatasetSampler:
@@ -660,6 +694,10 @@ class DatasetSampler:
 
         # get the episode
         ep = self.ep_samplers[ep_idx]
+        
+        # never negative, never greater than len(ep)-1
+        assert(dp_ep_idx >= 0)
+        assert(dp_ep_idx <= len(ep)-1)
         
         return ep, dp_ep_idx
 

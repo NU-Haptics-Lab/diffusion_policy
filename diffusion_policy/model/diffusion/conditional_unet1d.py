@@ -238,5 +238,7 @@ class ConditionalUnet1D(nn.Module):
         x = self.final_conv(x)
 
         x = einops.rearrange(x, 'b t h -> b h t')
+        
+        assert(not x.isnan().any())
         return x
 

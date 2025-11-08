@@ -104,6 +104,8 @@ class DiffusionQL(nn.Module):
         We then get the predicted next_action as a fcn of next_state, and use that (next_action, next_state) tuple to get the predicted next_Q. 
         
         We then add reward and next_Q to get the target (standard q-learning), and we compare it to the Q-value to get a loss. This loss is used to train the Q-network.
+        
+        use next_action from the dataset to make it off-policy
         """
         # Sample replay buffer / batch
         state = nbatch_dict['obs']
@@ -327,7 +329,7 @@ class DiffusionQL(nn.Module):
         state = nbatch_dict['obs']
         
         # training the actor
-        if "actor" in models_to_train and (new_action is not None or a0 is not None) and utils.GlobalStepFreqTrigger('actor'):
+        if "actor" in models_to_train and (new_action is not None or a0 is not None) and utils.GlobalStepFreqTrigger('dql'):
             # get the actor loss using (s, a)
             actor_loss = self.LossActor(state, new_action, options, a0, timesteps)
             

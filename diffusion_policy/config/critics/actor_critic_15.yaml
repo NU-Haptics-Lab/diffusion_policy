@@ -2,13 +2,13 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-14: bugs fixed. BC + DQL from scratch. Train critic off all data, only do BC + DQL off demo data. This is because I'm tieing DQL loss to BC loss, so I need a BC loss. Lastly, only do DQL loss every `num_inference_steps` steps, since I denoise num_inference_steps each DQL step so the grad will be added num_inference_steps times (and it's num_inference_steps slower than a regular BC step)"
+description: "actor-critic-15: critic-free BC RL. Bootstrap from actor-critic-14::170k steps checkpoint (has a trained BC and critic policy). During rollouts only save successful episodes. Rank according to explicit q-val. Keep training. RB seeded with actor_critic_13.successful.reward.zarr"
 # global controls
 debug: false # 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-total_num_epochs: 3001
+total_num_epochs: 6001
 batches_per_epoch: 100
 batch_size: 128
 val_every: 40
@@ -21,16 +21,16 @@ load:
 
 # hack
 resume: true
-resume_tag: latest
-output_dir: /media/dexnex_ssd/models/actor_critic_14
+resume_tag: latest 
+output_dir: /media/dexnex_ssd/models/actor_critic_15
 
 tasks_to_use:
   # - bnb_2cams
   # - bnb_1cam
   # - block_transfer
-  - sim_hitl_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  # - sim_hitl_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
   # - sim_hitl_not_toby # haptics values not consistent w.r.t. real life datasets. TODO: jMUST VALIDATE
-  - actor_critic_14 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  - actor_critic_15 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
   # - sim_hitl_failures # to train the critic
 
 # which obs the obs_encoder will use
@@ -47,12 +47,12 @@ obs_keys_to_load:
 
 models_to_train:
   - actor
-  - critic
+  # - critic
 
 # irrelevant when using CriticBatchLoss
 models_to_eval:
   - actor
-  - critic
+  # - critic
 
 # higher value means less frequent updates
 step_freqs:
@@ -71,6 +71,7 @@ action_relative_to_state: false
 use_denoise: true
 ### End Global Control Panel ###
 
+num_inference_steps: 20
 
 ###################################################
 ###################################################
@@ -187,7 +188,7 @@ replay_buffer_loader:
     sim_hitl_toby: ${data_directory}sim_hitl_toby.reward.zarr
     sim_hitl_not_toby: ${data_directory}sim_hitl_not_toby.reward.zarr
     sim_online_rl1: ${data_directory}sim_online_rl1.reward.zarr
-    actor_critic_14: ${data_directory}actor_critic_14.reward.zarr
+    actor_critic_15: ${data_directory}actor_critic_15.reward.zarr
     sim_hitl_failures: ${data_directory}sim_hitl_failures.reward.zarr
 
   modes:
@@ -197,7 +198,7 @@ replay_buffer_loader:
     sim_hitl_toby: r
     sim_hitl_not_toby: r
     sim_online_rl1: r
-    actor_critic_14: a
+    actor_critic_15: a
     sim_hitl_failures: r
 
 # to be used for norming / unnorming without loading
@@ -231,19 +232,20 @@ session_trainer:
         sim_hitl_toby: ${common_wbatch_loss}
         sim_hitl_not_toby: ${common_wbatch_loss}
         sim_online_rl1: ${common_wbatch_loss}
-        actor_critic_14: ${common_wbatch_loss}
+        actor_critic_15: ${common_wbatch_loss}
         sim_hitl_failures: ${common_wbatch_loss}
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 1000 # in steps
-      num_rollouts_per_trigger: 4
-      rb_id: actor_critic_14
+      freq: 250 # in steps
+      num_rollouts_per_trigger: 1
+      rb_id: actor_critic_15
       use_online_rollout: true
       rollout_num_actions: 8
-      use_critic_preferred_actions: true
+      use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 2
+      only_save_successful_episodes: true
 
 
       evaluator:
@@ -252,7 +254,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: sim_hitl_toby # could experiment with sim_hitl_toby for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl_toby leaf doesn't have the same energy penalty as actor_critic_14?)
+        task_id: sim_hitl_toby # could experiment with sim_hitl_toby for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl_toby leaf doesn't have the same energy penalty as actor_critic_15?)
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -267,7 +269,7 @@ session_trainer:
       sim_hitl_toby: ${common_wbatch_loss}
       sim_hitl_not_toby: ${common_wbatch_loss}
       sim_online_rl1: ${common_wbatch_loss}
-      actor_critic_14: ${common_wbatch_loss}
+      actor_critic_15: ${common_wbatch_loss}
       sim_hitl_failures: ${common_wbatch_loss}
 
 
@@ -278,7 +280,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.DQL
+    _target_: diffusion_policy.losses.batch_loss.QVW
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
@@ -300,7 +302,7 @@ dataloaders:
     sim_hitl_toby: ${common_dataset}
     sim_hitl_not_toby: ${common_dataset}
     sim_online_rl1: ${common_dataset}
-    actor_critic_14: ${common_dataset}
+    actor_critic_15: ${common_dataset}
     sim_hitl_failures: ${common_dataset}
 
 common_dataset:
@@ -341,7 +343,7 @@ models:
       _target_: diffusion_policy.model.diffusion_ql.diffusion_ql_loss.CriticLoss
 
       noise_scheduler: ${common_noise_scheduler}
-      num_inference_steps: 20 # perhaps this should be randomized?
+      num_inference_steps: ${num_inference_steps} # perhaps this should be randomized?
       use_random_num_inference_steps: false
       use_denoise: ${use_denoise}
 
@@ -483,12 +485,12 @@ override:
                 rb_id: sim_online_rl1
               use_bc_loss: ${use_bc_loss}
 
-          actor_critic_14:
+          actor_critic_15:
             weight: 1.0
             batch_loss: 
               batch_loader:
-                rb_id: actor_critic_14
-              use_bc_loss: false
+                rb_id: actor_critic_15
+              use_bc_loss: ${use_bc_loss}
 
           sim_hitl_failures:
             weight: 0.1
@@ -541,13 +543,13 @@ override:
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
 
-        actor_critic_14:
+        actor_critic_15:
           weight: 1.0
           batch_loss: 
             batch_loader:
-              rb_id: actor_critic_14
+              rb_id: actor_critic_15
               train_or_val: val
-            use_bc_loss: false
+            use_bc_loss: ${use_bc_loss}
 
         sim_hitl_failures:
           weight: 0.1
@@ -577,9 +579,9 @@ override:
       sim_online_rl1:
         sampler:
           rb_id: sim_online_rl1
-      actor_critic_14:
+      actor_critic_15:
         sampler:
-          rb_id: actor_critic_14
+          rb_id: actor_critic_15
       sim_hitl_failures:
         sampler:
           rb_id: sim_hitl_failures
