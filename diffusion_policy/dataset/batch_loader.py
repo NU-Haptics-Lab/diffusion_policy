@@ -306,6 +306,12 @@ class BatchLoader:
                 {'min': np.array([0], dtype=np.float32)}
                 )
         
+        ## ep length
+        ep_len = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        ep_len.clamp = False
+        
         nn = {
             'obs': obs,
             'obs_next': obs,
@@ -318,7 +324,8 @@ class BatchLoader:
                 {'min': np.array([0], dtype=np.float32)}
                 ),
             'rb_index': rb_index,
-            'qval': qval,
+            # 'qval': qval,
+            'ep_len': ep_len,
         }
         
         self.nested_data_array.set_normalizers(nn)

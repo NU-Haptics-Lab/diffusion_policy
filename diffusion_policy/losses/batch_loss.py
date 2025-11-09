@@ -363,20 +363,21 @@ class QvalWBatchLoss(TTREfficiencyWeightedBatchLoss):
 class QVW(BatchLoss):
     
     @torch.no_grad()
-    def compute_weights(self, qvals):
+    def compute_weights(self, metric: torch.Tensor):
         """
-        weighting relative to the batch
+        weighting relative to the batch.
+        metric should be higher when it's better and lower when it's worse
         """
-        if len(qvals) > 0:
+        if metric.ndim > 0:
             # https://discuss.pytorch.org/t/how-to-efficiently-normalize-a-batch-of-tensor-to-0-1/65122
-            A = qvals.clone()
+            A = metric.clone()
             A -= A.min()
             A /= (A.max() + 1e-5) # protection against divide by zero
             
             # A: [0, 1]. Scale to [0.5, 1]
             w = A / 2.0 + 0.5
         else:
-            w = torch.ones_like(qvals)
+            w = torch.ones_like(metric)
             
         # there's an unlikely case that each qval is identical ... in which case all weights will be zero. Shouldn't crash
         
@@ -396,12 +397,15 @@ class QVW(BatchLoss):
             sample_loss, _, _ = self.compute_sample_loss()
             
             # qvals, range: [-1, +1]
-            qvals = self.current_batch['qval']
-            qvals = qvals.squeeze()
-            assert(qvals.shape == sample_loss.shape)
+            # metric = self.current_batch['qval']
+            
+            # higher must be better, so negate the ep len
+            metric = -1.0 * self.current_batch['ep_len']
+            metric = metric.squeeze()
+            assert(metric.shape == sample_loss.shape)
             
             # compute a weighting
-            weights = self.compute_weights(qvals)
+            weights = self.compute_weights(metric)
             assert(weights.shape == sample_loss.shape)
             
             w_loss = sample_loss * weights

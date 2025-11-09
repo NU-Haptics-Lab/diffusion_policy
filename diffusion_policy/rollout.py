@@ -159,6 +159,9 @@ class Rollout:
             globals.LOGGER.log_one("rollout/avg_best_qval", avg_best_qval / self.num_rollouts_per_trigger)
             globals.LOGGER.log_one("rollout/avg_jerk", avg_jerk / self.num_rollouts_per_trigger)
             
+            # length of rb so we can correlate nb eps to SR
+            globals.LOGGER.log_one("rollout/rb_nb_episodes", self.get_rb().n_episodes)
+            
             if successes > 0:
                 avg_ttc = ttc / successes
                 globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
@@ -470,6 +473,9 @@ class Rollout:
         
         return out_state, img, img2
         
+    def get_rb(self):
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] # type:ignore
+        return rb
             
     def save_episode(self, episode):
         if len(episode) > 0:
@@ -479,5 +485,5 @@ class Rollout:
                 data_dict[key] = np.stack([x[key] for x in episode])
             
             # use the replay buffer to write to disk
-            rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] # type:ignore
+            rb = self.get_rb()
             rb.add_episode(data_dict, compressors='disk')

@@ -562,10 +562,14 @@ class EpisodeSampler:
 
         sample["not_done"] = self.get_not_done(ep_idx)
 
+        ## Meta data
         sample["rb_index"] = self.get_rb_index(ep_idx)
         
         # explicit q-val
-        sample["qval"] = self.get_qval(ep_idx)
+        # sample["qval"] = self.get_qval(ep_idx)
+        
+        # ep len
+        sample["ep_len"] = np.array([len(self)])
 
         return sample
     
@@ -620,7 +624,7 @@ class DatasetSampler:
         self.ep_mask = None
         self.ep_samplers: list[EpisodeSampler] = []
         self.my_indices = []
-        self.qvals = []
+        self.qvals = None
 
     def Init(self,
               ep_mask
@@ -647,7 +651,6 @@ class DatasetSampler:
         tr_ep_offset = 0
         
         my_indices = np.array([])
-        qvals = np.array([])
 
         # one episode sampler per episode
         for idx, episode_end in enumerate(self.replay_buffer.episode_ends):
@@ -668,7 +671,6 @@ class DatasetSampler:
                 
                 # save the indices
                 my_indices = np.concatenate([my_indices, ep_sampler.get_all_rb_indices()])
-                qvals = np.concatenate([qvals, ep_sampler.get_qvals()])
 
             # set rb offset to the old episode_end
             rb_offset = episode_end
@@ -676,7 +678,6 @@ class DatasetSampler:
             
         # convert to np
         self.my_indices = np.array(my_indices, dtype=int)
-        self.qvals = np.array(qvals)
 
     @property
     def episodes(self):
@@ -730,5 +731,37 @@ class DatasetSampler:
         s = all_samples[self.my_indices]
         return s
     
+    def make_qvals(self):
+        qvals = np.array([])
+        
+        for ep_sampler in self.ep_samplers:
+            qvals = np.concatenate([qvals, ep_sampler.get_qvals()])
+            
+        self.qvals = np.array(qvals)
+        
+    
     def get_qvals(self):
+        # do this lazily since it's slow
+        if self.qvals is None:
+            self.make_qvals()
+            
         return self.qvals
+    
+    def get_ep_lengths(self):
+        l = [len(ep) for ep in self.ep_samplers]
+        return l
+    
+    def get_ep_lengths_arr(self):
+        l1 = self.get_ep_lengths()
+        
+        # ranges
+        r = [np.array(range(l)) for l in l1]
+        
+        # expand 
+        l2 = [(l.max()+1) * np.ones_like(l) for l in r]
+        
+        l3 = np.concatenate(l2)
+        
+        return l3
+    
+    

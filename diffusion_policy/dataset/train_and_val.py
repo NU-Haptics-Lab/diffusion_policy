@@ -7,6 +7,7 @@ from torch import nn
 from torch.utils.data import DataLoader as torchDataLoader
 from torch.utils.data import WeightedRandomSampler
 import numpy as np
+import scipy.stats
 import copy
 from diffusion_policy import utils
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -79,6 +80,9 @@ class DexNexDataset(BaseImageDataset):
     
     def get_qvals(self):
         return self.sampler.get_qvals()
+    
+    def get_ep_lengths(self):
+        return self.sampler.get_ep_lengths_arr()
         
         
     
@@ -180,6 +184,38 @@ class TrainAndVal:
         weights = sqvals
         
         return weights
+    
+    
+    def compute_weights2(self, dataset: DexNexDataset):
+        """
+        Use qvals to compute weights. Use exponential decay based off episode length
+        """
+        # get episode lengths
+        ep_lens = dataset.get_ep_lengths()
+        
+        # max reward at the min ep length (fastest time-to-completion)
+        def max_reward():
+            return ep_lens.min()
+        
+        # mean at the max reward
+        mu = max_reward()
+        
+        # std dev from the data
+        std = np.std(ep_lens)
+        
+        # scale the std dev by some value
+        std2 = std * 2.0
+        
+        # calc how much each value is LESS than mu. x should now be [-inf, 0]
+        x = mu - ep_lens
+        
+        # find the probability, range [0, 0.5] (x=0 is 50% prob)
+        probs = scipy.stats.norm.cdf(x, 0, std2)
+        
+        # scale range to [0, 1.0]
+        weights = probs * 2.0
+        
+        return weights
         
         
     def make_dataloader(self, dataset, cfg):
@@ -193,7 +229,7 @@ class TrainAndVal:
         
         if use:
             # get the weights
-            weights = self.compute_weights(dataset)
+            weights = self.compute_weights2(dataset)
             
             assert(len(weights) == len(dataset))
             
