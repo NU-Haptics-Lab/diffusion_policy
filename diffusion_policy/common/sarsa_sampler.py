@@ -1,6 +1,7 @@
 from typing import Optional
 import numpy as np
 import numba
+import scipy.stats
 import hydra
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
@@ -103,7 +104,7 @@ class Indices:
         episode_end: int, 
         pad_before : int=0, 
         pad_after : int=0,
-        debug : bool=True
+        debug : bool=True,
         ):
         self.rb_id = rb_id
         self.rb_offset = rb_offset
@@ -114,12 +115,17 @@ class Indices:
 
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
         self.indices = []
+        self.mask = None
         
-    def create_indices(self):
+    def create_indices(self, mask):
         """
-        generate training indices based on padding before / after an episode.
+        generate training indices based on padding before / after an episode and the mask.
         Positive and negative pad values are allowed
         """
+        # make mapping from mask_indice to non-mask-indice
+        self.mask = mask
+        self.mask_indices = np.where(self.mask)[0]
+        
         # set up start index
         start_idx = self.rb_offset
 
@@ -128,112 +134,37 @@ class Indices:
 
         # episode length is relative
         episode_length = end_idx - start_idx
-        self.ep_length = episode_length
-
-        self.indices = range(-self.pad_before, self.ep_length + self.pad_after)
         
-    # def create_indices_OLD(self
-    #     ) -> np.ndarray:
-    #     """
-    #     Iterate through the dataset episodes and corresponding r.b. indices to determine which indices correspond to which data-points.
-    #     This is necessary because we're converting a dataset of waypoints into a dataset of trajectories, and we must be careful to only load the appropriate data.
-
-    #     Output is list of lists of valid indices for each diffusion datapoint (a.k.a. a trajectory). So each element of the output `indices` is a list with [buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx].
-
-    #     buffer_start_idx - what data from the r.b. to start loading
-    #     buffer_end_idx - what data from the r.b. to end loading
-    #     sample_start_idx - how many additional datapoints to add before the start of the real data sequence
-    #     sample_end_idx - how many additional datapoints to add after the end of the real data sequence
-    #     """
+        # ep length
+        # self.ep_length = episode_length # SHOULDN"T be used
+        self.mask_length = len(self.mask_indices)
         
-    #     pad_before = min(max(self.pad_before, 0), self.sequence_length-1)
-    #     pad_after = min(max(self.pad_after, 0), self.sequence_length-1)
+        # # max future action
+        # max_future_action = np.array(globals.CONFIG.action_rel_indices).max()
 
-    #     indices = list()
-    #     valid_indices = list()
-
-    #     # for R.L., we don't want to use the last datapoint in the episode because then we wouldn't have a valid next_state for the 2nd to last datapoint in the episode
-    #     use_last_datapoint_in_episode = False
-
-    #     # set up start index
-    #     start_idx = self.rb_offset
-
-    #     # set up end index
-    #     end_idx = self.episode_end
-
-    #     # episode length is relative
-    #     episode_length = end_idx - start_idx
-    #     self.ep_length = episode_length
+        # these are the training indices. Add padding before, add padding after
+        self.train_indices = range(-self.pad_before, self.mask_length + self.pad_after)
+        pass
         
-    #     # optional datapoint padding before the start of the episode, relative value
-    #     min_start = -pad_before
-
-    #     # since each sample is a trajectory with `sequence_length` waypoints, the last valid start index will be `sequence_length` indices before the end of the episode, plus an optional pad-after length.
-    #     max_start = episode_length - self.sequence_length + pad_after
-
-    #     # range end
-    #     range_end = max_start + 1
-        
-    #     # range stops one idx before end, so use max_start + 1.
-    #     for idx in range(min_start, range_end):
-    #         # buffer start corresponds to first real datapoint.
-    #         buffer_start_idx = max(idx, 0) + start_idx
-
-    #         # buffer end corresponds to the last real datapoint.
-    #         buffer_end_idx = min(idx+ self.sequence_length, episode_length) + start_idx
-
-    #         # start-offset is a relative value.
-    #         start_offset = buffer_start_idx - (idx+start_idx)
-            
-    #         # end offset is a relative value.
-    #         end_offset = (idx + self.sequence_length + start_idx) - buffer_end_idx
-
-    #         # sample-start-idx is relative
-    #         sample_start_idx = 0 + start_offset
-
-    #         # sample-end-idx is relative
-    #         sample_end_idx = self.sequence_length - end_offset
-
-    #         # debug
-    #         if self.debug:
-    #             assert(start_offset >= 0)
-    #             assert(end_offset >= 0)
-    #             assert (sample_end_idx - sample_start_idx) == (buffer_end_idx - buffer_start_idx)
-
-    #         # add to the indices list
-    #         indices.append([
-    #             buffer_start_idx, buffer_end_idx, 
-    #             sample_start_idx, sample_end_idx])
-            
-    #         def add_to_valid_indices(i, va):
-    #             va.append(len(i) - 1)
-            
-    #         # add to the valid indices list
-    #         if use_last_datapoint_in_episode:
-    #             add_to_valid_indices(indices, valid_indices)
-
-    #         # if we must skip the last datapoint in an episode
-    #         else:
-    #             # recall, range() ends one before the range-end value
-    #             if idx == range_end - 1:
-    #                 # skip it
-    #                 pass
-    #             # not at the end of the episode, so add to valid indices
-    #             else:
-    #                 add_to_valid_indices(indices, valid_indices)
-
-                
-    #     # convert to numpy
-    #     indices = np.array(indices)
-
-    #     # we're done
-    #     self.indices = indices
+    def get_mask_indices(self):
+        """
+        should ONLY be accessed by get_ep_idx_from_train_idx
+        """
+        return self.mask_indices
+    
+    def get_len_of_training_indices(self):
+        return len(self.train_indices)
+    
+    def get_ep_idx_from_train_idx(self, train_idx):
+        # must pass through the mask to get non-mask index
+        nonmask_idx = self.get_mask_indices()[train_idx]
+        return nonmask_idx
 
     def __len__(self):
         """
         This len includes padding. For a length that doesn't, use self.ep_length
         """
-        return len(self.indices)
+        return self.get_len_of_training_indices()
     
     # def key_zero_fill(self, key):
     #     input_arr = self.replay_buffer[key]
@@ -242,37 +173,39 @@ class Indices:
         
     #     return data
 
-    def get_rb_indices(self, indices):
+    def get_rb_indices(self, train_indices):
         """
-        indices - episode-relative indices. Uses fill-back & fill-forward for indices out of bounds
+        train_indices - mask-relative indices. Uses fill-back & fill-forward for indices out of bounds
         """
-        
         # ensure it's numpy
-        valid_indices = np.array(indices)
+        ti2 = np.array(train_indices).copy()
 
         # fill-back any indices less than zero
-        mask = valid_indices < 0
-        valid_indices[mask] = 0
+        mask = ti2 < 0
+        ti2[mask] = 0
 
-        # fill-forward any indices greater than ep length, minus one
-        mask = valid_indices > self.ep_length - 1
-        valid_indices[mask] = self.ep_length - 1
+        # fill-forward any indices greater than mask length, minus one
+        mask = ti2 > self.get_len_of_training_indices() - 1
+        ti2[mask] = self.get_len_of_training_indices() - 1
+        
+        # get ep indices
+        ep_indices = self.get_ep_idx_from_train_idx(ti2)
 
         # add on rb ep offset to make the indices rb-relative
-        rb_indices = valid_indices + self.rb_offset
+        rb_indices = ep_indices + self.rb_offset
 
         return rb_indices
     
-    def get_all_indices(self):
-        return self.indices
+    def get_all_train_indices(self):
+        return self.train_indices
     
     def get_all_rb_indices(self):
-        indices = self.get_all_indices()
-        all_rb_indices = self.get_rb_indices(indices)
+        train_indices = self.get_all_train_indices()
+        all_rb_indices = self.get_rb_indices(train_indices)
         
         return all_rb_indices
     
-    def get_sequence_by_indices_and_key(self, indices, key):
+    def get_sequence_by_train_indices_and_key(self, train_indices, key):
         """
         The caller requests data from `indices`, which may or may not exist in the episode this instance is associated with.
         If using the fill-back / fill-forward (default) option, then we first modify indices to be all valid indexes.
@@ -280,9 +213,10 @@ class Indices:
 
         indices - episode-relative indices. Meaning the only valid values are [0, len(episode)-1]
         """
-        rb_indices = self.get_rb_indices(indices)
+        rb_indices = self.get_rb_indices(train_indices)
 
         # get this key's data from the r.b.
+        assert(self.replay_buffer is not None)
         input_arr = self.replay_buffer[key]
         
         # # setup the item getter, more efficient than a for loop -- itemgetter doesn't maintain dimensions when the rb_indices is 1-long, so just use a for loop for simplicity
@@ -300,9 +234,9 @@ class Indices:
         return sequence
     
     def get_all_key(self, key):
-        indices = self.get_all_indices()
+        indices = self.get_all_train_indices()
         
-        seq = self.get_sequence_by_indices_and_key(indices, key)
+        seq = self.get_sequence_by_train_indices_and_key(indices, key)
         
         return seq
 
@@ -426,11 +360,13 @@ class EpisodeSampler:
             rb_id,
             rb_offset,
             rb_ep_end,
+            mask,
             ):
         # self.tr_offset = tr_offset
         self.rb_id = rb_id
         self.rb_offset = rb_offset
         self.rb_ep_end = rb_ep_end
+        self.mask = mask
         
         # my members
         self.qvals: np.ndarray = None # type:ignore
@@ -448,7 +384,7 @@ class EpisodeSampler:
         self.indices: Indices = hydra.utils.instantiate(indices_cfg)
 
         # make the training indices
-        self.indices.create_indices()
+        self.indices.create_indices(self.mask)
 
         # for effiency, only load the provided obs-keys
         self.obs_keys = globals.CONFIG.obs_keys_to_load #type:ignore
@@ -466,6 +402,7 @@ class EpisodeSampler:
         return len(self.indices)
     
     def get(self, idx, key):
+        raise
         return self.indices.get_sequence_by_indices_and_key(idx, key)
     
     def get_not_done(self, ep_idx):
@@ -510,11 +447,11 @@ class EpisodeSampler:
         sample = {}
 
         # make indices which are episode-relative
-        indices = np.array(globals.CONFIG.obs_rel_indices) + ep_idx
+        indices = np.array(globals.CONFIG.obs_rel_indices) + ep_idx #type:ignore
 
         # iterate over obs keys
         for key in self.obs_keys:
-            sample[key] = self.indices.get_sequence_by_indices_and_key(indices, key)
+            sample[key] = self.indices.get_sequence_by_train_indices_and_key(indices, key)
             
             # the haptics values can be fraught ......
             
@@ -525,7 +462,7 @@ class EpisodeSampler:
         Get sequence by key
         """
         indices = [ep_idx]
-        data = self.indices.get_sequence_by_indices_and_key(indices, key)
+        data = self.indices.get_sequence_by_train_indices_and_key(indices, key)
         return data
     
     def get_action_sample(self, ep_idx):
@@ -536,7 +473,7 @@ class EpisodeSampler:
         indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
 
         # get the sample
-        sample = self.indices.get_sequence_by_indices_and_key(indices, "action")
+        sample = self.indices.get_sequence_by_train_indices_and_key(indices, "action")
         
         return sample
     
@@ -591,8 +528,8 @@ class EpisodeSampler:
     
     def get_qvals(self):
         # get rewards
-        indices = self.indices.indices
-        rewards = self.indices.get_sequence_by_indices_and_key(indices, "reward")
+        indices = self.indices.get_all_train_indices()
+        rewards = self.indices.get_sequence_by_train_indices_and_key(indices, "reward")
         
         qvals = []
         qval = 0.0
@@ -642,6 +579,7 @@ class DatasetSampler:
         self.ep_samplers: list[EpisodeSampler] = []
         self.my_indices = []
         self.qvals = None
+        self.inlier_mask = None
             
     def print_dataset_stats(self):
         # method vars
@@ -696,6 +634,10 @@ class DatasetSampler:
         # training episode ends. Copy from the ep sampler classes so we can use the efficient binary-search np.searchsorted method when converting from training index to episode
         self.tr_ep_offsets = []
 
+        # compute / recompute mask
+        self.compute_stats()
+        
+        # compute / recompute episodes
         self.make_episodes()
         
         self.initd = True
@@ -713,16 +655,18 @@ class DatasetSampler:
         tr_ep_offset = 0
         
         my_indices = np.array([])
+        assert(self.inlier_mask is not None)
 
         # one episode sampler per episode
-        for idx, episode_end in enumerate(self.replay_buffer.episode_ends):
+        for idx, episode_end in enumerate(self.replay_buffer.episode_ends): #type:ignore
             # if skip a.k.a. episode mask
             if self.ep_mask is None or self.ep_mask[idx]:
                 # make the ep sampler
                 ep_sampler = EpisodeSampler(
                     self.rb_id,
                     rb_offset,
-                    episode_end
+                    episode_end,
+                    self.inlier_mask[rb_offset:episode_end]
                 )
 
                 self.ep_samplers.append(ep_sampler)
@@ -764,17 +708,17 @@ class DatasetSampler:
         
         return ep, dp_ep_idx
 
-    def get_sample(self, tr_idx: int) -> dict[str, np.ndarray]:
+    def get_sample(self, ds_tr_idx: int) -> dict[str, np.ndarray]:
         """
         tr_idx - training dataset index
         
         return dict with keys (obs, action, reward, not_done, obs_next)
         """
         # convert absolute training idx into the episode and episode idx 
-        ep, ep_idx = self.get_episode_and_index(tr_idx)
+        ep, ep_tr_idx = self.get_episode_and_index(ds_tr_idx)
 
         # get the sample from the episode
-        sample = ep.get_sample(ep_idx)
+        sample = ep.get_sample(ep_tr_idx)
 
         # we're done
         return sample
@@ -826,4 +770,31 @@ class DatasetSampler:
         
         return l3
     
-    
+    def compute_stats(self, nb_std_devs = 3.5):
+        # compute ds
+        assert(self.replay_buffer is not None)
+        s = self.replay_buffer['state']
+        a = self.replay_buffer['action']
+        
+        nb_datapts = s.shape[0]
+        nb_actions = a.shape[1]
+        
+        s2 = s[:, 0:nb_actions]
+        
+        ds = np.abs(s2-a)
+        
+        inlier_mask = np.ones((nb_datapts), dtype=np.bool_)
+        
+        for idx in range(nb_actions):
+            ds2 = ds[:, idx]
+        
+            zscore = np.abs(scipy.stats.zscore(ds2))
+            inliers = zscore < nb_std_devs
+            
+            # only keep inliers
+            inlier_mask &= inliers
+            
+        # inlier-mask is now only the inliers for EVERY output action
+        self.inlier_mask = inlier_mask
+        
+        print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))

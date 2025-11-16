@@ -261,6 +261,7 @@ class TrainAndVal:
         if nb_episodes == 0:
             raise
 
+        # TODO: rewrite to use datapoints instead of episodes...
         val_mask = get_val_mask(
             n_episodes=nb_episodes, 
             val_ratio=self.val_ratio,
