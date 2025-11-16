@@ -18,18 +18,57 @@ joint limits for the normalizer. Only thing that matters is the scale and offset
 in normalizer.py, if forward: x = x * scale + offset
 can use normalize_util.get_range_normalizer_from_stat to do the math for us, just need to set stat['max'] and stat['min']
 
+s: 0.00: mean 1.46 std 0.13 min 1.16 max 1.93
+s: 1.00: mean 1.29 std 0.32 min 0.39 max 2.27
+s: 2.00: mean -0.91 std 0.58 min -3.01 max 0.52
+s: 3.00: mean -0.01 std 0.57 min -2.00 max 2.00
+s: 4.00: mean 0.25 std 0.44 min -1.38 max 1.72
+s: 5.00: mean 2.07 std 0.55 min -0.11 max 2.50
+s: 6.00: mean -0.16 std 0.21 min -0.49 max 0.15
+s: 7.00: mean -0.12 std 0.26 min -0.70 max 0.49
+s: 8.00: mean -0.02 std 0.20 min -0.35 max 0.35
+s: 9.00: mean 0.24 std 0.49 min -0.26 max 1.55
+s: 10.00: mean 1.40 std 0.37 min -0.00 max 1.57
+s: 11.00: mean 0.19 std 0.36 min -0.00 max 1.57
+s: 12.00: mean 0.15 std 0.17 min -0.35 max 0.35
+s: 13.00: mean 0.24 std 0.48 min -0.26 max 1.54
+s: 14.00: mean 1.31 std 0.42 min -0.00 max 1.57
+s: 15.00: mean 0.18 std 0.38 min -0.00 max 1.57
+s: 16.00: mean -0.24 std 0.25 min -1.04 max 0.91
+s: 17.00: mean 1.13 std 0.10 min 0.65 max 1.22
+s: 18.00: mean 0.02 std 0.19 min -0.21 max 0.21
+s: 19.00: mean 0.68 std 0.04 min -0.17 max 0.70
+s: 20.00: mean 0.60 std 0.34 min -0.26 max 1.56
+s: 21.00: mean 0.39 std 0.49 min 0.00 max 1.00
+s: 22.00: mean 0.22 std 0.41 min 0.00 max 1.00
+for s 23
+for s 24
+s: 25.00: mean 0.38 std 0.49 min 0.00 max 1.00
+s: 26.00: mean 0.35 std 0.12 min -0.03 max 0.68
+s: 27.00: mean 1.42 std 0.06 min 1.18 max 1.56
+s: 28.00: mean 0.20 std 0.13 min 0.06 max 0.71
+s: 29.00: mean 0.37 std 0.13 min -0.10 max 0.73
+s: 30.00: mean 1.47 std 0.06 min 1.23 max 1.67
+s: 31.00: mean 0.21 std 0.15 min 0.06 max 0.75
+s: 32.00: mean 0.35 std 0.13 min -0.13 max 0.71
+s: 33.00: mean 1.49 std 0.07 min 1.22 max 1.70
+s: 34.00: mean 0.21 std 0.15 min 0.06 max 0.73
+s: 35.00: mean 0.36 std 0.13 min 0.09 max 0.79
+s: 36.00: mean 1.45 std 0.07 min 1.18 max 1.66
+s: 37.00: mean 0.13 std 0.15 min -12.44 max 0.50
+
 """
 # some values from my joint_limits.yaml, others from the urdf or 
 # https://www.shadowrobot.com/wp-content/uploads/2022/03/shadow_dexterous_hand_e_technical_specification.pdf
 JOINT_LIMITS = np.array([ 
     [0.52, 2.5], # gofa
     [-1.0, 2.5], # gofa
-    [-2.5, 1.1], # gofa
-    [-1.0, 2.0], # gofa
-    [-1.04, 2.0], # gofa
+    [-3.0, 1.1], # gofa
+    [-2.0, 2.0], # gofa
+    [-2.0, 2.0], # gofa
     [-2.5, 2.5], # gofa
-    [-0.489, 0.140], # lh_WRJ2
-    [-0.698, 0.489], # lh_WRJ1
+    [-0.49, 0.150], # lh_WRJ2
+    [-0.7, 0.5], # lh_WRJ1
     [-0.35, 0.35], # "lh_FFJ4",
     [-0.262, 1.571], # "lh_FFJ3",
     [0, 1.57], # "lh_FFJ2",
@@ -40,7 +79,7 @@ JOINT_LIMITS = np.array([
     [0, 1.57], # "lh_MFJ1",
     [-1.047, 1.04], # "lh_THJ5",
     [0, 1.22], # "lh_THJ4",
-    [-0.209, 0.20], # "lh_THJ3",
+    [-0.21, 0.21], # "lh_THJ3",
     [-0.7, 0.7], # "lh_THJ2", # urdf is slightly wider than tech spec. Go with the wider one to be safe
     [-0.262, 1.571], # "lh_THJ1",
 ], dtype='float32')
@@ -48,9 +87,9 @@ JOINT_LIMITS = np.array([
 HAPTICS = np.array(5 * [[0.0, 1.0]], dtype='float') # haptics were already normalized from 0 to 1
 
 # values taken from the normalizer fit function, then rounded to the nearest meter
-mins = [0.2193,  1.1434,  0.1246,  0.2273,  1.1635,  0.1175, 0.2029,  1.1771,  0.1151]
-maxs = [0.5204, 1.3973, 0.4805, 0.5474, 1.4750, 0.5378, 0.5411, 1.4861, 0.5283]
-FINGERTIP_POS = np.stack((np.floor(mins), np.ceil(maxs)), axis=1)
+# mins = [0.2193,  1.1434,  0.1246,  0.2273,  1.1635,  0.1175, 0.2029,  1.1771,  0.1151]
+# maxs = [0.5204, 1.3973, 0.4805, 0.5474, 1.4750, 0.5378, 0.5411, 1.4861, 0.5283]
+# FINGERTIP_POS = np.stack((np.floor(mins), np.ceil(maxs)), axis=1)
 
 """
 From validate_rewards for fingertip pos's
@@ -63,11 +102,45 @@ range: 0.05885033309459686, 0.598027229309082
 range: 0.04745176061987877, 0.7142849564552307
 range: 1.2671566009521484, 1.6714200973510742
 range: 0.05856914445757866, 0.5928069353103638
+
+take 2:
+s: 26.00: mean 0.35 std 0.12 min -0.03 max 0.68
+s: 27.00: mean 1.42 std 0.06 min 1.18 max 1.56
+s: 28.00: mean 0.20 std 0.13 min 0.06 max 0.71
+s: 29.00: mean 0.37 std 0.13 min -0.10 max 0.73
+s: 30.00: mean 1.47 std 0.06 min 1.23 max 1.67
+s: 31.00: mean 0.21 std 0.15 min 0.06 max 0.75
+s: 32.00: mean 0.35 std 0.13 min -0.13 max 0.71
+s: 33.00: mean 1.49 std 0.07 min 1.22 max 1.70
+s: 34.00: mean 0.21 std 0.15 min 0.06 max 0.73
+
+
 """
+FINGERTIP_POS = np.array([
+    [-1.0, 1.0], # th-x
+    [0.0, 2.0], # th-y
+    [0, 1.0], # th-z
+    [-1.0, 1.0], # ff-x
+    [0.0, 2.0], # ff-y
+    [0.0, 1.0], # ff-z
+    [-1.0, 1.0], # mf-x
+    [0.0, 2.0], # mf-y
+    [0.0, 1.0], # mf-z
+], dtype='float32')
 
+"""
+block xyz limits
+range: 0.123125821352005, 0.7750506401062012
+range: 1.24249267578125, 1.6347488164901733
+range: 0.05169874057173729, 0.4972562789916992
+"""
+BLOCK = np.array([
+    [-1.0, 1.0], # x
+    [0.0, 2.0], # y
+    [-0.05, 1.0], # z
+], dtype='float32')
 
-
-LIMITS = np.concatenate((JOINT_LIMITS, HAPTICS, FINGERTIP_POS), axis=0, dtype='float32')
+LIMITS = np.concatenate((JOINT_LIMITS, HAPTICS, FINGERTIP_POS, BLOCK), axis=0, dtype='float32')
 
 
 class DataArray:

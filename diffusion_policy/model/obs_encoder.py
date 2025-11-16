@@ -7,6 +7,64 @@ import robomimic.models.base_nets as rmbn
 from robomimic.models.obs_nets import ObservationEncoder
 from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialSoftmax
 
+class StateRandomizer(rmbn.Randomizer):
+    def __init__(self,
+                 noise_mag = 1e-3,
+                 use_add_noise = True, # add some noise to each input
+                 use_mask_input = True, # randomly mask some inputs
+                 ):
+        super().__init__()
+        
+        self.noise_mag = noise_mag
+        self.use_add_noise = use_add_noise
+        self.use_mask_input = use_mask_input
+        
+    def get_mask_chance(self):
+        return 0.01
+        
+    def forward_in(self, inputs):
+        if not self.training:
+            return inputs
+        
+        state = inputs
+        
+        if self.use_add_noise:
+            # add some noise to the state
+            noise = self.noise_mag * torch.randn(state.shape, device=state.device)
+            
+            s2 = state + noise
+        else:
+            s2 = state
+            
+        if self.use_mask_input:
+            p = torch.rand_like(s2, device=s2.device)
+            
+            to_mask = p < self.get_mask_chance()
+            
+            s3 = s2.clone()
+            shape = s3[to_mask].shape
+            
+            # mask vals randomized in the range [-1, 1]
+            mask_val = torch.rand(shape, device=s3.device) * 2.0 - 1.0
+            
+            # mask some inputs
+            s3[to_mask] = mask_val
+        else:
+            s3 = s2
+    
+        return s3
+    
+    def forward_out(self, inputs):
+        # do nothing
+        return inputs
+    
+    def output_shape_out(self, input_shape=None):
+        return input_shape
+    
+    def output_shape_in(self, input_shape=None):
+        return input_shape
+        
+    
 
 def make_ob(
         shape: tuple,
@@ -63,6 +121,7 @@ class ObsEncoderMaker():
             self.obs_encoder.register_obs_key(
                 name=key,
                 shape=val.shape,
+                randomizer=StateRandomizer()
             )
             
         # finally, make it

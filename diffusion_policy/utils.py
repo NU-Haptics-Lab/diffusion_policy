@@ -4,6 +4,7 @@ from hydra.core.hydra_config import HydraConfig
 
 import diffusion_policy.globals as globals
 from diffusion_policy.common import pytorch_util
+import numpy as np
 
 def EveryEpoch(every: int):
     yes = (globals.EPOCH % every) == 0
@@ -96,19 +97,33 @@ def compute_jerk(s, a, dt=0.1):
     
     s0 = s[:, :nb_joints]
     
-    s = torch.vstack([s0, a])
+    # s = torch.vstack([s0, a])
             
-    # get the delta state
-    r_shifted_s = s[1:, :]
-    l_shifted_s = s[:-1, :]
+    # # get the delta state
+    # r_shifted_s = s[1:, :]
+    # l_shifted_s = s[:-1, :]
     
     # units: normalized joint states
-    ds = torch.abs(r_shifted_s - l_shifted_s)
+    # ds = torch.abs(r_shifted_s - l_shifted_s)
+    ds = torch.abs(s0 - a)
     
     # units: normalized joint-state / s^3
     ds2 = ds / dt**3
     
-    # sum along the traj dim
+    # sum along waypoint dim
     sum1 = torch.sum(ds2, dim = 1)
     
-    return sum1
+    # mean across all waypoints
+    mean1 = torch.mean(sum1)
+    
+    return mean1
+
+def compute_stats(arr):
+    arr2 = np.array(arr)
+    
+    mean = arr2.mean()
+    std = arr2.std()
+    min = arr2.min()
+    max = arr2.max()
+    
+    return mean, std, min, max

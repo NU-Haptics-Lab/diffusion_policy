@@ -4,6 +4,9 @@ import numba
 import hydra
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
+from diffusion_policy import utils
+from collections import defaultdict
+from tqdm import tqdm
 
 import copy
 from omegaconf import OmegaConf, open_dict
@@ -260,8 +263,11 @@ class Indices:
 
         return rb_indices
     
+    def get_all_indices(self):
+        return self.indices
+    
     def get_all_rb_indices(self):
-        indices = self.indices
+        indices = self.get_all_indices()
         all_rb_indices = self.get_rb_indices(indices)
         
         return all_rb_indices
@@ -292,6 +298,13 @@ class Indices:
 
         # we're done
         return sequence
+    
+    def get_all_key(self, key):
+        indices = self.get_all_indices()
+        
+        seq = self.get_sequence_by_indices_and_key(indices, key)
+        
+        return seq
 
 
         
@@ -600,6 +613,10 @@ class EpisodeSampler:
         
         assert(not np.any(np.isnan(self.qvals)))
         return qvals3
+    
+    def get_all_key(self, key):
+        return self.indices.get_all_key(key)
+        
 
 class DatasetSampler:
     """
@@ -625,6 +642,48 @@ class DatasetSampler:
         self.ep_samplers: list[EpisodeSampler] = []
         self.my_indices = []
         self.qvals = None
+            
+    def print_dataset_stats(self):
+        # method vars
+        per_ep = defaultdict(list)
+        
+        ## iterate over eps
+        for ep in tqdm(self.ep_samplers, desc="print_dataset_stats"):
+            s = ep.get_all_key('state')[:, 0:21]
+            a = ep.get_all_key('action')
+            r = ep.get_all_key('reward')
+            
+            j = utils.compute_jerk(s, a)
+            per_ep['jerk'].append(j)
+            per_ep['ep_len'].append(len(ep))
+            
+            total_r = r.sum()
+            
+            # successful?
+            if total_r > 0.0:
+                success = True
+            else:
+                success = False
+                
+            # success ep length
+            if success:
+                per_ep['success_ep_len'].append(len(ep))
+            
+        ##
+        # compute averages
+        for key, val in per_ep.items():
+            mean, std, min, max = utils.compute_stats(val)
+            
+            print("{}--{} stats:".format(self.rb_id, key))
+            print("\tmean: {}".format(mean))
+            print("\tstd: {}".format(std))
+            print("\tmin: {}".format(min))
+            print("\tmax: {}".format(max))
+            
+        pass
+            
+            
+            
 
     def Init(self,
               ep_mask
@@ -640,6 +699,9 @@ class DatasetSampler:
         self.make_episodes()
         
         self.initd = True
+        
+        if False:
+            self.print_dataset_stats()
 
     def make_episodes(self):
         """ Using the replay buffer's episode_ends, make episode sampler classes  """

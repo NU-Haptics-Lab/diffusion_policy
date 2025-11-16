@@ -41,6 +41,7 @@ class Rollout:
                  use_critic_preferred_actions_early_exit = True,
                  critic_preferred_actions_nb = 5,
                  only_save_successful_episodes = False,
+                 save_rollouts = True,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -52,6 +53,7 @@ class Rollout:
         self.use_critic_preferred_actions_early_exit = use_critic_preferred_actions_early_exit
         self.critic_preferred_actions_nb = critic_preferred_actions_nb
         self.only_save_successful_episodes = only_save_successful_episodes
+        self.save_rollouts = save_rollouts
 
         # refs
         self.critic = None
@@ -125,10 +127,12 @@ class Rollout:
                 
                 successful = reward > 0.0
                 
-                if self.only_save_successful_episodes:
-                    save = successful
-                else:
-                    save = True
+                save = False
+                if self.save_rollouts:
+                    if self.only_save_successful_episodes:
+                        save = successful
+                    else:
+                        save = True
                 
                 # dump the samples to the replay buffer
                 if save:
@@ -440,6 +444,7 @@ class Rollout:
         lh_rftip 48:51
         lh_lftip 51:54
         lh_thtip 54:57
+        block_pos 57:60
         """
         state = obs['state'][0]
         haptics = obs['lh_contact_forces'][0]
@@ -447,12 +452,16 @@ class Rollout:
         mf_pos = state[45:48]
         th_pos = state[54:57]
         
+        block_pos = state[57:60]
+        
+        # MUST be same order as in the dataset gen script
         out_state = np.concatenate((
             state[0:21],
             haptics,
             th_pos,
             ff_pos,
             mf_pos,
+            block_pos,
             ))
         
         # make a write-able copy
