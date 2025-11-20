@@ -10,8 +10,8 @@ from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialS
 class StateRandomizer(rmbn.Randomizer):
     def __init__(self,
                  noise_mag = 1e-3,
-                 use_add_noise = True, # add some noise to each input
-                 use_mask_input = True, # randomly mask some inputs
+                 use_add_noise = False, # add some noise to each input
+                 use_mask_input = False, # randomly mask some inputs
                  ):
         super().__init__()
         

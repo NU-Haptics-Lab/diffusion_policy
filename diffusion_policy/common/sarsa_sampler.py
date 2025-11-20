@@ -816,6 +816,8 @@ class DatasetSampler:
         from data analysis, I've noticed that the largest jumps in joint state happen at the end of an episode ... so skip those ... I think there's a bug in my dataset generation script that's causing this.
         
         KEEP IN MIND: we train off trajectories ... not individual samples ... meaning that you can't simply cherrypick good/bad actions. You can only remove samples at the beginning / end of an episode.
+        
+        ANOTHER THING: ... Must turn this off if using q-learning, because then it won't see the reward (which is usually given on the final sample of an episode)
         """
         assert(self.replay_buffer is not None)
         
