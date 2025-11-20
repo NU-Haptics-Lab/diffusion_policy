@@ -399,6 +399,12 @@ class BatchLoader:
                 )
         rb_index.clamp = False
         
+        ## task id
+        task_id = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        task_id.clamp = False
+        
         ## qvals, clamp to [-1, 1]
         qval = get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
@@ -422,6 +428,7 @@ class BatchLoader:
                 {'min': np.array([0], dtype=np.float32)}
                 ),
             'rb_index': rb_index,
+            'task_id': task_id,
             # 'qval': qval,
             'ep_len': ep_len,
         }

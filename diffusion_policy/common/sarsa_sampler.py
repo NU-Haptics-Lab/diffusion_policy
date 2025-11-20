@@ -484,6 +484,14 @@ class EpisodeSampler:
 
         return np.array(index)
     
+    def get_task_id(self, ep_idx):
+        task_id = self.get_key_sample("task_id", ep_idx) # adds a dimension
+        
+        # convert to np array
+        task_id = np.array(task_id)
+        return task_id
+
+    
     def get_qval(self, ep_idx) -> np.ndarray:
         qval = self.qvals[ep_idx]
 
@@ -514,6 +522,7 @@ class EpisodeSampler:
 
         ## Meta data
         sample["rb_index"] = self.get_rb_index(ep_idx)
+        sample["task_id"] = self.get_task_id(ep_idx)
         
         # explicit q-val
         # sample["qval"] = self.get_qval(ep_idx)
