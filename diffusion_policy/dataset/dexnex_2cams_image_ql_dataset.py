@@ -140,7 +140,7 @@ class DexNexDataset(BaseImageDataset):
         }
         
         # next state
-        data['obs_next'] = self._collate_state(sample, suffix="_next")
+        # data['obs_next'] = self._collate_state(sample, suffix="_next")
         
         # history of states
         for val in self.history_indices:

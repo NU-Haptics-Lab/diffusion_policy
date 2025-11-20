@@ -17,7 +17,7 @@ load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 resume_tag: latest
 output_dir: /media/dexnex_ssd/models/actor_critic_16
@@ -229,7 +229,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: actor_critic_16
+        task_id: 3 # 0: block transfer, 1: bnb 1cam/2cam, 3: sim 1block
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -271,7 +271,7 @@ common_dataset:
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
-  use_weighted_dataloader: false
+  use_weighted_dataloader: true
 
   options:
     common:
@@ -281,12 +281,12 @@ common_dataset:
       num_workers: 16
       persistent_workers: true
       pin_memory: true
-      shuffle: true # can't use with use_weighted_dataloader
+      shuffle: false # can't use with use_weighted_dataloader
     val:
       num_workers: 0
       persistent_workers: false
       pin_memory: false
-      shuffle: true # can't use with use_weighted_dataloader
+      shuffle: false # can't use with use_weighted_dataloader
 
   # child
   sampler:
@@ -357,9 +357,9 @@ models:
           obs_encoder_group_norm: true
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
+            - 128
             - 256
             - 512
-            - 1024
           diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}

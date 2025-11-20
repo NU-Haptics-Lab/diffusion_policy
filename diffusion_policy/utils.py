@@ -130,3 +130,21 @@ def compute_stats(arr):
     max = arr2.max()
     
     return mean, std, min, max
+
+def make_qvals(rewards, discount = 0.975):
+    qvals = []
+    qval = 0.0
+        
+    
+    for reward in reversed(rewards):
+        qval = reward + discount * qval
+        
+        qvals.append(qval)
+        
+    qvals2 = np.array(qvals)
+    
+    # reverse
+    qvals3 = np.flip(qvals2)
+    
+    assert(not np.any(np.isnan(qvals3)))
+    return qvals3

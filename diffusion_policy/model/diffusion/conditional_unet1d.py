@@ -88,7 +88,8 @@ class ConditionalUnet1D(nn.Module):
             nn.Mish(),
             nn.Linear(dsed * 4, dsed),
         )
-        cond_dim = dsed
+        cond_dim = dsed # timestamp embedder
+        cond_dim += dsed # task_id embedder
         if global_cond_dim is not None:
             cond_dim += global_cond_dim
 
@@ -201,9 +202,12 @@ class ConditionalUnet1D(nn.Module):
             
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         timesteps = timesteps.expand(sample.shape[0])
+        
+        # remove variable dimension
+        task_ids2 = torch.reshape(task_ids, [-1])
 
         global_feature = self.diffusion_step_encoder(timesteps)
-        gf2 = self.task_id_encoder(task_ids)
+        gf2 = self.task_id_encoder(task_ids2)
 
         if global_cond is not None:
             global_feature = torch.cat([

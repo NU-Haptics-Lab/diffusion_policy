@@ -489,7 +489,7 @@ class EpisodeSampler:
         """
         sample = {}
         sample["obs"] = self.get_obs_sample(ep_idx)
-        sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
+        # sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
 
         sample["action"] = self.get_action_sample(ep_idx)
 

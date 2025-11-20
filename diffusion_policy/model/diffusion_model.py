@@ -310,7 +310,9 @@ class DiffusionModel(BaseImagePolicy):
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. predict model output
-            model_output = self.model(trajectory, t, 
+            model_output = self.model(trajectory, 
+                                      t, 
+                                      task_id,
                 local_cond=local_cond, global_cond=global_cond)
             
             # tree?
@@ -483,7 +485,7 @@ class DiffusionModel(BaseImagePolicy):
         return nresult
     
     def loss(self, nbatch, task_id):
-        loss2, a0, timesteps = self.compute_loss(nbatch, task_id=task_id)
+        loss2, a0, timesteps = self.compute_loss(nbatch,task_id)
         
         # # logging
         # dd = {task_id + ": bc_actor_loss": loss2}
@@ -569,7 +571,7 @@ class DiffusionModel(BaseImagePolicy):
         # return nobs_features
 
     # ========= training  ============
-    def compute_loss(self, nbatch, task_id):
+    def compute_loss(self, nbatch, task_id_UNUSED):
         # normalize input
         assert 'valid_mask' not in nbatch
         
@@ -631,7 +633,7 @@ class DiffusionModel(BaseImagePolicy):
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
         
         # Predict the noise residual
-        pred = self.model(noisy_trajectory, timesteps, 
+        pred = self.model(noisy_trajectory, timesteps, task_id, 
             local_cond=local_cond, global_cond=global_cond)
 
         # tree?

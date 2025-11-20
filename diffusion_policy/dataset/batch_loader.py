@@ -418,9 +418,9 @@ class BatchLoader:
         
         nn = {
             'obs': obs,
-            'obs_next': obs,
+            # 'obs_next': obs,
             'action': act,
-            'action_next': act,
+            # 'action_next': act,
             'not_done': get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
                 ),
@@ -429,7 +429,7 @@ class BatchLoader:
                 ),
             'rb_index': rb_index,
             'task_id': task_id,
-            # 'qval': qval,
+            'qval': qval,
             'ep_len': ep_len,
         }
         

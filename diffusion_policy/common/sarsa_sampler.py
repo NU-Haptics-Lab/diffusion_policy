@@ -492,11 +492,18 @@ class EpisodeSampler:
         return task_id
 
     
-    def get_qval(self, ep_idx) -> np.ndarray:
+    def get_qval_OLD(self, ep_idx) -> np.ndarray:
         qval = self.qvals[ep_idx]
 
         assert(not np.isnan(qval))
         return np.array([qval])
+    
+    def get_qval(self, ep_idx):
+        task_id = self.get_key_sample("qval", ep_idx) # adds a dimension
+        
+        # convert to np array
+        task_id = np.array(task_id)
+        return task_id
 
     
     def get_sample(self, ep_idx):
@@ -511,10 +518,10 @@ class EpisodeSampler:
         sample["obs"] = self.get_obs_sample(ep_idx)
         
         # TODO: only load next obs (and action) if we're doing QL, otherwise it's a slowdown
-        sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
+        # sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
 
         sample["action"] = self.get_action_sample(ep_idx)
-        sample["action_next"] = self.get_action_sample(ep_idx + 1)
+        # sample["action_next"] = self.get_action_sample(ep_idx + 1)
 
         sample["reward"] = self.get_reward(ep_idx)
 
@@ -525,7 +532,7 @@ class EpisodeSampler:
         sample["task_id"] = self.get_task_id(ep_idx)
         
         # explicit q-val
-        # sample["qval"] = self.get_qval(ep_idx)
+        sample["qval"] = self.get_qval(ep_idx)
         
         # ep len
         sample["ep_len"] = np.array([len(self)])
@@ -535,30 +542,20 @@ class EpisodeSampler:
     def get_all_rb_indices(self):
         return self.indices.get_all_rb_indices()
     
-    def get_qvals(self):
+    def get_qvals_OLD(self):
         # get rewards
         indices = self.indices.get_all_train_indices()
         rewards = self.indices.get_sequence_by_train_indices_and_key(indices, "reward")
         
-        qvals = []
-        qval = 0.0
-        
-        discount = 0.975 # same as config
-        
-        for indice in reversed(indices):
-            qval = rewards[indice] + discount * qval
-            
-            qvals.append(qval)
-            
-        qvals2 = np.array(qvals)
-        
-        # reverse
-        qvals3 = np.flip(qvals2)
-        
-        self.qvals = qvals3
-        
-        assert(not np.any(np.isnan(self.qvals)))
-        return qvals3
+        self.qvals = utils.make_qvals(rewards)
+        return self.qvals
+    
+    def get_qvals(self):
+        # get rewards
+        indices = self.indices.get_all_train_indices()
+        qvals = self.indices.get_sequence_by_train_indices_and_key(indices, "qval")
+    
+        return qvals
     
     def get_all_key(self, key):
         return self.indices.get_all_key(key)

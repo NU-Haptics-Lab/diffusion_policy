@@ -47,7 +47,7 @@ class DexNexDataset(BaseImageDataset):
         """
         # fix this state
         self._fix_obs(sample["obs"])
-        self._fix_obs(sample["obs_next"])
+        # self._fix_obs(sample["obs_next"])
         
         # convert all data to float32 to save space
         def fcn(x):
@@ -177,7 +177,7 @@ class TrainAndVal:
         qvals = dataset.get_qvals()
         
         # map to range [0, 1]
-        sqvals = np.tanh(qvals) / 2.0 + 0.5
+        sqvals = np.tanh(qvals) / 2.0 + 0.5 #type:ignore
         # sqvals2 = torch.squeeze(sqvals)
             
         # weights = sqvals2.cpu().numpy()
@@ -188,7 +188,7 @@ class TrainAndVal:
     
     def compute_weights2(self, dataset: DexNexDataset):
         """
-        Use qvals to compute weights. Use exponential decay based off episode length
+        Use ep lens to compute weights. Use exponential decay based off episode length
         """
         # get episode lengths
         ep_lens = dataset.get_ep_lengths()
@@ -229,7 +229,7 @@ class TrainAndVal:
         
         if use:
             # get the weights
-            weights = self.compute_weights2(dataset)
+            weights = self.compute_weights(dataset)
             
             assert(len(weights) == len(dataset))
             

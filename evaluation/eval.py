@@ -61,7 +61,7 @@ class Inference:
         self.policy = policy
         self.debug = debug
         self.analytics = analytics
-        self.task_id = task_id
+        self.task_id = torch.tensor([[task_id]], device=globals.CONFIG.device) # 2d #type:ignore
         
         # save a handle
         self.batch_loader = globals.DEFAULT_BATCH_LOADER
