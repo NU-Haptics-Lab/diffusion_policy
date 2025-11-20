@@ -22,6 +22,7 @@ import robomimic.models.base_nets as rmbn
 import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 from diffusion_policy.common import pytorch_util
+from diffusion_policy import utils
 
 import torchsummary
 from torchvision import models as vision_models
@@ -585,6 +586,14 @@ class DiffusionModel(BaseImagePolicy):
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
         To = self.n_obs_steps
+        
+        # testing / troubleshooting
+        if True:
+            with torch.no_grad():
+                s = nobs['state'][:, 0, 5:6]
+                a = nactions[:, 0, 5:6]
+                j = utils.compute_jerk_waypoints(s, a)
+                pass
 
         # handle different ways of passing observation
         local_cond = None

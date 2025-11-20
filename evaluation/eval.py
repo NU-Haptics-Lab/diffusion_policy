@@ -26,6 +26,7 @@ import diffusion_policy.globals as globals
 from diffusion_policy.dataset.batch_loader import BatchLoader
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.model.diffusion_model import DiffusionModel
+from diffusion_policy import utils
 
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
@@ -175,6 +176,13 @@ class Inference:
             
             if self.debug or self.analytics:
                 print('Inference latency:', time.time() - s)
+            
+            # testing
+            if True:
+                # jerk of first action
+                s = obs_dict_np['state'][0, 0, 0:21]
+                a = future_actions[0, 0]
+                j = utils.compute_jerk(s, a)
         
             return future_actions, all_actions
 

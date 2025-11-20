@@ -221,6 +221,7 @@ session_trainer:
       critic_preferred_actions_nb: 2
       only_save_successful_episodes: true
       save_rollouts: false
+      use_energy_limited_actions: true
 
 
       evaluator:
@@ -358,8 +359,8 @@ models:
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
             - 128
+            - 192
             - 256
-            - 512
           diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}

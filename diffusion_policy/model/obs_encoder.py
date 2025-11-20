@@ -9,21 +9,23 @@ from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialS
 
 class StateRandomizer(rmbn.Randomizer):
     def __init__(self,
-                 noise_mag = 1e-3,
-                 use_add_noise = False, # add some noise to each input
+                 noise_mag = 1e-2,
+                 use_add_noise = True, # add some noise to each input
                  use_mask_input = False, # randomly mask some inputs
+                 use_during_eval = True,
                  ):
         super().__init__()
         
         self.noise_mag = noise_mag
         self.use_add_noise = use_add_noise
         self.use_mask_input = use_mask_input
+        self.use_during_eval = use_during_eval
         
     def get_mask_chance(self):
         return 0.01
         
     def forward_in(self, inputs):
-        if not self.training:
+        if not self.use_during_eval and not self.training:
             return inputs
         
         state = inputs
@@ -152,10 +154,6 @@ def CalcMeanFeature(wfeaturess):
     return out
 
 class ObsEncoder:
-
-
-
-
     def w_average_the_history(self, nbatch):
         """
         encode obs history by calculating a weighted average

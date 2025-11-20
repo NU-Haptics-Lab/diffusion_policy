@@ -88,7 +88,7 @@ def standardize_shape(x):
         
     return x
 
-def compute_jerk(s, a, dt=0.1):
+def compute_jerk_waypoints(s, a, dt=0.1):
     """
     s - initial state, 1d
     a - next state, 1d
@@ -116,10 +116,51 @@ def compute_jerk(s, a, dt=0.1):
     # sum along waypoint dim
     sum1 = torch.sum(ds2, dim = 1)
     
+    return sum1
+
+@torch.no_grad()
+def compute_jerk(s, a, dt=0.1):
+    """
+    s - initial state, 1d
+    a - next state, 1d
+    """
+    sum1 = compute_jerk_waypoints(s, a, dt)
+    
     # mean across all waypoints
     mean1 = torch.mean(sum1)
     
     return mean1
+
+@torch.no_grad()
+def compute_energy(s):
+    """
+    s is [batch-dim, waypoints, state-dim]
+    """
+    s = torch.tensor(s)
+    
+    # get the delta state
+    r_shifted_s = s[:, 1:, :]
+    l_shifted_s = s[:, :-1, :]
+        
+    ds = torch.abs(r_shifted_s - l_shifted_s)
+    
+    # power 2 each element
+    ds2 = torch.pow(ds, 2.0)
+    
+    # gofa hack to account for greater link mass
+    ds2[:, :, 0:6] = ds2[:, :, 0:6] * 5.0
+    
+    # much lower energy for moving fingers
+    ds2[:, :, 6:] = ds2[:, :, 6:] * 0.1
+    
+    # sum along the traj dim
+    sum1 = torch.sum(ds2, dim = 1)
+    
+    # sum along state dim
+    sum2 = torch.sum(sum1, dim = 1)
+    
+    # done, shape should be [batch size, 1]
+    return sum2
 
 def compute_stats(arr):
     arr2 = np.array(arr)

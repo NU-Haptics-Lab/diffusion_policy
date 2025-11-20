@@ -7,6 +7,7 @@ from evaluation.eval import EvalDexNex
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.common.sarsa_sampler import DatasetSampler
 from diffusion_policy.dataset.train_and_val import TrainAndVal
+from diffusion_policy.model.diffusion_ql import attractor
 
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.common import pytorch_util
@@ -42,6 +43,7 @@ class Rollout:
                  critic_preferred_actions_nb = 5,
                  only_save_successful_episodes = False,
                  save_rollouts = True,
+                 use_energy_limited_actions = True,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -54,6 +56,7 @@ class Rollout:
         self.critic_preferred_actions_nb = critic_preferred_actions_nb
         self.only_save_successful_episodes = only_save_successful_episodes
         self.save_rollouts = save_rollouts
+        self.use_energy_limited_actions = use_energy_limited_actions
 
         # refs
         self.critic = None
@@ -149,13 +152,6 @@ class Rollout:
                     
                     # add on episode length
                     ttc += len(samples)
-                
-            # must re-index the sampler
-            sampler: TrainAndVal = globals.DATALOADERS[self.rb_id]
-            sampler.init()
-            
-            # all dataloader iterators are now invalid, so each Batchloader class must now reset
-            globals.SESSION_TRAINER.reset()
             
             # logging
             globals.LOGGER.log_one("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
@@ -268,7 +264,50 @@ class Rollout:
 
         return qvals1
     
-    def infer_action(self) -> tuple[torch.Tensor, float]:
+    @torch.no_grad()
+    def infer_energy_limited_action(self):
+        c = 0
+        max_ee = 50.0 # a little tuned
+        old_ee = max_ee
+        max_c = 20
+        failed = False
+        
+        s0 = self.evaluator.GetObs()['state'][:, :, 0:21]
+        ee = max_ee
+        
+        future_actions, all_actions = self.evaluator.infer()
+        out_fa = future_actions
+        out_aa = all_actions
+        
+        while c < max_c:
+            s = np.concatenate([s0, future_actions], axis=1) # type:ignore
+            
+            ee = utils.compute_energy(s)
+            
+            # early exit 
+            if ee < max_ee:
+                break
+            
+            # if better, save it
+            if ee < old_ee:
+                old_ee = ee
+                out_fa = future_actions
+                out_aa = all_actions
+            
+            future_actions, all_actions = self.evaluator.infer()
+            
+            c += 1
+            
+        if True:
+            if c >= max_c:
+                print("final ee: {}".format(ee))
+                failed = True
+            
+        return out_fa, out_aa, failed
+    
+    def infer_action(self):
+        failed = False
+        
         if self.use_critic_preferred_actions:
             # actionss = []
             qvals = []
@@ -316,11 +355,13 @@ class Rollout:
 
 
             assert(best_actions is not None)
-            return best_actions, best_qval.cpu()
+            return best_actions, best_qval.cpu(), failed #type:ignore
+        elif self.use_energy_limited_actions:
+            actions, all_actions, failed = self.infer_energy_limited_action()
+            return actions, 0.0, failed
+        
         else:
-            actions, all_actions = self.evaluator.infer()
-            assert(actions is not None)
-            return actions, 0.0
+            return None, 0.0, failed
         
     def one_rollout(self):
         """
@@ -334,13 +375,19 @@ class Rollout:
         done = False
         while not done:
             # get the action trajectory
-            actions, best_qval = self.infer_action() 
-            actions = torch.squeeze(actions)
-            actions = actions.numpy()
-            best_qvals.append(best_qval)
+            actions, best_qval, failed = self.infer_action() 
+            
+            if failed:
+                print("No valid action. Episode failure.")
+                done = True
+                break
             
             # none protection
             if actions is not None:
+                actions = torch.squeeze(actions)
+                actions = actions.numpy()
+                best_qvals.append(best_qval)
+                
                 # execute the full trajectory
                 new_samples, new_obs, rewards, dones, infos, jerk = self.step_trajectory(actions)
                 
@@ -367,7 +414,8 @@ class Rollout:
                 total_jerk += jerk
                 
         # normalize jerk by episode length
-        total_jerk /= len(samples)
+        if len(samples) > 0:
+            total_jerk /= len(samples)
             
         return samples, total_reward, best_qvals, total_jerk
     
@@ -496,3 +544,10 @@ class Rollout:
             # use the replay buffer to write to disk
             rb = self.get_rb()
             rb.add_episode(data_dict, compressors='disk')
+                
+            # must re-index the sampler
+            sampler: TrainAndVal = globals.DATALOADERS[self.rb_id]
+            sampler.init()
+            
+            # all dataloader iterators are now invalid, so each Batchloader class must now reset
+            globals.SESSION_TRAINER.reset()

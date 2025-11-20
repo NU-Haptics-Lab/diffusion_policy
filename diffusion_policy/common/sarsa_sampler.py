@@ -391,6 +391,8 @@ class EpisodeSampler:
 
         self.action_key = "action"
         self.reward_key = "reward"
+        
+        # self.calc_jerks()
 
     def get_id(self, i):
         assert(i >= 0)
@@ -558,7 +560,26 @@ class EpisodeSampler:
         return qvals
     
     def get_all_key(self, key):
+        """
+        gets only this episode's training datapoints for key
+        """
         return self.indices.get_all_key(key)
+    
+    def calc_jerks(self):
+        s = self.get_all_key('state')[:, 5:6]
+        a = self.get_all_key('action')[:, 5:6]
+        
+        sum1 = utils.compute_jerk_waypoints(s, a)
+        
+        if sum1.max() > 100:
+            print()
+            print(self.rb_offset)
+            print(sum1.max())
+            print(sum1.argmax())
+            print(s[sum1.argmax()])
+            print(a[sum1.argmax()])
+        
+        pass
         
 
 class DatasetSampler:
@@ -687,7 +708,6 @@ class DatasetSampler:
             # set rb offset to the old episode_end
             rb_offset = episode_end
             
-            
         # convert to np
         self.my_indices = np.array(my_indices, dtype=int)
 
@@ -750,7 +770,6 @@ class DatasetSampler:
             qvals = np.concatenate([qvals, ep_sampler.get_qvals()])
             
         self.qvals = np.array(qvals)
-        
     
     def get_qvals(self):
         # do this lazily since it's slow

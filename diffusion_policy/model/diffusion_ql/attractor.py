@@ -136,10 +136,10 @@ class EnergyPenalty(Attractor):
         ds2 = torch.pow(ds, 2.0)
         
         # gofa hack to account for greater link mass
-        ds2[:, :, 0:6] = ds2[:, :, 0:6] * 4.0
+        ds2[:, :, 0:6] = ds2[:, :, 0:6] * 5.0
         
         # much much lower energy for moving fingers
-        ds2[:, :, 6:] = ds2[:, :, 6:] * 0.0001
+        ds2[:, :, 6:] = ds2[:, :, 6:] * 0.1
         
         # sum along the traj dim
         sum1 = torch.sum(ds2, dim = 1)
