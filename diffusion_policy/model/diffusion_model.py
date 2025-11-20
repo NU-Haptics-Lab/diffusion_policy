@@ -577,6 +577,7 @@ class DiffusionModel(BaseImagePolicy):
             nbatch = self.ActionRelativeToState(nbatch)
         
         # for cotraining, we normalize when we construct the batch
+        task_id = nbatch['task_id']
         nobs = nbatch['obs']
         nactions = nbatch['action']
         batch_size = nactions.shape[0]
