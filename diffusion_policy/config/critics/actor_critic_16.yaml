@@ -63,7 +63,7 @@ action_relative_to_state: false
 use_denoise: true
 ### End Global Control Panel ###
 
-num_inference_steps: 40
+num_inference_steps: 10
 
 ###################################################
 ###################################################

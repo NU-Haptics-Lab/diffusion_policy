@@ -58,11 +58,36 @@ s: 36.00: mean 1.45 std 0.07 min 1.18 max 1.66
 s: 37.00: mean 0.13 std 0.15 min -12.44 max 0.50
 
 """
+
+"""
+action: 0.00: min 1.16 max 1.93
+action: 1.00: min 0.38 max 2.56
+action: 2.00: min -3.00 max 0.46
+action: 3.00: min -2.00 max 2.00
+action: 4.00: min -1.38 max 1.72
+action: 5.00: min -0.12 max 2.50
+action: 6.00: min -0.49 max 0.14
+action: 7.00: min -0.70 max 0.49
+action: 8.00: min -0.35 max 0.35
+action: 9.00: min -0.26 max 1.57
+action: 10.00: min 0.00 max 1.57
+action: 11.00: min 0.00 max 1.57
+action: 12.00: min -0.35 max 0.35
+action: 13.00: min -0.26 max 1.57
+action: 14.00: min 0.00 max 1.57
+action: 15.00: min 0.00 max 1.57
+action: 16.00: min -1.05 max 0.93
+action: 17.00: min 0.65 max 1.22
+action: 18.00: min -0.21 max 0.21
+action: 19.00: min -0.08 max 0.70
+action: 20.00: min -0.26 max 1.56
+"""
+
 # some values from my joint_limits.yaml, others from the urdf or 
 # https://www.shadowrobot.com/wp-content/uploads/2022/03/shadow_dexterous_hand_e_technical_specification.pdf
 JOINT_LIMITS = np.array([ 
     [0.52, 2.5], # gofa
-    [-1.0, 2.5], # gofa
+    [-1.0, 2.6], # gofa
     [-3.0, 1.1], # gofa
     [-2.0, 2.0], # gofa
     [-2.0, 2.0], # gofa
@@ -77,7 +102,7 @@ JOINT_LIMITS = np.array([
     [-0.262, 1.571], # "lh_MFJ3",
     [0, 1.57], # "lh_MFJ2",
     [0, 1.57], # "lh_MFJ1",
-    [-1.047, 1.04], # "lh_THJ5",
+    [-1.05, 1.04], # "lh_THJ5",
     [0, 1.22], # "lh_THJ4",
     [-0.21, 0.21], # "lh_THJ3",
     [-0.7, 0.7], # "lh_THJ2", # urdf is slightly wider than tech spec. Go with the wider one to be safe

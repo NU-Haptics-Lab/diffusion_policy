@@ -80,7 +80,10 @@ def standardize_shape(x):
     make at-least 2d
     """
     x = torch.tensor(x)
-    if len(x.shape) == 1:
+    if x.ndim == 0:
+        x = torch.unsqueeze(x, dim=0)
+        x = torch.unsqueeze(x, dim=0)
+    elif x.ndim == 1:
         x = torch.unsqueeze(x, dim=0)
         
     return x

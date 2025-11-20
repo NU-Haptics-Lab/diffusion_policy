@@ -228,6 +228,7 @@ class ReplayBuffer:
         return cls.copy_from_store(src_store=group.store, store=store, 
             keys=keys, chunks=chunks, compressors=compressors, 
             if_exists=if_exists, **kwargs)
+        
 
     # ============= save methods ===============
     def save_to_store(self, store, 
@@ -421,6 +422,9 @@ class ReplayBuffer:
 
     def __contains__(self, key):
         return key in self.data
+        
+    def __len__(self):
+        return self.n_steps
 
     # =========== our API ==============
     @property

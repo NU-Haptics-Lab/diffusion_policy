@@ -572,7 +572,7 @@ class DatasetSampler:
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
-        self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
+        self.replay_buffer: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] #type:ignore
         
         self.initd = False
         self.ep_mask = None
@@ -634,8 +634,8 @@ class DatasetSampler:
         # training episode ends. Copy from the ep sampler classes so we can use the efficient binary-search np.searchsorted method when converting from training index to episode
         self.tr_ep_offsets = []
 
-        # compute / recompute mask
-        self.compute_stats()
+        # make the inlier mask
+        self.make_inliers()
         
         # compute / recompute episodes
         self.make_episodes()
@@ -793,6 +793,45 @@ class DatasetSampler:
             
             # only keep inliers
             inlier_mask &= inliers
+            
+        # inlier-mask is now only the inliers for EVERY output action
+        self.inlier_mask = inlier_mask
+        
+        print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))
+        
+    def calc_ds(self, inlier_mask):
+        rb = self.replay_buffer
+        rbs = np.array(rb['state'])
+        rba = np.array(rb['action'])
+        s = rbs[inlier_mask][:, 0:21]
+        a = rba[inlier_mask]
+        
+        ds = np.abs(s - a) #type:ignore
+        ds2 = ds.sum(axis=1)
+        
+        return ds2
+        
+    def make_inliers(self):
+        """
+        from data analysis, I've noticed that the largest jumps in joint state happen at the end of an episode ... so skip those ... I think there's a bug in my dataset generation script that's causing this.
+        
+        KEEP IN MIND: we train off trajectories ... not individual samples ... meaning that you can't simply cherrypick good/bad actions. You can only remove samples at the beginning / end of an episode.
+        """
+        assert(self.replay_buffer is not None)
+        
+        lenrb = len(self.replay_buffer) #type:ignore
+        
+        inlier_mask = np.ones((lenrb), dtype=np.bool_)
+        
+        ends = np.array(self.replay_buffer.episode_ends)
+        import matplotlib.pyplot as plt
+
+        # init ds
+        ds_before = self.calc_ds(inlier_mask)
+        
+        inlier_mask[ends - 1] = False
+        
+        ds_after = self.calc_ds(inlier_mask)
             
         # inlier-mask is now only the inliers for EVERY output action
         self.inlier_mask = inlier_mask

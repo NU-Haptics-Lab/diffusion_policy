@@ -595,14 +595,14 @@ class DiffusionModel(BaseImagePolicy):
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)
-        else:
-            # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, T, Do
-            nobs_features = nobs_features.reshape(batch_size, horizon, -1)
-            cond_data = torch.cat([nactions, nobs_features], dim=-1)
-            trajectory = cond_data.detach()
+        # else:
+        #     # reshape B, T, ... to B*T
+        #     this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
+        #     nobs_features = self.obs_encoder(this_nobs)
+        #     # reshape back to B, T, Do
+        #     nobs_features = nobs_features.reshape(batch_size, horizon, -1)
+        #     cond_data = torch.cat([nactions, nobs_features], dim=-1)
+        #     trajectory = cond_data.detach()
 
         # generate impainting mask
         condition_mask = self.mask_generator(trajectory.shape)
