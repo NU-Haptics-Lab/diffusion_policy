@@ -1,11 +1,15 @@
 import torch
 import numpy as np
+import zarr
 from torch.utils.data import DataLoader
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common import pytorch_util
 import diffusion_policy.globals as globals
 from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 
+from diffusion_policy.common.replay_buffer import ReplayBuffer
+
+from diffusion_policy.model.common import normalizer
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
 from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
 from diffusion_policy.common.normalize_util import get_identity_normalizer_from_stat
@@ -181,7 +185,7 @@ class DataArray:
         self.normalizer = normalizer
         self.descriptor = descriptor
         self.strict = strict
-        self.clamp = clamp
+        self.clamp = globals.CONFIG.clamp # type:ignore
         
         # transfer to device, since I own normalizer
         # if hasattr(globals.CONFIG, "device"):
@@ -231,11 +235,13 @@ class DataArray:
         if self.datapoint is None:
             return
         
+        # must clamp the normalized datapoint first
         if self.clamp:
             self.datapoint = torch.clamp(self.datapoint, -1.0, 1.0)
             
             pass
 
+        # and then unnormalize
         self.datapoint = self.normalizer.unnormalize(self.datapoint)
     
 class NestedDataArray:
@@ -370,12 +376,8 @@ class BatchLoader:
         
         # reset
         self.reset()
-
-    def init_normalizers(self):
-        """
-        Structure, must be same as the shape_meta structure.
-
-        """
+        
+    def get_static_nns(self):
         obs = {}
         obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
         if "state" in obs_keys_to_load:
@@ -416,7 +418,7 @@ class BatchLoader:
                 )
         ep_len.clamp = False
         
-        nn = {
+        nns = {
             'obs': obs,
             # 'obs_next': obs,
             'action': act,
@@ -433,7 +435,39 @@ class BatchLoader:
             'ep_len': ep_len,
         }
         
-        self.nested_data_array.set_normalizers(nn)
+        return nns
+    
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+        
+        # use the all zarr array data
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
+        s: zarr.Array = rb['state'] #type:ignore
+        a: zarr.Array = rb['action'] #type:ignore
+        
+        # only fit the state, and action. No image
+        nn: normalizer.SingleFieldLinearNormalizer = nns['obs']['state']
+        nn.fit(s, mode='gaussian')
+        
+        nn = nns['action']
+        nn.fit(a, mode='gaussian')
+        
+        return nns
+        
+        
+
+    def init_normalizers(self):
+        """
+        Structure, must be same as the shape_meta structure.
+
+        """
+        if False:
+            nns = self.get_static_nns()
+        else:
+            nns = self.get_fitted_nns()
+            
+        
+        self.nested_data_array.set_normalizers(nns)
         
     def reset(self):
         # reset my count

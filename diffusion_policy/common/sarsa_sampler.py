@@ -217,7 +217,7 @@ class Indices:
 
         # get this key's data from the r.b.
         assert(self.replay_buffer is not None)
-        input_arr = self.replay_buffer[key]
+        input_arr = self.replay_buffer[key] # way faster this way vs getting the ep
         
         # # setup the item getter, more efficient than a for loop -- itemgetter doesn't maintain dimensions when the rb_indices is 1-long, so just use a for loop for simplicity
         # ig = itemgetter(*list(rb_indices))
@@ -603,17 +603,20 @@ class DatasetSampler:
         
         self.initd = False
         self.ep_mask = None
-        self.ep_samplers: list[EpisodeSampler] = []
+        self.ep_samplers: dict[int, EpisodeSampler] = {}
         self.my_indices = []
         self.qvals = None
         self.inlier_mask = None
+        
+    def get_ep_list(self):
+        return self.ep_samplers.values()
             
     def print_dataset_stats(self):
         # method vars
         per_ep = defaultdict(list)
         
         ## iterate over eps
-        for ep in tqdm(self.ep_samplers, desc="print_dataset_stats"):
+        for ep in tqdm(self.get_ep_list(), desc="print_dataset_stats"):
             s = ep.get_all_key('state')[:, 0:21]
             a = ep.get_all_key('action')
             r = ep.get_all_key('reward')
@@ -656,7 +659,7 @@ class DatasetSampler:
         self.ep_mask = ep_mask
 
         # episode classes
-        self.ep_samplers: list[EpisodeSampler] = []
+        self.ep_samplers: dict[int, EpisodeSampler] = {}
 
         # training episode ends. Copy from the ep sampler classes so we can use the efficient binary-search np.searchsorted method when converting from training index to episode
         self.tr_ep_offsets = []
@@ -671,6 +674,28 @@ class DatasetSampler:
         
         if False:
             self.print_dataset_stats()
+            
+    def make_episode(self, episode_end, rb_offset, tr_ep_offset):
+        assert(self.inlier_mask is not None)
+        
+        # already made
+        if not episode_end in self.ep_samplers:
+            # make the ep sampler
+            ep_sampler = EpisodeSampler(
+                self.rb_id,
+                rb_offset,
+                episode_end,
+                self.inlier_mask[rb_offset:episode_end]
+            )
+
+            self.ep_samplers[episode_end] = ep_sampler
+            
+            self.tr_ep_offsets.append(tr_ep_offset)
+            
+        # return the ep
+        return self.ep_samplers[episode_end]
+            
+            
 
     def make_episodes(self):
         """ Using the replay buffer's episode_ends, make episode sampler classes  """
@@ -685,19 +710,11 @@ class DatasetSampler:
         assert(self.inlier_mask is not None)
 
         # one episode sampler per episode
-        for idx, episode_end in enumerate(self.replay_buffer.episode_ends): #type:ignore
+        for idx, episode_end in tqdm(enumerate(self.replay_buffer.episode_ends)): #type:ignore
             # if skip a.k.a. episode mask
             if self.ep_mask is None or self.ep_mask[idx]:
-                # make the ep sampler
-                ep_sampler = EpisodeSampler(
-                    self.rb_id,
-                    rb_offset,
-                    episode_end,
-                    self.inlier_mask[rb_offset:episode_end]
-                )
-
-                self.ep_samplers.append(ep_sampler)
-                self.tr_ep_offsets.append(tr_ep_offset)
+                # make the episode (or retrieve it)
+                ep_sampler = self.make_episode(episode_end, rb_offset, tr_ep_offset)
 
                 # add the length of the training episode
                 tr_ep_offset += len(ep_sampler)
@@ -726,7 +743,7 @@ class DatasetSampler:
         dp_ep_idx = idx - tr_ep_offset
 
         # get the episode
-        ep = self.ep_samplers[ep_idx]
+        ep = list(self.get_ep_list())[ep_idx]
         
         # never negative, never greater than len(ep)-1
         assert(dp_ep_idx >= 0)
@@ -751,7 +768,7 @@ class DatasetSampler:
 
     def __len__(self):
         count = 0
-        for ep in self.ep_samplers:
+        for ep in self.get_ep_list():
             count += len(ep)
 
         return count
@@ -763,23 +780,11 @@ class DatasetSampler:
         s = all_samples[self.my_indices]
         return s
     
-    def make_qvals(self):
-        qvals = np.array([])
-        
-        for ep_sampler in self.ep_samplers:
-            qvals = np.concatenate([qvals, ep_sampler.get_qvals()])
-            
-        self.qvals = np.array(qvals)
-    
     def get_qvals(self):
-        # do this lazily since it's slow
-        if self.qvals is None:
-            self.make_qvals()
-            
-        return self.qvals
+        return self.get_key("qval")
     
     def get_ep_lengths(self):
-        l = [len(ep) for ep in self.ep_samplers]
+        l = [len(ep) for ep in self.get_ep_list()]
         return l
     
     def get_ep_lengths_arr(self):
@@ -849,6 +854,9 @@ class DatasetSampler:
         lenrb = len(self.replay_buffer) #type:ignore
         
         inlier_mask = np.ones((lenrb), dtype=np.bool_)
+        
+        self.inlier_mask = inlier_mask
+        return
         
         ends = np.array(self.replay_buffer.episode_ends)
         import matplotlib.pyplot as plt

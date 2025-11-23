@@ -360,7 +360,7 @@ class QvalWBatchLoss(TTREfficiencyWeightedBatchLoss):
         
         pass
     
-# alias - Q Val Weighted
+# alias - Q Val Weighted. To be used with Rollout & Distill
 class QVW(BatchLoss):
     
     @torch.no_grad()

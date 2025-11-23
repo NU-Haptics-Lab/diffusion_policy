@@ -43,19 +43,19 @@ class QLDenser(nn.Module):
         self.model = nn.Sequential(
                     nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now. FTR I added tanh on the prediction output in diffusion_model.py
                     nn.Linear(input_dim, hidden_dim),
-                    nn.Mish(),
+                    nn.LeakyReLU(0.1),
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.Mish(),
+                    nn.LeakyReLU(0.1),
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.Mish(),
+                    nn.LeakyReLU(0.1),
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.Mish(),
+                    nn.LeakyReLU(0.1),
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.Mish(),
+                    nn.LeakyReLU(0.1),
                     )
         
     def forward(self, inputs):

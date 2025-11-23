@@ -308,11 +308,10 @@ class TrainAndVal:
         print(self.rb_id + ": len train dataset: {}".format(len(self.train_dataloader)))
         
     def reinit(self):
-        if utils.GlobalStepFreqTrigger('reinit'):
-            # only init if we're being trained off of
-            tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
-            if self.rb_id in tasks_to_use:
-                self.init()
+        # only init if we're being trained off of
+        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+        if self.rb_id in tasks_to_use:
+            self.init()
         
         
     def __getitem__(self, key):

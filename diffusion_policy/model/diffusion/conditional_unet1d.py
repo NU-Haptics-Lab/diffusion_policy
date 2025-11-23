@@ -33,8 +33,11 @@ class ConditionalResidualBlock1D(nn.Module):
             cond_channels = out_channels * 2
         self.cond_predict_scale = cond_predict_scale
         self.out_channels = out_channels
+        
+        # TODO: put hidden layer count in config
         self.cond_encoder = nn.Sequential(
-            nn.Mish(),
+            nn.Linear(cond_dim, cond_dim),
+            nn.LeakyReLU(0.1),
             nn.Linear(cond_dim, cond_channels),
             Rearrange('batch t -> batch t 1'),
         )
@@ -85,7 +88,7 @@ class ConditionalUnet1D(nn.Module):
         diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(dsed),
             nn.Linear(dsed, dsed * 4),
-            nn.Mish(),
+            nn.LeakyReLU(0.1),
             nn.Linear(dsed * 4, dsed),
         )
         cond_dim = dsed # timestamp embedder
@@ -94,6 +97,9 @@ class ConditionalUnet1D(nn.Module):
             cond_dim += global_cond_dim
 
         in_out = list(zip(all_dims[:-1], all_dims[1:]))
+        
+        # TODO: put in config
+        num_repeats = 3
 
         local_cond_encoder = None
         if local_cond_dim is not None:
@@ -118,13 +124,8 @@ class ConditionalUnet1D(nn.Module):
                 mid_dim, mid_dim, cond_dim=cond_dim,
                 kernel_size=kernel_size, n_groups=n_groups,
                 cond_predict_scale=cond_predict_scale
-            ),
-            ConditionalResidualBlock1D(
-                mid_dim, mid_dim, cond_dim=cond_dim,
-                kernel_size=kernel_size, n_groups=n_groups,
-                cond_predict_scale=cond_predict_scale
-            ),
-        ])
+            ) for i in range(num_repeats)
+            ])
 
         down_modules = nn.ModuleList([])
         for ind, (dim_in, dim_out) in enumerate(in_out):
@@ -133,12 +134,12 @@ class ConditionalUnet1D(nn.Module):
                 ConditionalResidualBlock1D(
                     dim_in, dim_out, cond_dim=cond_dim, 
                     kernel_size=kernel_size, n_groups=n_groups,
-                    cond_predict_scale=cond_predict_scale),
-                ConditionalResidualBlock1D(
+                    cond_predict_scale=cond_predict_scale)
+            ] + [nn.ModuleList([ConditionalResidualBlock1D(
                     dim_out, dim_out, cond_dim=cond_dim, 
                     kernel_size=kernel_size, n_groups=n_groups,
-                    cond_predict_scale=cond_predict_scale),
-                Downsample1d(dim_out) if not is_last else nn.Identity()
+                    cond_predict_scale=cond_predict_scale) for i in range(num_repeats)])] + 
+                [Downsample1d(dim_out) if not is_last else nn.Identity()
             ]))
 
         up_modules = nn.ModuleList([])
@@ -148,11 +149,13 @@ class ConditionalUnet1D(nn.Module):
                 ConditionalResidualBlock1D(
                     dim_out*2, dim_in, cond_dim=cond_dim,
                     kernel_size=kernel_size, n_groups=n_groups,
-                    cond_predict_scale=cond_predict_scale),
+                    cond_predict_scale=cond_predict_scale)
+            ] + [nn.ModuleList([
                 ConditionalResidualBlock1D(
                     dim_in, dim_in, cond_dim=cond_dim,
                     kernel_size=kernel_size, n_groups=n_groups,
-                    cond_predict_scale=cond_predict_scale),
+                    cond_predict_scale=cond_predict_scale) for i in range(num_repeats)])]
+            + [
                 Upsample1d(dim_in) if not is_last else nn.Identity()
             ]))
         
@@ -170,7 +173,7 @@ class ConditionalUnet1D(nn.Module):
         self.task_id_encoder = nn.Sequential(
             SinusoidalPosEmb(dsed),
             nn.Linear(dsed, dsed * 4),
-            nn.Mish(),
+            nn.LeakyReLU(0.1),
             nn.Linear(dsed * 4, dsed),
         )
 
@@ -226,18 +229,20 @@ class ConditionalUnet1D(nn.Module):
         
         x = sample
         h = []
-        for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
+        for idx, (resnet, resnet2s, downsample) in enumerate(self.down_modules):
             x = resnet(x, global_feature)
             if idx == 0 and len(h_local) > 0:
                 x = x + h_local[0]
-            x = resnet2(x, global_feature)
+                
+            for resnet2 in resnet2s:
+                x = resnet2(x, global_feature)
             h.append(x)
             x = downsample(x)
 
         for mid_module in self.mid_modules:
             x = mid_module(x, global_feature)
 
-        for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
+        for idx, (resnet, resnet2s, upsample) in enumerate(self.up_modules):
             h2 = h.pop()
             x = torch.cat((x, h2), dim=1)
             x = resnet(x, global_feature)
@@ -247,7 +252,9 @@ class ConditionalUnet1D(nn.Module):
             # Therefore it is left as a comment.
             if idx == len(self.up_modules) and len(h_local) > 0:
                 x = x + h_local[1]
-            x = resnet2(x, global_feature)
+                
+            for resnet2 in resnet2s:
+                x = resnet2(x, global_feature)
             x = upsample(x)
 
         x = self.final_conv(x)

@@ -2,13 +2,13 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-17: co-training BC"
+description: "actor-critic-18: rollout and distill, more down_dims"
 # global controls
 debug: false # 
-total_num_epochs: 3001
+total_num_epochs: 5001
 batches_per_epoch: 100
-batch_size: 128
-val_every: 40
+batch_size: 64
+val_every: 20
 
 ### Global Control Panel ###
 load:
@@ -17,14 +17,14 @@ load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/actor_critic_17
+output_dir: /media/dexnex_ssd/models/actor_critic_18
 
 tasks_to_use:
   - all
-  - actor_critic_17
+  - actor_critic_18
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -64,13 +64,14 @@ action_relative_to_state: false
 use_denoise: true
 ### End Global Control Panel ###
 
-num_inference_steps: 10
+num_inference_steps: 50
+clamp: false # clamp actions (and diffusion noise)
 
 ###################################################
 ###################################################
 ###################################################
 ###################################################
-action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 
@@ -179,11 +180,11 @@ replay_buffer_loader:
   # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
     all: ${data_directory}all.reward.zarr
-    actor_critic_17: ${data_directory}actor_critic_17.reward.zarr
+    actor_critic_18: ${data_directory}actor_critic_18.reward.zarr
 
   modes:
     all: r
-    actor_critic_17: a
+    actor_critic_18: a
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
@@ -211,21 +212,22 @@ session_trainer:
       # weighted batch loss dict
       w_batch_losses:
         all: ${common_wbatch_loss}
-        actor_critic_17: ${common_wbatch_loss}
+        actor_critic_18: ${common_wbatch_loss}
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 2000 # in steps
-      num_rollouts_per_trigger: 2
-      rb_id: actor_critic_17
+      freq: 1000 # in steps
+      num_rollouts_per_trigger: 1
+      rb_id: actor_critic_18
       use_online_rollout: true
       rollout_num_actions: 8
+      task_id: 3 # 0: block transfer, 1: bnb 1cam/2cam, 3: sim 1block
       use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 2
       only_save_successful_episodes: true
-      save_rollouts: false
-      use_energy_limited_actions: true
+      save_rollouts: true
+      use_energy_limited_actions: false
 
 
       evaluator:
@@ -234,7 +236,7 @@ session_trainer:
         policy: null
         debug: ${debug}
         analytics: false
-        task_id: 3 # 0: block transfer, 1: bnb 1cam/2cam, 3: sim 1block
+        task_id: ${..task_id}
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -244,7 +246,7 @@ session_trainer:
     # weighted batch loss dict
     w_batch_losses:
       all: ${common_wbatch_loss}
-      actor_critic_17: ${common_wbatch_loss}
+      actor_critic_18: ${common_wbatch_loss}
 
 
 
@@ -254,7 +256,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    _target_: diffusion_policy.losses.batch_loss.QVW
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
@@ -271,7 +273,7 @@ dataloaders:
 
   d: 
     all: ${common_dataset}
-    actor_critic_17: ${common_dataset}
+    actor_critic_18: ${common_dataset}
 
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
@@ -285,7 +287,7 @@ common_dataset:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 16
+      num_workers: 8
       persistent_workers: true
       pin_memory: true
       shuffle: false # can't use with use_weighted_dataloader
@@ -322,7 +324,7 @@ models:
       critic:
         _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
         discount: 0.975 # unstable when tested w/ 0.9, 0.99 ... taking a while to converge (while low-freq oscillations) when discount 0.75
-        lr: 1e-4
+        lr: 5e-5
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
@@ -365,8 +367,8 @@ models:
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
             - 128
-            - 192
             - 256
+            - 512
           diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}
@@ -405,9 +407,9 @@ common_noise_scheduler:
   beta_end: 0.02
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
-  clip_sample: true
+  clip_sample: true # apparently you want this true when prediction_type is sample
   num_train_timesteps: 100
-  prediction_type: epsilon
+  prediction_type: epsilon # epsilon or sample
      
 device: cuda:0
 
@@ -417,31 +419,31 @@ override:
       step_trainer: 
         w_batch_losses:
           all:
-            weight: 1.0
+            weight: 0.25
             batch_loss: 
               batch_loader:
                 rb_id: all
               use_bc_loss: ${use_bc_loss}
-          actor_critic_17:
+          actor_critic_18:
             weight: 1.0
             batch_loss: 
               batch_loader:
-                rb_id: actor_critic_17
+                rb_id: actor_critic_18
               use_bc_loss: ${use_bc_loss}
     epoch_evaluator:
       w_batch_losses:
         all:
-          weight: 1.0
+          weight: 0.25
           batch_loss: 
             batch_loader:
               rb_id: all
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
-        actor_critic_17:
+        actor_critic_18:
           weight: 1.0
           batch_loss: 
             batch_loader:
-              rb_id: actor_critic_17
+              rb_id: actor_critic_18
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
 
@@ -450,9 +452,9 @@ override:
       all:
         sampler:
           rb_id: all
-      actor_critic_17:
+      actor_critic_18:
         sampler:
-          rb_id: actor_critic_17
+          rb_id: actor_critic_18
 
   models:
     models:

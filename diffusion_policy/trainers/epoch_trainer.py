@@ -106,9 +106,6 @@ class EpochTrainer(Epoch):
             # train for one step
             self.step_trainer.train()
             
-            # reindex dataloader
-            globals.DATALOADERS.reinit()
-            
             # rollouts
             if self.rollouts is not None:
                 self.rollouts.run()

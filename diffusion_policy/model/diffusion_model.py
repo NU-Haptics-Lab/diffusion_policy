@@ -298,19 +298,13 @@ class DiffusionModel(BaseImagePolicy):
             device=condition_data.device,
             generator=generator)
 
-        trajectory = torch.randn(
-            size=condition_data.shape, 
-            dtype=condition_data.dtype,
-            device=condition_data.device,
-            generator=generator)
-        
-        
+        trajectory = self.make_noise(condition_data, generator)
 
         for t in scheduler.timesteps:
             # 1. apply conditioning
             trajectory[condition_mask] = condition_data[condition_mask]
 
-            # 2. predict model output
+            # 2. predict model output (could be noise or trajectory depending on pred_type)
             model_output = self.model(trajectory, 
                                       t, 
                                       task_id,
@@ -436,6 +430,10 @@ class DiffusionModel(BaseImagePolicy):
             # empty data for action
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
+            
+        # not available rn
+        else:
+            raise
 
         # run sampling
         nsample = self.conditional_sample(
@@ -570,6 +568,28 @@ class DiffusionModel(BaseImagePolicy):
         #     trajectory = cond_data.detach()
 
         # return nobs_features
+        
+    def make_noise(self, x, generator=None):
+        """
+        make noise. If we're clamping model I/O, then clamp the noise too (since we'd never expect to see an action outside of [-1, 1])
+        
+        
+        torch.randn(
+            size=condition_data.shape, 
+            dtype=condition_data.dtype,
+            device=condition_data.device,
+            generator=generator)
+        """
+        n = torch.randn(x.shape, dtype=x.dtype, device=x.device, generator=generator)
+        
+        must_clamp = globals.CONFIG.clamp #type:ignore
+        
+        if must_clamp:
+            n = torch.clamp(n, -1.0, 1.0)
+            
+        return n
+        
+        
 
     # ========= training  ============
     def compute_loss(self, nbatch, task_id_UNUSED):
@@ -619,8 +639,8 @@ class DiffusionModel(BaseImagePolicy):
         # generate impainting mask
         condition_mask = self.mask_generator(trajectory.shape)
 
-        # Sample noise that we'll add to the images
-        noise = torch.randn(trajectory.shape, device=trajectory.device)
+        # Sample noise that we'll interpolate the input to
+        noise = self.make_noise(trajectory)
         bsz = trajectory.shape[0]
         
         # Sample a random timestep for each image
@@ -629,9 +649,10 @@ class DiffusionModel(BaseImagePolicy):
             (bsz,), device=trajectory.device
         ).long()
         
-        # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
-        # basically does t' = alpha * t + (1-alpha) * noise
+        # basically does t' = sqrt(alpha) * t + sqrt((1-alpha)) * noise
+        # but it's not exactly linear interpolation because of the sqrt
+        # from the original DDPM paper, this is adding noise
         noisy_trajectory = self.noise_scheduler.add_noise(
             trajectory, noise, timesteps)
         

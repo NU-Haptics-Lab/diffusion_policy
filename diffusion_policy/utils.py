@@ -189,3 +189,17 @@ def make_qvals(rewards, discount = 0.975):
     
     assert(not np.any(np.isnan(qvals3)))
     return qvals3
+
+def add_qvals(dd):
+    rewards = dd['reward']
+    qvals = make_qvals(rewards)
+    
+    dd['qval'] = np.array(qvals, dtype=np.float32)
+    pass
+
+def make_data_dict(episode):
+    data_dict = dict()
+    for key in episode[0].keys():
+        data_dict[key] = np.stack([x[key] for x in episode])
+        
+    return data_dict

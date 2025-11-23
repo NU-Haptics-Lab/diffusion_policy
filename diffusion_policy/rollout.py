@@ -44,6 +44,7 @@ class Rollout:
                  only_save_successful_episodes = False,
                  save_rollouts = True,
                  use_energy_limited_actions = True,
+                 task_id = 0,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -57,6 +58,7 @@ class Rollout:
         self.only_save_successful_episodes = only_save_successful_episodes
         self.save_rollouts = save_rollouts
         self.use_energy_limited_actions = use_energy_limited_actions
+        self.task_id = task_id
 
         # refs
         self.critic = None
@@ -269,7 +271,7 @@ class Rollout:
         c = 0
         max_ee = 50.0 # a little tuned
         old_ee = max_ee
-        max_c = 20
+        max_c = 10
         failed = False
         
         s0 = self.evaluator.GetObs()['state'][:, :, 0:21]
@@ -361,7 +363,8 @@ class Rollout:
             return actions, 0.0, failed
         
         else:
-            return None, 0.0, failed
+            actions, all_actions = self.evaluator.infer()
+            return actions, 0.0, failed
         
     def one_rollout(self):
         """
@@ -535,11 +538,14 @@ class Rollout:
         return rb
             
     def save_episode(self, episode):
-        if len(episode) > 0:
+        ep_len = len(episode)
+        if ep_len > 0:
             # basically unzip the list of dicts and put into an np array
-            data_dict = dict()
-            for key in episode[0].keys():
-                data_dict[key] = np.stack([x[key] for x in episode])
+            data_dict = utils.make_data_dict(episode)
+                
+            utils.add_qvals(data_dict)
+            
+            data_dict['task_id'] = np.float32(self.task_id) * np.ones([ep_len])
             
             # use the replay buffer to write to disk
             rb = self.get_rb()
@@ -547,7 +553,7 @@ class Rollout:
                 
             # must re-index the sampler
             sampler: TrainAndVal = globals.DATALOADERS[self.rb_id]
-            sampler.init()
+            sampler.init() # lazy init
             
             # all dataloader iterators are now invalid, so each Batchloader class must now reset
             globals.SESSION_TRAINER.reset()
