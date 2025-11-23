@@ -64,7 +64,7 @@ action_relative_to_state: false
 use_denoise: true
 ### End Global Control Panel ###
 
-num_inference_steps: 50
+num_inference_steps: 25
 clamp: false # clamp actions (and diffusion noise)
 
 ###################################################
@@ -216,11 +216,11 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 1000 # in steps
+      freq: 250 # in steps
       num_rollouts_per_trigger: 1
       rb_id: actor_critic_18
       use_online_rollout: true
-      rollout_num_actions: 8
+      rollout_num_actions: 4
       task_id: 3 # 0: block transfer, 1: bnb 1cam/2cam, 3: sim 1block
       use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false

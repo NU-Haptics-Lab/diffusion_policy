@@ -307,7 +307,12 @@ def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
             offset = torch.zeros_like(input_mean)
     elif mode == 'gaussian':
         ignore_dim = input_std < range_eps
-        scale = input_std.clone()
+        std = input_std.clone()
+        
+        # TODO: make this a param. Make the distribution wider so scale is smaller, so more datapts are between [-1, 1]
+        std2 = std * 1.5
+        
+        scale = std2
         scale[ignore_dim] = 1
         scale = 1 / scale
 
