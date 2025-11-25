@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-18: rollout and distill, more down_dims"
+description: "actor-critic-19: rollout, distill, and a residual SAC policy"
 # global controls
 debug: false # 
 total_num_epochs: 8001
@@ -17,14 +17,18 @@ load:
   - globals
 
 # hack
-resume: true
+resume: false
+
+# should be same as this file's name (sans .yaml)
+run_tag: actor_critic_19
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/actor_critic_18
+output_dir: /media/dexnex_ssd/models/actor_critic_19
 
 tasks_to_use:
-  - all
-  - actor_critic_18
+  # - all
+  - success
+  - failure
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -40,28 +44,25 @@ obs_keys_to_load:
 
 models_to_train:
   - actor
-  # - critic
+  - res_actor
+  - critic
 
 # irrelevant when using CriticBatchLoss
 models_to_eval:
   - actor
-  # - critic
+  - res_actor
+  - critic
 
 # higher value means less frequent updates
 step_freqs:
   actor: 1
+  res_actor: 1
   critic: 1
-  dql: 20 # should be same as the num_inference_steps
+  sac_actor: 1
 
-# TODO: implement
-max_epochs:
-  actor: 1001
-  critic: 401 # to prevent overfitting
-
-use_dql: true
 use_bc_loss: true
 action_relative_to_state: false
-use_denoise: true
+use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
 num_inference_steps: 25
@@ -171,7 +172,7 @@ common_indices:
   debug: ${debug}
 
 
-data_directory: /media/dexnex_ssd/data/sim_1block_randomized/
+data_directory: /media/dexnex_ssd/data/sim_1block_randomized/${run_tag}/
 
 # NODE -- replay buffer loader entry point
 replay_buffer_loader:
@@ -180,11 +181,13 @@ replay_buffer_loader:
   # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
     all: ${data_directory}all.reward.zarr
-    actor_critic_18: ${data_directory}actor_critic_18.reward.zarr
+    success: ${data_directory}success.zarr
+    failure: ${data_directory}failure.zarr
 
   modes:
     all: r
-    actor_critic_18: a
+    success: a
+    failure: a
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
@@ -212,20 +215,21 @@ session_trainer:
       # weighted batch loss dict
       w_batch_losses:
         all: ${common_wbatch_loss}
-        actor_critic_18: ${common_wbatch_loss}
+        success: ${common_wbatch_loss}
+        failure: ${common_wbatch_loss}
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
       freq: 250 # in steps
+      rb_id: success
       num_rollouts_per_trigger: 1
-      rb_id: actor_critic_18
       use_online_rollout: true
       rollout_num_actions: 4
       task_id: 3 # 0: block transfer, 1: bnb 1cam/2cam, 3: sim 1block
       use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 2
-      only_save_successful_episodes: true
+      only_save_successful_episodes: false
       save_rollouts: true
       use_energy_limited_actions: false
 
@@ -246,7 +250,8 @@ session_trainer:
     # weighted batch loss dict
     w_batch_losses:
       all: ${common_wbatch_loss}
-      actor_critic_18: ${common_wbatch_loss}
+      success: ${common_wbatch_loss}
+      failure: ${common_wbatch_loss}
 
 
 
@@ -256,7 +261,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.QVW
+    _target_: diffusion_policy.losses.batch_loss.ResSAC
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
@@ -273,7 +278,8 @@ dataloaders:
 
   d: 
     all: ${common_dataset}
-    actor_critic_18: ${common_dataset}
+    success: ${common_dataset}
+    failure: ${common_dataset}
 
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
@@ -324,7 +330,7 @@ models:
       critic:
         _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
         discount: 0.975 # unstable when tested w/ 0.9, 0.99 ... taking a while to converge (while low-freq oscillations) when discount 0.75
-        lr: 5e-5
+        lr: 5e-4
         tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
         use_target_network: true
         use_double_q: true
@@ -368,12 +374,64 @@ models:
           down_dims: # must be divisible by nb_groups (8)
             - 256
             - 512
-            - 1024
+            - 512
           diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}
           use_tree: false
           use_simple_model: false
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        # https://huggingface.co/docs/transformers/en/main_classes/optimizer_schedules#transformers.get_cosine_schedule_with_warmup
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 5e-4 # 1e-4
+          weight_decay: 1.0e-06
+
+
+    res_actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      # # checkpointer
+      # checkpointer: ${common_checkpoint}
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.res_actor.ResActor
+          scale: 0.1 # 10% normalized perturbations
+          
+          # 
+          model:
+            _target_: diffusion_policy.model.diffusion.conditional_unet1d.ConditionalUnet1DBasic
+
+            input_dim: 21 # 21 action variables
+            global_cond_dim: 38 # 1*38 state history
+            cond_predict_scale: true
+
+            down_dims: # must be divisible by nb_groups (8)
+              - 64
+              - 128
+              - 128
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -424,12 +482,18 @@ override:
               batch_loader:
                 rb_id: all
               use_bc_loss: ${use_bc_loss}
-          actor_critic_18:
+          success:
             weight: 1.0
             batch_loss: 
               batch_loader:
-                rb_id: actor_critic_18
+                rb_id: success
               use_bc_loss: ${use_bc_loss}
+          failure:
+            weight: 1.0
+            batch_loss: 
+              batch_loader:
+                rb_id: failure
+              use_bc_loss: false
     epoch_evaluator:
       w_batch_losses:
         all:
@@ -439,22 +503,32 @@ override:
               rb_id: all
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
-        actor_critic_18:
+        success:
           weight: 1.0
           batch_loss: 
             batch_loader:
-              rb_id: actor_critic_18
+              rb_id: success
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
+        failure:
+          weight: 1.0
+          batch_loss: 
+            batch_loader:
+              rb_id: failure
+              train_or_val: val
+            use_bc_loss: false
 
   dataloaders:
     d:
       all:
         sampler:
           rb_id: all
-      actor_critic_18:
+      success:
         sampler:
-          rb_id: actor_critic_18
+          rb_id: success
+      failure:
+        sampler:
+          rb_id: failure
 
   models:
     models:

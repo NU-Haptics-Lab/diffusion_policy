@@ -520,10 +520,10 @@ class EpisodeSampler:
         sample["obs"] = self.get_obs_sample(ep_idx)
         
         # TODO: only load next obs (and action) if we're doing QL, otherwise it's a slowdown
-        # sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
+        sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
 
         sample["action"] = self.get_action_sample(ep_idx)
-        # sample["action_next"] = self.get_action_sample(ep_idx + 1)
+        sample["action_next"] = self.get_action_sample(ep_idx + 1)
 
         sample["reward"] = self.get_reward(ep_idx)
 

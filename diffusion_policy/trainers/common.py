@@ -3,6 +3,7 @@ import numpy as np
 
 import diffusion_policy.globals as globals
 from diffusion_policy.losses.batch_loss import WeightedBatchLoss
+from diffusion_policy import utils
 
 from diffusion_policy.common.pytorch_util import dict_tensor_to, dict_apply
 
@@ -15,6 +16,7 @@ def CalcSumLoss(w_batch_losses):
             'dql': torch.tensor([0.0], requires_grad=True),
             'attractor': torch.tensor([0.0], requires_grad=True),
         },
+        'res_actor': utils.InitZeroTensorOnDevice(),
         'critic': torch.tensor([0.0], requires_grad=True),
     }
     
@@ -48,7 +50,7 @@ def CalcSumLoss(w_batch_losses):
 
 
 def CalcSumEval(w_batch_losses):
-    # initialize a zero loss variable
+    # initialize a zero loss variable? CPU
     total_evals = np.zeros(2)
 
     batch_loss: WeightedBatchLoss

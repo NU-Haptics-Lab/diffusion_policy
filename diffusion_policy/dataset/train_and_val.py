@@ -229,7 +229,7 @@ class TrainAndVal:
         
         if use:
             # get the weights
-            weights = self.compute_weights(dataset)
+            weights = self.compute_weights2(dataset)
             
             assert(len(weights) == len(dataset))
             

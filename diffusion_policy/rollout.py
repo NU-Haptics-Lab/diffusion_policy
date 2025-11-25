@@ -3,6 +3,8 @@ import avatar_drake_sim.rl.sac
 from avatar_drake_sim.utils.utils import load_yaml_config
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
+import diffusion_policy.model
+import diffusion_policy.model.res_actor
 from evaluation.eval import EvalDexNex
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.common.sarsa_sampler import DatasetSampler
@@ -12,6 +14,8 @@ from diffusion_policy.model.diffusion_ql import attractor
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.common import pytorch_util
 from diffusion_policy.model.diffusion_ql.attractor import JerkPenalty
+
+import diffusion_policy
 
 import numpy as np
 import gymnasium as gym
@@ -95,10 +99,13 @@ class Rollout:
 
             # setup the evaluator
             # get the model
-            actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+            if False:
+                actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+                # ema or regular model?
+                policy = actor.get_ema_model()
+            else:
+                policy = diffusion_policy.model.res_actor.ResInference()
             
-            # ema or regular model?
-            policy = actor.get_ema_model()
             self.evaluator.set_policy(policy)
 
             # get the critic
@@ -141,7 +148,7 @@ class Rollout:
                 
                 # dump the samples to the replay buffer
                 if save:
-                    self.save_episode(samples)
+                    self.save_episode(samples, successful=successful)
                 
                 # save vals
                 total_reward += reward
@@ -536,23 +543,50 @@ class Rollout:
     def get_rb(self):
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] # type:ignore
         return rb
+        
+    def get_success_rb(self):
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER["success"] # type:ignore
+        return rb
+        
+    def get_failure_rb(self):
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER["failure"] # type:ignore
+        return rb
+    
+    def save_episode_to_rb(self, episode, rb):
+        ep_len = len(episode)
+        
+        # basically unzip the list of dicts and put into an np array
+        data_dict = utils.make_data_dict(episode)
             
-    def save_episode(self, episode):
+        utils.add_qvals(data_dict)
+        
+        data_dict['task_id'] = np.float32(self.task_id) * np.ones([ep_len])
+        
+        # use the replay buffer to write to disk
+        rb.add_episode(data_dict, compressors='disk')
+            
+            
+    def save_episode(self, episode, successful=None):
         ep_len = len(episode)
         if ep_len > 0:
-            # basically unzip the list of dicts and put into an np array
-            data_dict = utils.make_data_dict(episode)
+            if successful is None:
+                rb = self.get_rb()
+                rb_id = self.rb_id
                 
-            utils.add_qvals(data_dict)
-            
-            data_dict['task_id'] = np.float32(self.task_id) * np.ones([ep_len])
-            
-            # use the replay buffer to write to disk
-            rb = self.get_rb()
-            rb.add_episode(data_dict, compressors='disk')
+            if successful:
+                rb = self.get_success_rb()
+                rb_id = "success"
+                print("save success")
                 
+            else:
+                rb = self.get_failure_rb()
+                rb_id = "failure"
+                print("save failure")
+                
+            self.save_episode_to_rb(episode, rb)
+            
             # must re-index the sampler
-            sampler: TrainAndVal = globals.DATALOADERS[self.rb_id]
+            sampler: TrainAndVal = globals.DATALOADERS[rb_id]
             sampler.init() # lazy init
             
             # all dataloader iterators are now invalid, so each Batchloader class must now reset

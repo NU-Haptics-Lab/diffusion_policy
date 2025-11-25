@@ -309,7 +309,7 @@ def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
         ignore_dim = input_std < range_eps
         std = input_std.clone()
         
-        # TODO: make this a param. Make the distribution wider so scale is smaller, so more datapts are between [-1, 1]
+        # TODO: make this a param. Make the distribution wider so scale is smaller, so more datapts are between [-1, 1]. The wider the distr, the harder it is to learn non-outliers, but easier to learn outliers.
         std2 = std * 1.5
         
         scale = std2

@@ -234,16 +234,17 @@ class DiffusionQL(nn.Module):
             q1_new_action, q2_new_action = self.critic(state, actions, options)
         
         # if not using denoising, and using the BC a0 instead, then we should scale the actor loss as a function of the timesteps. That way, samples closer to real actions have higher weighting since we'd expect them to be more accurate, and samples closer to the noise have less weighting as we'd expect them to be less accurate.
-        if not self.use_denoise:
-            assert(timesteps is not None)
-            # reshape
-            t = torch.reshape(timesteps, q1_new_action.shape)
-            
-            # add 1 to t to protect from division by zero
-            q1_new_action = q1_new_action / (t + 1)
-            
-            if self.use_double_q:
-                q2_new_action = q2_new_action / (t + 1)
+        if False:
+            if not self.use_denoise:
+                assert(timesteps is not None)
+                # reshape
+                t = torch.reshape(timesteps, q1_new_action.shape)
+                
+                # add 1 to t to protect from division by zero
+                q1_new_action = q1_new_action / (t + 1)
+                
+                if self.use_double_q:
+                    q2_new_action = q2_new_action / (t + 1)
         
         
         # TODO: implement use_double_q flag
@@ -329,7 +330,7 @@ class DiffusionQL(nn.Module):
         state = nbatch_dict['obs']
         
         # training the actor
-        if "actor" in models_to_train and (new_action is not None or a0 is not None) and utils.GlobalStepFreqTrigger('dql'):
+        if (new_action is not None or a0 is not None) and utils.GlobalStepFreqTrigger('sac_actor'):
             # get the actor loss using (s, a)
             actor_loss = self.LossActor(state, new_action, options, a0, timesteps)
             

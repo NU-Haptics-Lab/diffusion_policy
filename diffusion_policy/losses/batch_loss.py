@@ -41,13 +41,14 @@ class BatchLoss:
         # save handles to nodes
         self.actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
         self.actor_model = self.actor.get_model()
-        self.critic: CriticLoss = globals.MODELS["critic"] #type:ignore
+        # self.critic: CriticLoss = globals.MODELS["critic"] #type:ignore
         
         # get the rb_id
         self.rb_id = self.batch_loader.rb_id
 
         # my members
         self.current_batch: dict = None #type:ignore
+        self.a0 = None
         
     def init_losses(self):
         losses = {}
@@ -100,12 +101,14 @@ class BatchLoss:
         losses = self.init_losses()
 
         # get the BC loss
+        sample_loss, a0, timesteps = self.compute_sample_loss()
+        
+        self.a0 = a0
+        
         if self.use_bc_loss:
-            sample_loss, a0, timesteps = self.compute_sample_loss()
-            
             # mean it
             actor_loss = sample_loss.mean()
-
+            
             # save and log
             self.save_bc_loss(losses, actor_loss)
             
@@ -786,6 +789,58 @@ class CriticBatchLoss(BatchLoss):
         # right now eval is hard-coded to expect two tensors on cpu
         return loss, action_mse_error
         
+class ResSAC(BatchLoss):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # save handles to nodes
+        self.res_actor: ModelEmaOptim = globals.MODELS["res_actor"] #type:ignore
+        
+        self.critic: CriticLoss = globals.MODELS["critic"] #type:ignore
+        
+    def init_my_losses(self, losses):
+        """
+        init this class's specific losses
+        """
+        losses['res_actor'] = utils.InitZeroTensorOnDevice()
+        
+    def compute_loss(self):
+        # BC loss
+        losses = super().compute_loss()
+        
+        # init my losses
+        self.init_my_losses(losses)
+        
+        # get the current obs
+        obs = self.current_batch['obs']
+        nbatch = self.current_batch
+        task_id = "00" # TESTING
+        
+        # get the current state
+        s = obs['state']
+        
+        # get the current action 0, ensure it's detached from the compute graph
+        assert(isinstance(self.a0, torch.Tensor))
+        a0 = self.a0.clone().detach()
+        
+        # residual action (summation is done in res-actor)
+        res_actor_model = self.res_actor.get_model()
+        a02 = res_actor_model(a0, global_cond=s)
+        
+        # get the res actor loss
+        res_actor_loss, critic_loss = self.critic.loss(nbatch, task_id, a0=a02, use_actor_loss=True)
+        
+        # save it
+        losses['res_actor'] = res_actor_loss
+        losses['critic'] = critic_loss
+        
+        return losses
+    
+    def eval(self):
+        # BC eval
+        loss, action_mse_error = super().eval()
+        
+        return loss, action_mse_error
 
     
 class WeightedBatchLoss:
@@ -798,6 +853,14 @@ class WeightedBatchLoss:
         ):
         self.batch_loss = batch_loss
         self.weight = weight
+        
+    def weight_loss(self, loss):
+        # type protection
+        assert(isinstance(loss, torch.Tensor))
+        
+        l2 = loss * self.weight
+        
+        return l2
 
     def compute_weighted_loss(self):
         losses = self.batch_loss.compute_loss()
@@ -808,12 +871,10 @@ class WeightedBatchLoss:
         wloss['actor'] = dict_apply(losses['actor'], lambda x: self.weight * x)
         
         if 'critic' in losses:
-            v = losses['critic']
-
-            # type protection
-            assert(isinstance(v, torch.Tensor))
-
-            wloss['critic'] = v * self.weight
+            wloss['critic'] = self.weight_loss(losses['critic'])
+        
+        if 'res_actor' in losses:
+            wloss['res_actor'] = self.weight_loss(losses['res_actor'])
         
         # apply the weighting to each loss
         # wloss = dict_apply(losses, lambda x: self.weight * x)

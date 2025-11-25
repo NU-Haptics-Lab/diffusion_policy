@@ -420,9 +420,9 @@ class BatchLoader:
         
         nns = {
             'obs': obs,
-            # 'obs_next': obs,
+            'obs_next': obs,
             'action': act,
-            # 'action_next': act,
+            'action_next': act,
             'not_done': get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
                 ),
@@ -440,17 +440,23 @@ class BatchLoader:
     def get_fitted_nns(self):
         nns = self.get_static_nns()
         
-        # use the all zarr array data
+        # use the 'all' zarr array data
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
         s: zarr.Array = rb['state'] #type:ignore
         a: zarr.Array = rb['action'] #type:ignore
         
         # only fit the state, and action. No image
         nn: normalizer.SingleFieldLinearNormalizer = nns['obs']['state']
-        nn.fit(s, mode='gaussian')
+        # nn.fit(s, mode='gaussian')
+        nn.fit(s, mode='limits')
         
         nn = nns['action']
-        nn.fit(a, mode='gaussian')
+        # nn.fit(a, mode='gaussian')
+        nn.fit(a, mode='limits')
+        
+        # _next's
+        nns['obs_next']['state'] = nns['obs']['state']
+        nns['action_next'] = nns['action']
         
         return nns
         

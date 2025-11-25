@@ -329,7 +329,8 @@ class DiffusionModel(BaseImagePolicy):
         assert(not torch.isnan(trajectory).any())
         return trajectory
     
-    def infer(self, nobs_dict: dict, task_id=None):
+    @torch.no_grad()
+    def infer(self, nobs_dict: dict, task_id=None, noise_scheduler=None):
         """
         setup for predict_action. Squeeze all tensors, then add the appropriate dimensions
         """
@@ -340,9 +341,12 @@ class DiffusionModel(BaseImagePolicy):
         #     val = torch.reshape(val, [1, 1] + list(val.shape))
             
         #     nobs_dict[key] = val
+        
+        if noise_scheduler is None:
+            noise_scheduler = self.noise_scheduler
             
         self.eval()
-        nresult = self.predict_action(nobs_dict, task_id=task_id)
+        nresult = self.predict_action_impl(nobs_dict, task_id=task_id, noise_scheduler=noise_scheduler)
         self.train()
         
         # naction doesn't include past actions
@@ -381,6 +385,12 @@ class DiffusionModel(BaseImagePolicy):
             ):
         """ alias for predict_action_impl """
         return self.predict_action_impl(nobs_dict, noise_scheduler , task_id=task_id)
+    
+    def get_future_actions(self, all_actions):
+        start = np.argmax(np.array(self.action_rel_indices) >= 0)
+        
+        future_actions = all_actions[:, start:]
+        return future_actions
 
     def predict_action_impl(self, 
             nobs_dict: Dict[str, torch.Tensor],
@@ -455,9 +465,7 @@ class DiffusionModel(BaseImagePolicy):
             naction_pred = act(naction_pred)
 
         # get action
-        start = np.argmax(np.array(self.action_rel_indices) >= 0)
-        
-        naction = naction_pred[:, start:]
+        naction = self.get_future_actions(naction_pred)
         
         nresult = {
             'naction': naction,
@@ -621,7 +629,8 @@ class DiffusionModel(BaseImagePolicy):
         trajectory = nactions
         cond_data = trajectory
         if self.obs_as_global_cond:
-            # reshape B, T, ... to B*T
+            # reshape B, T, ... to B*T ...
+            # could use einops.rearrange(global_cond, 'b h t -> b (h t)') instead
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
@@ -678,7 +687,7 @@ class DiffusionModel(BaseImagePolicy):
             target = noise
             
             # must use the noise scheduler to compute the original sample. TODO: only do if DQL is used
-            if False:
+            if True:
                 a0 = ForNoiseStep(self.noise_scheduler, pred, timesteps, noisy_trajectory)
             else:
                 a0 = None
