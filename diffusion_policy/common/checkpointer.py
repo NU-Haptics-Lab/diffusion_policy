@@ -7,6 +7,8 @@ import threading
 from torch import nn
 
 import diffusion_policy.globals as globals
+from diffusion_policy import utils
+
 from diffusion_policy.utils import EveryEpoch
 from diffusion_policy.utils import _copy_to_cpu
 from hydra.core.hydra_config import HydraConfig
@@ -223,14 +225,37 @@ class TopKCheckpointManager:
         globals.EPOCH = payload['epoch']
     
     def load_payload(self, payload, **kwargs):
+        models_state_dict = payload['models_state_dict']
+        states1 = utils.unflatten_state_dict(models_state_dict)
+        states2 = states1['models']
+        
         # modules
-        if True: # "critic" in globals.CONFIG.load:
+        if False: # "critic" in globals.CONFIG.load:
             # hack for backwards compat.
             # TODO: fix
-            globals.MODELS.load_state_dict(payload['models_state_dict'], strict=False)
+            globals.MODELS.load_state_dict(models_state_dict, strict=False)
+            
+        to_load: list = globals.CONFIG.to_load #type:ignore
         
-        if "globals" in globals.CONFIG.load: # type:ignore
-            self.load_globals(payload)
+        for key in to_load:
+            if key == "globals":
+                self.load_globals(payload)
+                continue
+            
+            if key not in states2:
+                raise
+                
+            # non-globals key
+            states3 = states2[key]
+            
+            # re-nest
+            states4 = utils.flatten_nested_dict(states3)
+            
+            m = globals.MODELS[key]
+            
+            m.load_state_dict(states4, strict=False)
+            
+            pass
 
 
     def load_checkpoint(self, path=None, tag='latest',

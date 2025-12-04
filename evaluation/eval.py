@@ -178,7 +178,7 @@ class Inference:
                 print('Inference latency:', time.time() - s)
             
             # testing
-            if True:
+            if False:
                 # jerk of first action
                 s = obs_dict_np['state'][0, 0, 0:21]
                 a = future_actions[0, 0]

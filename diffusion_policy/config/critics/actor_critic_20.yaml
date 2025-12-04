@@ -2,34 +2,34 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-19: rollout, distill, and a residual SAC policy"
+description: "actor-critic-20: penny diffusion BC"
 # global controls
 debug: false # 
-total_num_epochs: 8001
+total_num_epochs: 2001
 batches_per_epoch: 100
 batch_size: 128
 val_every: 20
 
 ### Global Control Panel ###
 to_load:
-  - critic
+  # - critic
   - actor
-  - res_actor
+  # - res_actor
   - globals
 
 # hack
 resume: true
 
 # should be the same as this file's name (sans .yaml)
-run_tag: actor_critic_19
+run_tag: actor_critic_20
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/actor_critic_19
+output_dir: /media/dexnex_ssd/models/actor_critic_20
 
 tasks_to_use:
-  # - all
-  - success
-  - failure
+  - all
+  # - success
+  # - failure
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -45,18 +45,18 @@ obs_keys_to_load:
 
 models_to_train:
   - actor
-  - res_actor
-  - critic
+  # - res_actor
+  # - critic
 
 # irrelevant when using CriticBatchLoss
 models_to_eval:
   - actor
-  - res_actor
-  - critic
+  # - res_actor
+  # - critic
 
 # higher value means less frequent updates
 step_freqs:
-  actor: 2
+  actor: 1
   res_actor: 1
   critic: 1
   sac_actor: 1
@@ -103,7 +103,7 @@ checkpoint:
 shape_meta:
   action:
     shape:
-    - 21 # gofa (6), wr (2), th (5), ff (4), mf (4)
+    - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
 
   img: # overhead cam
     shape:
@@ -118,7 +118,7 @@ shape_meta:
   
   state: # the name "state" came from the zarr generation script
     shape:
-    - 38 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3), block xyz (3)
+    - 33 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5), penny xyz (3)
 
 
 training:
@@ -173,7 +173,7 @@ common_indices:
   debug: ${debug}
 
 
-data_directory: /media/dexnex_ssd/data/sim_1block_randomized/${run_tag}/
+data_directory: /media/dexnex_ssd/data/penny/${run_tag}/
 
 # NODE -- replay buffer loader entry point
 replay_buffer_loader:
@@ -221,17 +221,17 @@ session_trainer:
 
     rollouts:
       _target_: diffusion_policy.rollout.Rollout
-      freq: 250 # in steps
-      rb_id: success
+      freq: 500 # in steps
+      rb_id: all
       num_rollouts_per_trigger: 1
       use_online_rollout: true
       rollout_num_actions: 4
-      task_id: 3 # 0: block transfer, 1: bnb 1cam/2cam, 3: sim 1block
+      task_id: 14 # refer to tasks.md / task catalog
       use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 2
       only_save_successful_episodes: false
-      save_rollouts: true
+      save_rollouts: false
       use_energy_limited_actions: false
 
 
@@ -262,7 +262,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.ResSAC
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
@@ -478,7 +478,7 @@ override:
       step_trainer: 
         w_batch_losses:
           all:
-            weight: 0.25
+            weight: 1.0
             batch_loss: 
               batch_loader:
                 rb_id: all
@@ -498,7 +498,7 @@ override:
     epoch_evaluator:
       w_batch_losses:
         all:
-          weight: 0.25
+          weight: 1.0
           batch_loss: 
             batch_loader:
               rb_id: all

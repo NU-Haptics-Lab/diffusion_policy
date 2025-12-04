@@ -616,7 +616,7 @@ class DiffusionModel(BaseImagePolicy):
         To = self.n_obs_steps
         
         # testing / troubleshooting
-        if True:
+        if False:
             with torch.no_grad():
                 s = nobs['state'][:, 0, 5:6]
                 a = nactions[:, 0, 5:6]
@@ -686,8 +686,9 @@ class DiffusionModel(BaseImagePolicy):
         if pred_type == 'epsilon':
             target = noise
             
-            # must use the noise scheduler to compute the original sample. TODO: only do if DQL is used
-            if True:
+            # must use the noise scheduler to compute the original sample. TODO: only do if DQL is used.
+            # NOTE: THIS IS QUITE SLOW
+            if False:
                 a0 = ForNoiseStep(self.noise_scheduler, pred, timesteps, noisy_trajectory)
             else:
                 a0 = None

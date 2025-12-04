@@ -1,5 +1,5 @@
 from diffusion_policy import utils
-import avatar_drake_sim.rl.sac
+import avatar_drake_sim.rl.learning.sac
 from avatar_drake_sim.utils.utils import load_yaml_config
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
@@ -72,18 +72,19 @@ class Rollout:
     def setup(self):
         if self.use_online_rollout:
             # Register environment with gym globally
-            gym.envs.register(id="DexnexGym-v0", entry_point="avatar_drake_sim.rl.dexnex_gym:DexnexGymEnv") #type:ignore
+            gym.envs.register(id="DexnexGym-v0", entry_point="avatar_drake_sim.rl.env.dexnex_gym:DexnexGymEnv") #type:ignore
 
             class Args:
-                task = "box-and-blocks"
+                # task = "box-and-blocks"
+                task = "penny"
                 debug = globals.CONFIG.debug #type:ignore
                 test = globals.CONFIG.debug #type:ignore
                 profile = False
             
-            configs = load_yaml_config()
+            configs = load_yaml_config('penny', user='alienware')
             configs['_rl_temp'] = {}        # Only way to pass additional variables from DexnexGym creation
-            USERNAME = 'alienware'
-            configs['filepaths'] = configs['filepaths'][USERNAME]
+            # USERNAME = 'alienware'
+            # configs['filepaths'] = configs['filepaths'][USERNAME]
             
             if not configs['rl_params']['use_rgb'] and configs['rl_params']['use_depth']:
                 print("Training with depth images and not RGB is currently not supported.") 
@@ -99,7 +100,7 @@ class Rollout:
 
             # setup the evaluator
             # get the model
-            if False:
+            if True:
                 actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
                 # ema or regular model?
                 policy = actor.get_ema_model()
@@ -505,26 +506,24 @@ class Rollout:
         block_pos 57:60
         """
         state = obs['state'][0]
-        haptics = obs['lh_contact_forces'][0]
-        ff_pos = state[42:45]
-        mf_pos = state[45:48]
-        th_pos = state[54:57]
+        # haptics = obs['lh_contact_forces'][0]
+        # ff_pos = state[42:45]
+        # mf_pos = state[45:48]
+        # th_pos = state[54:57]
         
-        block_pos = state[57:60]
+        obj_pos = state[70:73] # confirmed it is 70:73
         
         # MUST be same order as in the dataset gen script
         out_state = np.concatenate((
-            state[0:21],
-            haptics,
-            th_pos,
-            ff_pos,
-            mf_pos,
-            block_pos,
+            state[0:30],
+            obj_pos,
             ))
         
         # make a write-able copy
         left_cam_rgb = obs['left_cam_rgb'].copy()
-        left_wrist_cam_rgb = obs['left_wrist_cam_rgb'].copy()
+        
+        # hack
+        left_wrist_cam_rgb = obs['left_cam_rgb'].copy()
         
         # convert to float
         left_cam_rgb = np.array(left_cam_rgb, dtype='float')

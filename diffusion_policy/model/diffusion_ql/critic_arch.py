@@ -41,18 +41,22 @@ class QLDenser(nn.Module):
         self.hidden_dim = hidden_dim
         
         self.model = nn.Sequential(
-                    nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now. FTR I added tanh on the prediction output in diffusion_model.py
+                    # nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now.
                     nn.Linear(input_dim, hidden_dim),
                     nn.LeakyReLU(0.1),
+                    
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
                     nn.LeakyReLU(0.1),
+                    
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
                     nn.LeakyReLU(0.1),
+                    
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
                     nn.LeakyReLU(0.1),
+                    
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
                     nn.LeakyReLU(0.1),
@@ -236,6 +240,7 @@ class QLModelSimple(QLModel):
         # dense_input = self.obs_encoder.output_shape()[0]
         dense_input = self.obs_encoder.output_shape()[0] + len(globals.CONFIG.action_rel_indices) * globals.CONFIG.shape_meta.action.shape[0] #type:ignore
         
+        # no final activation, obviously
         self.dense = nn.Sequential(
                 QLDenser(dense_input, hidden_dim = hidden_dim),
                 nn.Linear(hidden_dim, 1) # critic must output a single q-value

@@ -81,8 +81,7 @@ class BatchLoss:
     
     def compute_sample_loss(self):
         # get the batch from the batch loader
-        nbatch = next(self.batch_loader)
-        self.current_batch = nbatch # save
+        nbatch = self.current_batch
         
         # compute loss
         actor_loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
@@ -96,16 +95,18 @@ class BatchLoss:
         """
         Train for one batch.
         """
+        # get the batch from the batch loader
+        self.get_next_batch()
         
         actor_loss = utils.InitZeroTensorOnDevice()
         losses = self.init_losses()
-
-        # get the BC loss
-        sample_loss, a0, timesteps = self.compute_sample_loss()
-        
-        self.a0 = a0
         
         if self.use_bc_loss:
+            # get the BC loss
+            sample_loss, a0, timesteps = self.compute_sample_loss()
+            
+            self.a0 = a0
+            
             # mean it
             actor_loss = sample_loss.mean()
             
@@ -817,11 +818,14 @@ class ResSAC(BatchLoss):
         task_id = "00" # TESTING
         
         # get the current state
-        s = obs['state']
+        s = obs['state'] # TODO: minor optimization: copy s and set requires_grad to False
         
         # get the current action 0, ensure it's detached from the compute graph
-        assert(isinstance(self.a0, torch.Tensor))
-        a0 = self.a0.clone().detach()
+        # assert(isinstance(self.a0, torch.Tensor))
+        # a0 = self.a0.clone().detach()
+        
+        # try using the dataset actions instead of the predicted denoised actions
+        a0 = nbatch['action']
         
         # residual action (summation is done in res-actor)
         res_actor_model = self.res_actor.get_model()

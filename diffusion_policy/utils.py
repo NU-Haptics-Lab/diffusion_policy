@@ -203,3 +203,49 @@ def make_data_dict(episode):
         data_dict[key] = np.stack([x[key] for x in episode])
         
     return data_dict
+
+# gemini generated code
+import torch
+
+def unflatten_state_dict(state_dict):
+    """
+    Converts a flat PyTorch state_dict into a nested dictionary.
+    """
+    nested_dict = {}
+    for key, value in state_dict.items():
+        # Split the key by the delimiter (typically '.')
+        keys = key.split('.')
+        current_dict = nested_dict
+        # Traverse the keys, creating nested dictionaries as needed
+        for i, k in enumerate(keys):
+            if i == len(keys) - 1:
+                # If it's the last key, assign the value (tensor)
+                current_dict[k] = value
+            else:
+                # If not the last key, continue nesting or create a new dict
+                if k not in current_dict:
+                    current_dict[k] = {}
+                current_dict = current_dict[k]
+    return nested_dict
+
+def flatten_nested_dict(nested_dict, parent_key='', sep='.'):
+    """
+    Flattens a nested dictionary into a single-level dictionary with 
+    dot-separated keys, reversing the unflatten_state_dict function.
+    """
+    items = []
+    for k, v in nested_dict.items():
+        # Construct the new key by combining parent key and current key
+        new_key = parent_key + sep + k if parent_key else k
+        
+        # Check if the value is a dictionary (and not a tensor, to stop recursion at the parameters)
+        if isinstance(v, dict):
+            # Recurse if it's a dictionary
+            items.extend(flatten_nested_dict(v, new_key, sep=sep).items())
+        else:
+            # Append the key-value pair if it's a leaf node (e.g., a tensor)
+            items.append((new_key, v))
+            
+    return dict(items)
+
+# done Gemini-generated code
