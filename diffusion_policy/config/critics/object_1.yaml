@@ -2,10 +2,10 @@
 ###################################################
 ###################################################
 ###################################################
-description: "actor-critic-20: penny diffusion BC"
+description: "object_1: peg in hole"
 # global controls
 debug: false # 
-total_num_epochs: 3001
+total_num_epochs: 501
 batches_per_epoch: 100
 batch_size: 128
 val_every: 20
@@ -18,13 +18,13 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: actor_critic_20
+run_tag: object_1
 
 resume_tag: step=0010115
-output_dir: /media/dexnex_ssd/models/actor_critic_20
+output_dir: /media/dexnex_ssd/models/object_1
 
 tasks_to_use:
   - all
@@ -66,8 +66,11 @@ action_relative_to_state: false
 use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
-num_inference_steps: 25
+num_inference_steps: 25 # for the critic I think
 clamp: false # clamp actions (and diffusion noise)
+
+# rollouts?
+use_online_rollout: false
 
 ###################################################
 ###################################################
@@ -88,7 +91,7 @@ checkpoint:
 
   format_str: step={global_step:07d}.ckpt
   k: 50 # nb checkpoints to keep
-  checkpoint_every: 100 # how often, in epochs
+  checkpoint_every: 50 # how often, in epochs
   mode: max
   monitor_key: epoch
   use_current_directory: false # use ${output_dir} as the base
@@ -103,7 +106,7 @@ checkpoint:
 shape_meta:
   action:
     shape:
-    - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
+    - 7 # manipulanda (xyz, wxyz)
 
   img: # overhead cam
     shape:
@@ -118,7 +121,7 @@ shape_meta:
   
   state: # the name "state" came from the zarr generation script
     shape:
-    - 33 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5), penny xyz (3)
+    - 64 # [id, xyz, wxyz] * 8 objects
 
 
 training:
@@ -173,7 +176,7 @@ common_indices:
   debug: ${debug}
 
 
-data_directory: /media/dexnex_ssd/data/penny/${run_tag}/
+data_directory: /media/dexnex_ssd/data/object_centric/peg_in_hole/
 
 # NODE -- replay buffer loader entry point
 replay_buffer_loader:
@@ -181,14 +184,10 @@ replay_buffer_loader:
 
   # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
-    all: ${data_directory}all.reward.zarr
-    success: ${data_directory}success.zarr
-    failure: ${data_directory}failure.zarr
+    all: ${data_directory}all.zarr
 
   modes:
     all: r
-    success: a
-    failure: a
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
@@ -224,7 +223,7 @@ session_trainer:
       freq: 1 # in steps
       rb_id: all
       num_rollouts_per_trigger: 1
-      use_online_rollout: true
+      use_online_rollout: ${use_online_rollout}
       rollout_num_actions: 4
       task_id: 14 # refer to tasks.md / task catalog
       use_critic_preferred_actions: false
@@ -279,15 +278,13 @@ dataloaders:
 
   d: 
     all: ${common_dataset}
-    success: ${common_dataset}
-    failure: ${common_dataset}
 
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
-  use_weighted_dataloader: true
+  use_weighted_dataloader: false
 
   options:
     common:
@@ -297,12 +294,12 @@ common_dataset:
       num_workers: 8
       persistent_workers: true
       pin_memory: true
-      shuffle: false # can't use with use_weighted_dataloader
+      shuffle: true # can't use with use_weighted_dataloader
     val:
       num_workers: 0
       persistent_workers: false
       pin_memory: false
-      shuffle: false # can't use with use_weighted_dataloader
+      shuffle: true # can't use with use_weighted_dataloader
 
   # child
   sampler:
@@ -316,45 +313,6 @@ models:
   _target_: diffusion_policy.model.models.Models
 
   models:
-    critic:
-      _target_: diffusion_policy.model.diffusion_ql.diffusion_ql_loss.CriticLoss
-
-      noise_scheduler: ${common_noise_scheduler}
-      num_inference_steps: ${num_inference_steps} # perhaps this should be randomized?
-      use_random_num_inference_steps: false
-      use_denoise: ${use_denoise}
-
-      # # checkpointer
-      # checkpointer: ${common_checkpoint}
-
-      # children
-      critic:
-        _target_: diffusion_policy.model.diffusion_ql.diffusion_ql.DiffusionQL
-        discount: 0.975 # unstable when tested w/ 0.9, 0.99 ... taking a while to converge (while low-freq oscillations) when discount 0.75
-        lr: 5e-4
-        tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
-        use_target_network: true
-        use_double_q: true
-        use_tree: false
-        use_denoise: ${use_denoise} # freq: {1,1}: false: 6.5 it/s (or maybe 11?) vs true: 1.6 it/s --> false is ~4x faster? or might be 8x
-        action_relative_to_state: ${action_relative_to_state} # ... the critic might be struggling with action_relative_to_state, maybe a bug or maybe need to do more runs for better statistics
-
-        # lr decay
-        use_lr_decay: false
-        lr_maxt: 200000
-        lr_min: 1.0e-6
-
-        critic:
-          _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic
-          use_double_q: ${..use_double_q}
-
-          qlmodel:
-            _target_: diffusion_policy.model.diffusion_ql.critic_arch.QLModelSimple
-
-            obs_encoder_maker:
-              ${common_obs_encoder}
-
-
     actor:
       _target_: diffusion_policy.model.model.ModelEmaOptim
 
@@ -373,66 +331,14 @@ models:
           obs_encoder_group_norm: true
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
+            - 64
+            - 128
             - 256
-            - 512
-            - 1024
           diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}
           use_tree: false
           use_simple_model: false
-
-      ema:
-        _target_: diffusion_policy.model.model.Ema
-        use_ema: true
-        ema_cfg:
-          inv_gamma: 1.0
-          max_value: 0.9999
-          min_value: 0.0
-          power: 0.75
-          update_after_step: 0
-
-      optim:
-        _target_: diffusion_policy.model.model.Optim
-
-        # https://huggingface.co/docs/transformers/en/main_classes/optimizer_schedules#transformers.get_cosine_schedule_with_warmup
-        lr_scheduler: cosine
-        lr_warmup_steps: 500
-        gradient_accumulate_every: 1
-        optimizer_target: torch.optim.AdamW
-        optimizer_cfg:
-          betas:
-            - 0.95
-            - 0.999
-          eps: 1.0e-08
-          lr: 5e-4 # 1e-4
-          weight_decay: 1.0e-06
-
-
-    res_actor:
-      _target_: diffusion_policy.model.model.ModelEmaOptim
-
-      # # checkpointer
-      # checkpointer: ${common_checkpoint}
-
-      model:
-        _target_: diffusion_policy.model.model.Model
-        model:
-          _target_: diffusion_policy.model.res_actor.ResActor
-          scale: 0.05 # x% normalized perturbations
-          
-          # 
-          model:
-            _target_: diffusion_policy.model.diffusion.conditional_unet1d.ConditionalUnet1DBasic
-
-            input_dim: 21 # 21 action variables
-            global_cond_dim: 38 # 1*38 state history
-            cond_predict_scale: true
-
-            down_dims: # must be divisible by nb_groups (8)
-              - 128
-              - 256
-              - 512
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -483,18 +389,6 @@ override:
               batch_loader:
                 rb_id: all
               use_bc_loss: ${use_bc_loss}
-          success:
-            weight: 1.0
-            batch_loss: 
-              batch_loader:
-                rb_id: success
-              use_bc_loss: ${use_bc_loss}
-          failure:
-            weight: 1.0
-            batch_loss: 
-              batch_loader:
-                rb_id: failure
-              use_bc_loss: false
     epoch_evaluator:
       w_batch_losses:
         all:
@@ -504,48 +398,15 @@ override:
               rb_id: all
               train_or_val: val
             use_bc_loss: ${use_bc_loss}
-        success:
-          weight: 1.0
-          batch_loss: 
-            batch_loader:
-              rb_id: success
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
-        failure:
-          weight: 1.0
-          batch_loss: 
-            batch_loader:
-              rb_id: failure
-              train_or_val: val
-            use_bc_loss: false
 
   dataloaders:
     d:
       all:
         sampler:
           rb_id: all
-      success:
-        sampler:
-          rb_id: success
-      failure:
-        sampler:
-          rb_id: failure
 
   models:
     models:
-      critic:
-        noise_scheduler:
-          _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
-          # num_inference_steps set elsewhere
-        # critic:
-        #   critic:
-        #     qlmodel:
-        #       obs_encoder_maker:
-        #         lowdims:
-                  # add on actions to the input
-                  # action:
-                  #   shape: ${shape_meta.action.shape}
-
       actor:
         model:
           model:

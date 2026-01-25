@@ -588,6 +588,65 @@ class BatchLoader:
         #     # we've done num_batches
         #     # print("Iteration done. Count: {}".format(self.count))
         #     raise StopIteration
+        
+class ManipAnythingBatchLoader(BatchLoader):
+    def get_static_nns(self):
+        
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
+        if "state" in obs_keys_to_load:
+            obs['state'] = get_range_normalizer_from_stat(
+                    {'min': LIMITS[:, 0], 'max': LIMITS[:, 1]})
+            
+        if "object_target_pose" in obs_keys_to_load:
+            obs['object_target_pose'] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(7, dtype=np.float32)}
+                )
+            
+        
+        act = get_range_normalizer_from_stat(
+                {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
+                )
+        
+        ## rb index
+        rb_index = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        rb_index.clamp = False
+        
+        ## task id
+        task_id = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        task_id.clamp = False
+        
+        ## qvals, clamp to [-1, 1]
+        qval = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        
+        ## ep length
+        ep_len = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        ep_len.clamp = False
+        
+        nns = {
+            'obs': obs,
+            'action': act,
+            'not_done': get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                ),
+            'reward': get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                ),
+            'rb_index': rb_index,
+            'task_id': task_id,
+            'qval': qval,
+            'ep_len': ep_len,
+        }
+        
+        return nns
 
 class NestedBatchLoader(dict):
     """

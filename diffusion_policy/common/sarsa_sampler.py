@@ -530,13 +530,14 @@ class EpisodeSampler:
         sample["not_done"] = self.get_not_done(ep_idx)
 
         ## Meta data
-        sample["rb_index"] = self.get_rb_index(ep_idx)
         sample["task_id"] = self.get_task_id(ep_idx)
         
         # explicit q-val
         sample["qval"] = self.get_qval(ep_idx)
         
+        ## My Add-ons
         # ep len
+        sample["rb_index"] = self.get_rb_index(ep_idx)
         sample["ep_len"] = np.array([len(self)])
 
         return sample
@@ -596,9 +597,15 @@ class DatasetSampler:
     """
     def __init__(self,
             rb_id: str,
+            ep_sampler_class: str = "diffusion_policy.common.sarsa_sampler.DatasetSampler.EpisodeSampler", # I don't love this design
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
+        
+        # convert text to class object using hydra
+        self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class)
+        
+        # refs
         self.replay_buffer: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] #type:ignore
         
         self.initd = False
@@ -681,7 +688,7 @@ class DatasetSampler:
         # already made
         if not episode_end in self.ep_samplers:
             # make the ep sampler
-            ep_sampler = EpisodeSampler(
+            ep_sampler = self.ep_sampler_class(
                 self.rb_id,
                 rb_offset,
                 episode_end,
