@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "manip anything 1: state -> T[q]. assumes only rigid bodies for now. TEST"
+description: "manip anything 2: state -> T[q]. assumes only rigid bodies for now."
 # global controls
 debug: false # 
 total_num_epochs: 501
@@ -125,8 +125,7 @@ shape_meta:
   
   state: # the name "state" came from the zarr generation script
     shape:
-    - 87 # 87 just for testing cuz i messed up
-    # - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3) (exact order should come from the zarr generation script, to stay consistent and avoid confusion)
+    - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3) (exact order should come from the zarr generation script, to stay consistent and avoid confusion)
 
   object_id:
     shape:
@@ -197,7 +196,7 @@ replay_buffer_loader:
 
   # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
-    all: ${data_directory}test_demo_peg.zarr
+    all: ${data_directory}manip_anything_1.zarr
 
   modes:
     all: r
@@ -346,9 +345,9 @@ models:
           obs_encoder_group_norm: true
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
-            - 64
             - 128
             - 256
+            - 512
           diffusion_step_embed_dim: 32
 
           action_relative_to_state: ${action_relative_to_state}

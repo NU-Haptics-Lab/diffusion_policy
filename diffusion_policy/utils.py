@@ -248,4 +248,59 @@ def flatten_nested_dict(nested_dict, parent_key='', sep='.'):
             
     return dict(items)
 
-# done Gemini-generated code
+def drake_compute_rel_pose(src_pose, dst_pose):
+    """
+    compute the relative pose from src to dst
+    both poses are [7] wxyz, xyz
+    
+    use tf2
+    """
+    # only allowed to have a single src pose
+    src_pose2 = np.array(src_pose).flatten()
+    assert(src_pose2.shape == (7,))
+    
+    # can have multiple dst poses
+    dst_pose2 = np.array(dst_pose).reshape(-1, 7)
+    
+    from pydrake.all import (
+        RigidTransform,
+        Quaternion
+    )
+    
+
+    def numpy_to_pose(array: np.ndarray) -> RigidTransform:
+        q = array[:4]
+        p = array[4:7]
+        
+        quat = Quaternion(q[0], q[1], q[2], q[3])
+        
+        pose = RigidTransform(quat, p)
+        
+        return pose
+    
+    
+
+    def pose_to_numpy(pose: RigidTransform) -> np.ndarray:
+        q = pose.rotation().ToQuaternion()
+        p = pose.translation()
+        
+        # Pack row
+        row = np.concatenate([q.wxyz(), p])
+        
+        return row
+    
+    src_tf = numpy_to_pose(src_pose2)
+    
+    rel_poses = []
+    for dst_pose in dst_pose2:
+        dst_tf = numpy_to_pose(dst_pose)
+    
+        rel_tf = src_tf.inverse() @ dst_tf
+    
+        rel_pose = pose_to_numpy(rel_tf)
+        rel_poses.append(rel_pose)
+        
+    # stack rel poses
+    rel_pose = np.stack(rel_poses, axis=0)
+    
+    return rel_pose

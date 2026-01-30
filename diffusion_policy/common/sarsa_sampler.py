@@ -459,12 +459,17 @@ class EpisodeSampler:
             
         return sample
     
-    def get_key_sample(self, key, ep_idx):
+    def get_key_sample(self, key, ep_idx, flatten = False):
         """
         Get sequence by key
         """
         indices = [ep_idx]
         data = self.indices.get_sequence_by_train_indices_and_key(indices, key)
+        
+        # used for non-trajectory inputs (obs)
+        if flatten:
+            data = data.flatten()
+            
         return data
     
     def get_action_sample(self, ep_idx):

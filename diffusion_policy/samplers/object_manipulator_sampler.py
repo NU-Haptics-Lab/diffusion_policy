@@ -72,15 +72,24 @@ class ManipAnythingEpisodeSampler(EpisodeSampler):
         # get target pose
         target_pose = self.get_key_sample("object_target_pose", target_idx)
         
+        object_id = self.get_key_sample("object_id", ep_idx),
+        
         # get the state components
         state = self.get_key_sample("state", ep_idx)
         
-        # assemble the obs sample
-        obs_sample = {
-            "state": state,
-            "object_id": self.get_key_sample("object_id", ep_idx),
-            "object_target_pose": target_pose,
+        # default output dict
+        default_obs_sample = {
+            'state': state,
+            'object_id': object_id,
+            'object_target_pose': target_pose,
         }
+        
+        # actual
+        obs_sample = {}
+        
+        # assemble the obs sample
+        for obs_keys in globals.CONFIG.obs_keys_to_load: # type:ignore
+            obs_sample[obs_keys] = default_obs_sample[obs_keys]
         
         return obs_sample
     

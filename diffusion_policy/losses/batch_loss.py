@@ -134,8 +134,10 @@ class BatchLoss:
     def reset(self):
         self.batch_loader.reset()
     
+""" alias """
 class BC(BatchLoss):
     pass
+    
     
 class TTREfficiencyWeightedBatchLoss(BatchLoss):
     """

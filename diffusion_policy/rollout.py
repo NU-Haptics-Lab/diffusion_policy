@@ -24,15 +24,30 @@ import torch
 import yaml
 from omegaconf import OmegaConf
 
+
 class RolloutEnv:
     def __init__(self) -> None:
-        pass
+        self.env = None
     
+class ManipAnythingRolloutEnv(RolloutEnv):
     def setup(self):
-        """
-        Set up the Dexnex Drake Sim env
-        """
-        pass
+        # Register environment with gym globally
+        gym.envs.register(id="SandboxGymEnv-v0", entry_point="avatar_drake_sim.sandbox.sandbox_gym_env.SandboxGymEnv") #type:ignore
+            
+        
+        self.env = gym.make("SandboxGymEnv-v0")
+        
+        return self.env
+    
+class MageHandRolloutEnv(RolloutEnv):
+    def setup(self):
+        # Register environment with gym globally
+        gym.envs.register(id="MageHandGymEnv-v0", entry_point="avatar_drake_sim.sandbox.mage_hand_gym_env.MageHandGymEnv") #type:ignore
+            
+        
+        self.env = gym.make("MageHandGymEnv-v0")
+        
+        return self.env
 
 class Rollout:
     def __init__(self,
@@ -71,32 +86,8 @@ class Rollout:
         
     def setup(self):
         if self.use_online_rollout:
-            # Register environment with gym globally
-            gym.envs.register(id="DexnexGym-v0", entry_point="avatar_drake_sim.rl.env.dexnex_gym:DexnexGymEnv") #type:ignore
-
-            class Args:
-                # task = "box-and-blocks"
-                task = "penny"
-                debug = globals.CONFIG.debug #type:ignore
-                test = globals.CONFIG.debug #type:ignore
-                profile = False
-            
-            configs = load_yaml_config('penny', user='alienware')
-            configs['_rl_temp'] = {}        # Only way to pass additional variables from DexnexGym creation
-            # USERNAME = 'alienware'
-            # configs['filepaths'] = configs['filepaths'][USERNAME]
-            
-            if not configs['rl_params']['use_rgb'] and configs['rl_params']['use_depth']:
-                print("Training with depth images and not RGB is currently not supported.") 
-                return
-            
-            # If not using left hand, lock left hand joints and leave out of action space
-            if not configs['rl_params']['use_contact_forces']:
-                if 'lh_' not in configs['task_params']['lock_targets']: configs['task_params']['lock_targets'].append('lh_')
-                if 'rh_' not in configs['task_params']['lock_targets']: configs['task_params']['lock_targets'].append('rh_')
-                
-            
-            self.env = gym.make("DexnexGym-v0", configs=configs, args=Args)
+            env_maker = MageHandRolloutEnv()
+            self.env = env_maker.setup()
 
             # setup the evaluator
             # get the model

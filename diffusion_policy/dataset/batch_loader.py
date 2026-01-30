@@ -16,6 +16,8 @@ from diffusion_policy.common.normalize_util import get_identity_normalizer_from_
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
+from diffusion_policy.samplers.mage_hand_sampler import MageHandEpisodeSampler
+
 """ 
 joint limits for the normalizer. Only thing that matters is the scale and offset. stat's aren't used in normalization
 
@@ -353,7 +355,7 @@ class BatchLoader:
         self.use_dataloader = use_dataloader
         self.strict = strict
         
-        self.dataloaders = None
+        self.dataloaders = None #type:ignore
         
         # only continue if we're being trained off of or special rb_id of default
         tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
@@ -455,8 +457,11 @@ class BatchLoader:
         nn.fit(a, mode='limits')
         
         # _next's
-        nns['obs_next']['state'] = nns['obs']['state']
-        nns['action_next'] = nns['action']
+        if 'obs_next' in nns:
+            nns['obs_next']['state'] = nns['obs']['state']
+            
+        if 'action_next' in nns:
+            nns['action_next'] = nns['action']
         
         return nns
         
@@ -603,6 +608,11 @@ class ManipAnythingBatchLoader(BatchLoader):
                 {'min': np.zeros(7, dtype=np.float32)}
                 )
             
+        if "object_id" in obs_keys_to_load:
+            obs['object_id'] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(1, dtype=np.float32)}
+                )
+            
         
         act = get_range_normalizer_from_stat(
                 {'min': JOINT_LIMITS[:, 0], 'max': JOINT_LIMITS[:, 1]}
@@ -647,6 +657,203 @@ class ManipAnythingBatchLoader(BatchLoader):
         }
         
         return nns
+    
+    
+    def get_fitted_nns(self):
+        """
+        must be done after normalization, otherwise the stats won't be uniform
+        """
+        raise
+        # nns = self.get_static_nns()
+        
+        # # use the 'all' zarr array data
+        # rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
+        # s: zarr.Array = rb['state'] #type:ignore
+        # a: zarr.Array = rb['action'] #type:ignore
+        
+        # # only fit the state, and action. No image
+        # nn: normalizer.SingleFieldLinearNormalizer = nns['obs']['state']
+        # # nn.fit(s, mode='gaussian')
+        # nn.fit(s, mode='limits')
+        
+        # nn = nns['action']
+        # # nn.fit(a, mode='gaussian')
+        # nn.fit(a, mode='limits')
+        
+        # # _next's
+        # if 'obs_next' in nns:
+        #     nns['obs_next']['state'] = nns['obs']['state']
+            
+        # if 'action_next' in nns:
+        #     nns['action_next'] = nns['action']
+        
+        return nns
+    
+
+class MageHandBatchLoader(BatchLoader):
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
+        
+        # default identity normalizer
+        for obs_key in obs_keys_to_load:
+            # get shape meta from the config
+            nb = globals.CONFIG.shape_meta[obs_key].shape # type: ignore
+            
+            
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+                )
+            
+        act_keys = ['joint_action', 'rel_pose_action']
+        for act_key in act_keys:
+            # get shape meta from the config
+            nb = globals.CONFIG.shape_meta[act_key].shape # type: ignore
+            
+            nns[act_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+                )
+        
+        ## rb index
+        rb_index = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        rb_index.clamp = False
+        
+        ## task id
+        task_id = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        task_id.clamp = False
+        
+        ## qvals, clamp to [-1, 1]
+        qval = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        
+        ## ep length
+        ep_len = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                )
+        ep_len.clamp = False
+        
+        nns = nns | {
+            'obs': obs,
+            'not_done': get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                ),
+            'reward': get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+                ),
+            'rb_index': rb_index,
+            'task_id': task_id,
+            'qval': qval,
+            'ep_len': ep_len,
+        }
+        
+        return nns
+    
+    def fit_nn(self, data, nn):
+        nn.fit(data, mode='limits')
+        
+    def fit_rel_object_target_pose(self, nns):
+        # get ref to dataloaders
+        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        
+        # must get a reference to the mage hand sampler
+        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        
+        ###
+        # must get all datapoints for all episodes
+        ep_sampler: MageHandEpisodeSampler
+        d = []
+        for key, ep_sampler in ep_samplers.items():
+            d_ep = ep_sampler.get_all_rel_object_target_pose()
+            d.append(d_ep)
+            
+        # convert to np
+        d_np = np.vstack(d)
+        ###
+        
+        self.fit_nn(d_np, nns['obs']['rel_object_target_pose'])
+        
+    def fit_rel_pose_action(self, nns):
+        # get ref to dataloaders
+        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        
+        # must get a reference to the mage hand sampler
+        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        
+        ###
+        # must get all datapoints for all episodes
+        ep_sampler: MageHandEpisodeSampler
+        d = []
+        for key, ep_sampler in ep_samplers.items():
+            d_ep = ep_sampler.get_all_rel_pose_actions()
+            d.append(d_ep)
+            
+        # convert to np
+        d_np = np.vstack(d)
+        ###
+        
+        self.fit_nn(d_np, nns['rel_pose_action'])
+    
+    def get_fitted_nns(self):
+        """
+        joint states can be fitted normally
+        
+        we don't want to fit rel-orientations because range(quat) is already [-1, 1]
+        
+        we do want to fit rel-positions because they aren't normalized, including FK
+        
+        biotacs are already normalized from 0 to 1, so no fitting needed
+        
+        for any key which is passed directly into the sample, we can just call fit_nn. 
+            - joint_state
+            - rel_fk
+            - joint_action
+        
+        For every other key in the sample, we must first calculate all values from the dataset, then fit
+        """
+        nns = self.get_static_nns()
+        
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
+        
+        # joint state isn't modified
+        self.fit_nn(rb['joint_state'], nns['obs']['joint_state'])
+        
+        # rel-fk isn't modified
+        self.fit_nn(rb['rel_fk'], nns['obs']['rel_fk'])
+        
+        # rel object target pose is calculated per sample, so we must extract all values first
+        self.fit_rel_object_target_pose(nns)
+        
+        # rel_pose_action is also calculated per sample
+        self.fit_rel_pose_action(nns)
+        
+        # same nn for joint action as for joint state
+        nns['joint_action'] = nns['obs']['joint_state']
+            
+        return nns
+    
+    def __next__(self):
+        """
+        only difference is that we need to concatenate the joint_action and the rel_pose_action and save it as 'action'.
+        """
+        nbatch = super().__next__()
+        
+        # get joint_action and rel_pose_action
+        joint_action = nbatch['joint_action']
+        rel_pose_action = nbatch['rel_pose_action']
+        
+        # concat
+        action = torch.cat([joint_action, rel_pose_action], dim=-1)
+        
+        # save
+        nbatch['action'] = action
+
+        return nbatch
 
 class NestedBatchLoader(dict):
     """

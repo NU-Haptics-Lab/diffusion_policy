@@ -604,8 +604,9 @@ class DiffusionModel(BaseImagePolicy):
         # normalize input
         assert 'valid_mask' not in nbatch
         
-        if self.action_relative_to_state:
-            nbatch = self.ActionRelativeToState(nbatch)
+        # i don't like this here anymore, should be handled in the sampler instead
+        # if self.action_relative_to_state:
+        #     nbatch = self.ActionRelativeToState(nbatch)
         
         # for cotraining, we normalize when we construct the batch
         task_id = nbatch['task_id']
