@@ -5,7 +5,7 @@ from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
 import diffusion_policy.model
 import diffusion_policy.model.res_actor
-from evaluation.eval import EvalDexNex
+from evaluation.eval import EvalDexNex, EvalMixin
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.common.sarsa_sampler import DatasetSampler
 from diffusion_policy.dataset.train_and_val import TrainAndVal
@@ -42,7 +42,7 @@ class ManipAnythingRolloutEnv(RolloutEnv):
 class MageHandRolloutEnv(RolloutEnv):
     def setup(self):
         # Register environment with gym globally
-        gym.envs.register(id="MageHandGymEnv-v0", entry_point="avatar_drake_sim.sandbox.mage_hand_gym_env.MageHandGymEnv") #type:ignore
+        gym.envs.register(id="MageHandGymEnv-v0", entry_point="avatar_drake_sim.sandbox.mage_hand_gym_env:MageHandGymEnv") #type:ignore
             
         
         self.env = gym.make("MageHandGymEnv-v0")
@@ -51,7 +51,7 @@ class MageHandRolloutEnv(RolloutEnv):
 
 class Rollout:
     def __init__(self,
-                 evaluator: EvalDexNex,
+                 evaluator: EvalMixin,
                  freq = 10,
                  num_rollouts_per_trigger = 10,
                  rb_id = "sim_online_rl",
@@ -100,10 +100,12 @@ class Rollout:
             
             self.evaluator.set_policy(policy)
 
-            # get the critic
-            critic: CriticLoss = globals.MODELS["critic"] #type:ignore
-            self.critic = critic.get_model(want_target_network=True)
-            self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
+            # if we must load the critic
+            if self.use_critic_preferred_actions:
+                # get the critic
+                critic: CriticLoss = globals.MODELS["critic"] #type:ignore
+                self.critic = critic.get_model(want_target_network=True)
+                self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
 
     def run_rollouts(self):
         self.run()
@@ -365,6 +367,13 @@ class Rollout:
             actions, all_actions = self.evaluator.infer()
             return actions, 0.0, failed
         
+    def prep_action_for_stepping(self, actions):
+        # none protection
+        if actions is not None:
+            actions = torch.squeeze(actions)
+            actions = actions.numpy()
+        return actions
+        
     def one_rollout(self):
         """
         Run one rollout
@@ -386,8 +395,8 @@ class Rollout:
             
             # none protection
             if actions is not None:
-                actions = torch.squeeze(actions)
-                actions = actions.numpy()
+                actions = self.prep_action_for_stepping(actions)
+                
                 best_qvals.append(best_qval)
                 
                 # execute the full trajectory

@@ -4,7 +4,7 @@
 ###################################################
 description: "mage hand 1: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state"
 # global controls
-debug: true # 
+debug: false # 
 total_num_epochs: 501
 batches_per_epoch: 100
 batch_size: 128
@@ -68,7 +68,7 @@ action_relative_to_state: false
 use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
-num_inference_steps: 25 # for the critic I think
+num_inference_steps: 8 # for inference
 clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
@@ -234,8 +234,8 @@ session_trainer:
         all: ${common_wbatch_loss}
 
     rollouts:
-      _target_: diffusion_policy.rollout.Rollout
-      freq: 1 # in steps
+      _target_: projects.mage_hand.mage_hand_rollout.MageHandRollout
+      freq: 500 # in steps
       rb_id: all
       num_rollouts_per_trigger: 1
       use_online_rollout: ${use_online_rollout}
@@ -250,7 +250,7 @@ session_trainer:
 
 
       evaluator:
-        _target_: evaluation.eval.Inference
+        _target_: projects.mage_hand.mage_hand_evaluator.MageHandInference
 
         policy: null
         debug: ${debug}

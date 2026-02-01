@@ -287,8 +287,8 @@ class NestedDataArray:
         for key, val in self.nest.items():
             dp = val.get()
             
-            # skip if none
-            if dp is not None:
+            # skip if none or if it's an empty dict
+            if dp is not None and not (isinstance(dp, dict) and len(dp) == 0):
                 out[key] = val.get()
 
         return out

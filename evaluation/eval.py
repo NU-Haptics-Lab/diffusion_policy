@@ -248,8 +248,15 @@ class Inference:
             
         return out
     
+class EvalMixin:
+    # generic
+    def save_data(self, *args, **kwargs):
+        raise NotImplementedError
 
-class EvalDexNex(Node, Inference):
+class EvalDexNex(Node, EvalMixin, Inference):
+    """
+    this class can be used to do real-world inference using ROS2 for system I/O, or it can be used in conjunction with rollout.py for evaluation during training (or RL training)
+    """
     def __init__(self,
                  test,
                  node_name,
@@ -351,7 +358,10 @@ class EvalDexNex(Node, Inference):
         actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
         self.policy: DiffusionModel
         if self.use_ema:
-            self.policy = actor.get_ema_model()
+            ema_model = actor.get_ema_model()
+            assert(ema_model is not None)
+            
+            self.policy = ema_model
 
         else:
             self.policy = actor.get_model()

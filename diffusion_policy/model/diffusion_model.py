@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
@@ -146,7 +147,7 @@ class SimpleModel(nn.Module):
 class DiffusionModel(BaseImagePolicy):
     def __init__(self, 
             action_shape: dict,
-            noise_scheduler: DDPMScheduler,
+            noise_scheduler: DDPMScheduler | DDIMScheduler,
             obs_encoder_maker: ObsEncoderMaker,
             n_obs_steps, # input time-length
             obs_as_global_cond=True,
@@ -430,7 +431,7 @@ class DiffusionModel(BaseImagePolicy):
         if self.obs_as_global_cond:
             # condition through global feature
             
-            # # I'm not sure why this line was included... required during training ...
+            # # I'm not sure why this line was included... required during training ... I think it's because batches during training are [Batch-dim, Traj-dim, data] but during inference we often only have the data-dim
             this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
             # this_nobs = nobs
             

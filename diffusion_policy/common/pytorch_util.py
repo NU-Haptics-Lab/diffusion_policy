@@ -18,6 +18,9 @@ def dict_apply(
 def dict_to_torch(x):
     return dict_apply(x, torch.tensor)
 
+def dict_to_numpy(x):
+    return dict_apply(x, lambda y: y.numpy())
+
 def dict_tensor_to(batch, device):
     return dict_apply(batch, lambda x: x.to(device, non_blocking=True))
 
