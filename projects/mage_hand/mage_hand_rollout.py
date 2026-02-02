@@ -70,6 +70,8 @@ class MageHandRollout(Rollout):
             
         return samples, total_reward, best_qvals, total_jerk
 
+# immediate next steps:
+    # collect larger mage hand demo dataset
         
     
     def step_trajectory(self, actions):

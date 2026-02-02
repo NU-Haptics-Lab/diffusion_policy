@@ -2,9 +2,9 @@
 ###################################################
 ###################################################
 ###################################################
-description: "mage hand 1: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state"
+description: "mage hand 2: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state. Reduce target pose to just position for a simpler learning problem for PoC"
 # global controls
-debug: false # 
+debug: true # 
 total_num_epochs: 501
 batches_per_epoch: 100
 batch_size: 128
@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
 run_tag: mage_hand
@@ -36,14 +36,14 @@ obs_keys_to_use:
   - joint_state
   - haptics
   - rel_fk
-  - rel_object_target_pose
+  - rel_object_target_pos
 
 # which obs the sarsa_sampler will load from the replay buffer -- also used in BatchLoader.get_static_nns
 obs_keys_to_load:
   - joint_state
   - haptics
   - rel_fk
-  - rel_object_target_pose
+  - rel_object_target_pos
 
 models_to_train:
   - actor
@@ -130,6 +130,10 @@ shape_meta:
   rel_object_target_pose:
     shape:
       - 7 # wxyz, xyz. agent needs to know where the object is
+
+  rel_object_target_pos:
+    shape:
+      - 3 # xyz only
 
   joint_action:
     shape:

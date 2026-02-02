@@ -83,15 +83,26 @@ class MageHandEpisodeSampler(EpisodeSampler):
         )
         
         return rel_object_target_pose
+    
+    def get_rel_object_target_pos(self, ep_idx, target_idx):
+        rel_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
+        
+        rel_pos = rel_pose[4:7]
+        return rel_pos
         
     def get_all_rel_object_target_pose(self):
         all_rel_object_poses = []
         
         # iterate over each ep idx
-        for ep_idx in range(len(self)):
+        # for ep_idx in range(len(self)):
+        # using tqdm
+        for ep_idx in tqdm(range(len(self)), desc="Computing rel object target poses"):
             
             # iterate over ep_idx + 1 to end of episode
-            for target_idx in range(ep_idx + 1, len(self)):
+            # for target_idx in range(ep_idx + 1, len(self)):
+            # using tqdm
+            for target_idx in tqdm(range(ep_idx + 1, len(self)), desc="Computing rel object target poses (inner)"):
+                # set the target idx
                 # get rel object target pose
                 rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
                 
@@ -106,14 +117,27 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         return out2
     
+    def get_all_rel_object_target_pos(self):
+        all_rel_object_target_pos = self.get_all_rel_object_target_pose()
+        
+        # only take the position part
+        all_rel_object_target_pos = all_rel_object_target_pos[:, 4:7]
+        
+        return all_rel_object_target_pos
+    
     def get_all_rel_pose_actions(self):
         all_rel_pose_actions = []
         
         # iterate over each ep idx
-        for ep_idx in range(len(self)):
+        # for ep_idx in range(len(self)):
+        # using tqdm for progress bar
+        for ep_idx in tqdm(range(len(self)), desc="Computing rel pose actions (outer)"):
             
             # iterate over ep_idx + 1 to end of episode
-            for target_idx in range(ep_idx + 1, len(self)):
+            # for target_idx in range(ep_idx + 1, len(self)):
+            # using tqdm for progress bar
+            for target_idx in tqdm(range(ep_idx + 1, len(self)), desc="Computing rel pose actions (inner)"):
+                # set the target idx
                 self.target_idx = target_idx
                 
                 # get rel pose action

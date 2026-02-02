@@ -778,6 +778,27 @@ class MageHandBatchLoader(BatchLoader):
         
         self.fit_nn(d_np, nns['obs']['rel_object_target_pose'])
         
+    def fit_rel_object_target_pos(self, nns):
+        # get ref to dataloaders
+        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        
+        # must get a reference to the mage hand sampler
+        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        
+        ###
+        # must get all datapoints for all episodes
+        ep_sampler: MageHandEpisodeSampler
+        d = []
+        for key, ep_sampler in ep_samplers.items():
+            d_ep = ep_sampler.get_all_rel_object_target_pos()
+            d.append(d_ep)
+            
+        # convert to np
+        d_np = np.vstack(d)
+        ###
+        
+        self.fit_nn(d_np, nns['obs']['rel_object_target_pos'])
+        
     def fit_rel_pose_action(self, nns):
         # get ref to dataloaders
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
@@ -827,7 +848,7 @@ class MageHandBatchLoader(BatchLoader):
         self.fit_nn(rb['rel_fk'], nns['obs']['rel_fk'])
         
         # rel object target pose is calculated per sample, so we must extract all values first
-        self.fit_rel_object_target_pose(nns)
+        self.fit_rel_object_target_pos(nns)
         
         # rel_pose_action is also calculated per sample
         self.fit_rel_pose_action(nns)
