@@ -182,7 +182,7 @@ class DataArray:
                  normalizer: SingleFieldLinearNormalizer,
                  descriptor = "",
                  strict: bool = True,
-                 clamp = True, # whether to clamp the normalized values to [-1, 1]
+                 clamp = True, # UNUSED whether to clamp the normalized values to [-1, 1]
                  ):
         self.normalizer = normalizer
         self.descriptor = descriptor
@@ -706,7 +706,7 @@ class MageHandBatchLoader(BatchLoader):
                 {'min': np.zeros(nb, dtype=np.float32)}
                 )
             
-        act_keys = ['joint_action', 'rel_pose_action']
+        act_keys = ['joint_action', 'rel_pos_action', 'rel_quat_action']
         for act_key in act_keys:
             # get shape meta from the config
             nb = globals.CONFIG.shape_meta[act_key].shape # type: ignore
@@ -754,31 +754,58 @@ class MageHandBatchLoader(BatchLoader):
         
         return nns
     
-    def fit_nn(self, data, nn):
+    def update_nns_from_saved_stats(self, nns):
+        # from a previous calculation:
+        # rel_object_target_pos
+        min = [-1.1244, -0.7520, -0.9715]
+        max = [0.8342, 0.7548, 0.7096]
+        
+        # make a single field linear normalizer
+        normalizer = get_range_normalizer_from_stat(
+            {'min': np.array(min, dtype=np.float32),
+             'max': np.array(max, dtype=np.float32)}
+        )
+        
+        # set it
+        nns['obs']['rel_object_target_pos'] = normalizer
+        
+        # now for rel pos action
+        # tensor([-0.7658, -0.7278, -1.1967]) max Parameter containing:
+        # tensor([0.4897, 0.8665, 0.3568])
+        min = [-0.77, -0.73, -1.2]
+        max = [0.49, 0.87, 0.36]
+        normalizer = get_range_normalizer_from_stat(
+            {'min': np.array(min, dtype=np.float32),
+             'max': np.array(max, dtype=np.float32)}
+        )
+        
+        # set it
+        nns['rel_pos_action'] = normalizer
+        
+        # now for rel object pos
+        # tensor([-0.8933, -0.6479, -0.8084]) max Parameter containing:
+        # tensor([0.8341, 0.6964, 0.6944])
+        min = [-0.89, -0.65, -0.81]
+        max = [0.83, 0.70, 0.69]
+        normalizer = get_range_normalizer_from_stat(
+            {'min': np.array(min, dtype=np.float32),
+             'max': np.array(max, dtype=np.float32)}
+        )
+        nns['obs']['rel_object_pos'] = normalizer
+        
+        return nns
+    
+    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = ""):
         nn.fit(data, mode='limits')
         
-    def fit_rel_object_target_pose(self, nns):
-        # get ref to dataloaders
-        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
-        
-        # must get a reference to the mage hand sampler
-        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
-        
-        ###
-        # must get all datapoints for all episodes
-        ep_sampler: MageHandEpisodeSampler
-        d = []
-        for key, ep_sampler in ep_samplers.items():
-            d_ep = ep_sampler.get_all_rel_object_target_pose()
-            d.append(d_ep)
-            
-        # convert to np
-        d_np = np.vstack(d)
-        ###
-        
-        self.fit_nn(d_np, nns['obs']['rel_object_target_pose'])
+        # print the results for min max
+        input_stats_dict = nn.get_input_stats()
+        print("Fitted nn: {}: min {} max {}".format(descriptor, input_stats_dict['min'], input_stats_dict['max']))
         
     def fit_rel_object_target_pos(self, nns):
+        """
+        only pos, NO QUAT
+        """
         # get ref to dataloaders
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
@@ -797,9 +824,12 @@ class MageHandBatchLoader(BatchLoader):
         d_np = np.vstack(d)
         ###
         
-        self.fit_nn(d_np, nns['obs']['rel_object_target_pos'])
+        self.fit_nn(d_np, nns['obs']['rel_object_target_pos'], "rel_object_target_pos")
         
-    def fit_rel_pose_action(self, nns):
+    def fit_rel_pos_action(self, nns):
+        """
+        only pos, NO QUAT
+        """
         # get ref to dataloaders
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
@@ -811,14 +841,38 @@ class MageHandBatchLoader(BatchLoader):
         ep_sampler: MageHandEpisodeSampler
         d = []
         for key, ep_sampler in ep_samplers.items():
-            d_ep = ep_sampler.get_all_rel_pose_actions()
+            d_ep = ep_sampler.get_all_rel_pos_actions()
             d.append(d_ep)
             
         # convert to np
         d_np = np.vstack(d)
         ###
         
-        self.fit_nn(d_np, nns['rel_pose_action'])
+        self.fit_nn(d_np, nns['rel_pos_action'], "rel_pos_action")
+        
+    def fit_rel_object_pos(self, nns):
+        """
+        only pos, NO QUAT
+        """
+        # get ref to dataloaders
+        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        
+        # must get a reference to the mage hand sampler
+        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        
+        ###
+        # must get all datapoints for all episodes
+        ep_sampler: MageHandEpisodeSampler
+        d = []
+        for key, ep_sampler in ep_samplers.items():
+            d_ep = ep_sampler.get_all_rel_object_pos()
+            d.append(d_ep)
+            
+        # convert to np
+        d_np = np.vstack(d)
+        ###
+        
+        self.fit_nn(d_np, nns['obs']['rel_object_pos'], "rel_object_pos")
     
     def get_fitted_nns(self):
         """
@@ -826,7 +880,10 @@ class MageHandBatchLoader(BatchLoader):
         
         we don't want to fit rel-orientations because range(quat) is already [-1, 1]
         
+        ********we DON"T want to fit any quaternions, because they're already normalized to [-1, 1]
+        
         we do want to fit rel-positions because they aren't normalized, including FK
+        
         
         biotacs are already normalized from 0 to 1, so no fitting needed
         
@@ -841,20 +898,31 @@ class MageHandBatchLoader(BatchLoader):
         
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
         
-        # joint state isn't modified
-        self.fit_nn(rb['joint_state'], nns['obs']['joint_state'])
+        # joint state isn't modified and has no quats
+        self.fit_nn(rb['joint_state'], nns['obs']['joint_state'], "joint_state")
         
-        # rel-fk isn't modified
-        self.fit_nn(rb['rel_fk'], nns['obs']['rel_fk'])
+        # rel-fk isn't modified and has no quats
+        self.fit_nn(rb['rel_fk'], nns['obs']['rel_fk'], "rel_fk")
         
-        # rel object target pose is calculated per sample, so we must extract all values first
-        self.fit_rel_object_target_pos(nns)
+        if False:
+            # rel object target pos is calculated per sample, so we must extract all values first
+            self.fit_rel_object_target_pos(nns)
+            
+            # rel_pose_action is also calculated per sample
+            self.fit_rel_pos_action(nns)
+            
+            # rel object pos
+            self.fit_rel_object_pos(nns)
+            
+        if True:
+            nns = self.update_nns_from_saved_stats(nns)
         
-        # rel_pose_action is also calculated per sample
-        self.fit_rel_pose_action(nns)
         
         # same nn for joint action as for joint state
         nns['joint_action'] = nns['obs']['joint_state']
+        
+            
+        
             
         return nns
     
@@ -866,10 +934,15 @@ class MageHandBatchLoader(BatchLoader):
         
         # get joint_action and rel_pose_action
         joint_action = nbatch['joint_action']
-        rel_pose_action = nbatch['rel_pose_action']
+        rel_quat_action = nbatch['rel_quat_action']
+        rel_pos_action = nbatch['rel_pos_action']
         
         # concat
-        action = torch.cat([joint_action, rel_pose_action], dim=-1)
+        action = torch.cat([
+            joint_action, 
+            rel_quat_action,
+            rel_pos_action,
+            ], dim=-1)
         
         # save
         nbatch['action'] = action

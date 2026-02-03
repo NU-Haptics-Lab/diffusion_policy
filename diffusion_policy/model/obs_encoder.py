@@ -86,15 +86,21 @@ class ObsEncoderMaker():
     Wrap into a class so we can construct using OmegaConf
     """
     def __init__(self,
+            obs_keys_to_use: list,
             rgbs: dict,
-            lowdims: dict,
+            lowdims: list,
             ch,
             cw
     ):
+        self.obs_keys_to_use = obs_keys_to_use
         self.rgbs = rgbs
         self.lowdims = lowdims
         self.ch = ch
         self.cw = cw
+            
+        # confirm that all obs keys are accounted for
+        for key in obs_keys_to_use:
+            assert(key in rgbs or key in lowdims)
         
         self.obs_encoder = ObservationEncoder(feature_activation=torch.nn.ReLU)
 
@@ -115,14 +121,16 @@ class ObsEncoderMaker():
             )
             
         # flat inputs aka lowdim or low_dim inputs
-        for key, val in lowdims.items():
+        for key in lowdims:
+            shape = globals.CONFIG.shape_meta[key].shape
+            
             # check with global control
             if key not in globals.CONFIG.obs_keys_to_use:
                 continue
             
             self.obs_encoder.register_obs_key(
                 name=key,
-                shape=val.shape,
+                shape=shape,
                 randomizer=StateRandomizer()
             )
             

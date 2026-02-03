@@ -17,6 +17,8 @@ import diffusion_policy.globals as globals
 
 from diffusion_policy.common.sarsa_sampler import DatasetSampler, EpisodeSampler
 
+import math
+
 
 class MageHandEpisodeSampler(EpisodeSampler):
     """
@@ -24,9 +26,24 @@ class MageHandEpisodeSampler(EpisodeSampler):
     
     mapping: (state, object id, object target pose) --> Traj[actions].
     """
+    def total_unique_datapoints(self):
+        """ formula is ep_len**2/2 """
+        ep_len = len(self)
+        total = ep_len**2/2
+        return total
+    
+    def get_post_target_indices(self, ep_idx):
+        # make indices which are episode-relative
+        indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
+        
+        is_past = indices > self.target_idx
+        is_past_indices = np.where(is_past)[0]
+        
+        return is_past_indices
+    
     def get_mage_hand_action_trajectory(self, ep_idx, key):
         """
-        For an action, we want a sequence from ep_idx - n_obs_steps to ep_idx + horizon.
+        For an action, we want a sequence
         """
         # safety assertion
         assert(self.target_idx is not None)
@@ -35,8 +52,7 @@ class MageHandEpisodeSampler(EpisodeSampler):
         indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
         
         # ensure trajectory doesn't go past the object target pose timestamp
-        is_past = indices > self.target_idx
-        is_past_indices = np.where(is_past)[0]
+        is_past_indices = self.get_post_target_indices(ep_idx)
         
         if len(is_past_indices) > 0:
             # get the integer element
@@ -51,11 +67,20 @@ class MageHandEpisodeSampler(EpisodeSampler):
         return key_action
         
     def get_joint_action_sample(self, ep_idx):
+        """ joint actions are absolute, so no modification needed to the forward-fill part of the trajectory """
         joint_action = self.get_mage_hand_action_trajectory(ep_idx, "joint_state")
         
         return joint_action
     
+    def set_stationary(self, rel_pose_action, first_past_idx):
+        # set to stationary
+        rel_pose_action[first_past_idx:, 0:4] = np.array([1.0, 0.0, 0.0, 0.0]) # quat
+        rel_pose_action[first_past_idx:, 4:7] = np.array([0.0, 0.0, 0.0])       # pos
+        
+        return rel_pose_action
+    
     def get_rel_pose_action_sample(self, ep_idx):
+        """ rel pose actions are relative, so we need to reset the forward-fill part of the trajectory to `staitonary`, aka zeros for pos and 1, 0, 0, 0 for quat """
         # action is the same as the state
         pose_action = self.get_mage_hand_action_trajectory(ep_idx, "pose_state")
         
@@ -67,7 +92,29 @@ class MageHandEpisodeSampler(EpisodeSampler):
             dst_pose=pose_action
         )
         
+        # reset the forward-fill part of the trajectory to stationary
+        is_past_indices = self.get_post_target_indices(ep_idx)
+        if len(is_past_indices) > 0:
+            # get the integer element
+            first_past_idx = is_past_indices[0]
+            
+            # set to stationary
+            rel_pose_action = self.set_stationary(rel_pose_action, first_past_idx)
+        
+        
         return rel_pose_action
+    
+    def get_rel_pos_action_sample(self, ep_idx):
+        rel_pose_action = self.get_rel_pose_action_sample(ep_idx)
+        
+        rel_pos_action = rel_pose_action[:, 4:7]
+        return rel_pos_action
+    
+    def get_rel_quat_action_sample(self, ep_idx):
+        rel_pose_action = self.get_rel_pose_action_sample(ep_idx)
+        
+        rel_quat_action = rel_pose_action[:, 0:4]
+        return rel_quat_action
     
     def get_rel_object_target_pose(self, ep_idx, target_idx):
         # get target pose
@@ -87,8 +134,12 @@ class MageHandEpisodeSampler(EpisodeSampler):
     def get_rel_object_target_pos(self, ep_idx, target_idx):
         rel_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
         
-        rel_pos = rel_pose[4:7]
+        rel_pos = rel_pose[..., 4:7]
         return rel_pos
+    
+    def get_rel_object_pos(self, ep_idx):
+        # same interface, but now the target is just this ep_idx
+        return self.get_rel_object_target_pos(ep_idx, ep_idx)
         
     def get_all_rel_object_target_pose(self):
         all_rel_object_poses = []
@@ -96,12 +147,12 @@ class MageHandEpisodeSampler(EpisodeSampler):
         # iterate over each ep idx
         # for ep_idx in range(len(self)):
         # using tqdm
-        for ep_idx in tqdm(range(len(self)), desc="Computing rel object target poses"):
+        for ep_idx in tqdm(range(len(self)), desc="getting rel object target poses (outer)"):
             
             # iterate over ep_idx + 1 to end of episode
-            # for target_idx in range(ep_idx + 1, len(self)):
+            for target_idx in range(ep_idx + 1, len(self)):
             # using tqdm
-            for target_idx in tqdm(range(ep_idx + 1, len(self)), desc="Computing rel object target poses (inner)"):
+            # for target_idx in tqdm(range(ep_idx + 1, len(self)), desc="getting rel object target poses (inner)"):
                 # set the target idx
                 # get rel object target pose
                 rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
@@ -125,29 +176,44 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         return all_rel_object_target_pos
     
-    def get_all_rel_pose_actions(self):
-        all_rel_pose_actions = []
+    def get_all_rel_object_pos(self):
+        # iterate over each ep idx
+        all_rel_object_pos = []
+        # for ep_idx in range(len(self)):
+        # using tqdm for progress bar
+        for ep_idx in tqdm(range(len(self)), desc="getting rel object pos (outer)"):
+            # get rel object pos
+            rel_object_pos = self.get_rel_object_pos(ep_idx)
+            
+            # append
+            all_rel_object_pos.append(rel_object_pos)
+            
+        # since rel_object_pos is already 2d, we have to vstack instead of convert to array
+        out = np.vstack(all_rel_object_pos)
+        
+        return out
+    
+    def get_all_rel_pos_actions(self):
+        all_rel_pos_actions = []
         
         # iterate over each ep idx
         # for ep_idx in range(len(self)):
         # using tqdm for progress bar
-        for ep_idx in tqdm(range(len(self)), desc="Computing rel pose actions (outer)"):
+        for ep_idx in tqdm(range(len(self)), desc="getting rel pos actions (outer)"):
+            # iterating over each target idx is very slow, so to save time just set target_idx to len(self) - 1
+            target_idx = len(self) - 1
             
-            # iterate over ep_idx + 1 to end of episode
-            # for target_idx in range(ep_idx + 1, len(self)):
-            # using tqdm for progress bar
-            for target_idx in tqdm(range(ep_idx + 1, len(self)), desc="Computing rel pose actions (inner)"):
-                # set the target idx
-                self.target_idx = target_idx
-                
-                # get rel pose action
-                rel_pose_action = self.get_rel_pose_action_sample(ep_idx)
-                
-                # append
-                all_rel_pose_actions.append(rel_pose_action)
+            # set the target idx
+            self.target_idx = target_idx
+            
+            # get rel pos action
+            rel_pos_action = self.get_rel_pos_action_sample(ep_idx)
+            
+            # append
+            all_rel_pos_actions.append(rel_pos_action)
         
-        # since rel_pose_action is already 2d, we have to vstack instead of convert to array
-        out = np.vstack(all_rel_pose_actions)
+        # since rel_pos_action is already 2d, we have to vstack instead of convert to array
+        out = np.vstack(all_rel_pos_actions)
     
         return out
     
@@ -184,14 +250,19 @@ class MageHandEpisodeSampler(EpisodeSampler):
         # rel-fk
         rel_fk = self.get_key_sample("rel_fk", ep_idx)
         
-        rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
+        # rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
+        
+        rel_object_target_pos = self.get_rel_object_target_pos(ep_idx, target_idx)
+        
+        rel_object_pos = self.get_rel_object_pos(ep_idx)
         
         # default output dict
         default_obs_sample = {
             'joint_state': joint_state,
             'haptics': haptics,
             'rel_fk': rel_fk,
-            'rel_object_target_pose': rel_object_target_pose,
+            'rel_object_pos': rel_object_pos,
+            'rel_object_target_pos': rel_object_target_pos,
         }
         
         # actual
@@ -219,7 +290,9 @@ class MageHandEpisodeSampler(EpisodeSampler):
         ## actions
         sample["joint_action"] = self.get_joint_action_sample(ep_idx)
         
-        sample["rel_pose_action"] = self.get_rel_pose_action_sample(ep_idx)
+        sample["rel_pos_action"] = self.get_rel_pos_action_sample(ep_idx)
+        
+        sample["rel_quat_action"] = self.get_rel_quat_action_sample(ep_idx)
 
         ## reward & not done
         sample["reward"] = self.get_reward(ep_idx)
@@ -241,3 +314,22 @@ class MageHandEpisodeSampler(EpisodeSampler):
         # reset to ensure we don't use the previous target idx next time
         self.target_idx = None
         return sample
+    
+class MageHandDatasetSampler(DatasetSampler):
+    """ exactly the same, but has a total_unique_datapoints function """
+    def Init(self, ep_mask):
+        out = super().Init(ep_mask)
+        
+        total = self.total_unique_datapoints()
+        print(f"Total unique datapoints in MageHandDatasetSampler: {total}")
+        
+        return out
+        
+    
+    def total_unique_datapoints(self):
+        total = 0
+        ep_sampler: MageHandEpisodeSampler
+        for ep_sampler in self.get_ep_list(): #type:ignore
+            total += ep_sampler.total_unique_datapoints()
+        
+        return total

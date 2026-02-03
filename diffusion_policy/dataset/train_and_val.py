@@ -305,7 +305,7 @@ class TrainAndVal:
         self.dd["train"] = self.train_dataloader
         self.dd["val"] = self.val_dataloader
         
-        print(self.rb_id + ": len train dataset: {}".format(len(self.train_dataloader)))
+        print(self.rb_id + ": len train dataset (nb batches): {}".format(len(self.train_dataloader)))
         
     def reinit(self):
         # only init if we're being trained off of

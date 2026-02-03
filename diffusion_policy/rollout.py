@@ -53,6 +53,7 @@ class Rollout:
     def __init__(self,
                  evaluator: EvalMixin,
                  freq = 10,
+                 warmup_nb_steps = 0,
                  num_rollouts_per_trigger = 10,
                  rb_id = "sim_online_rl",
                  use_online_rollout = True,
@@ -67,6 +68,7 @@ class Rollout:
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
+        self.warmup_nb_steps = warmup_nb_steps
         self.num_rollouts_per_trigger = num_rollouts_per_trigger
         self.rb_id = rb_id
         self.use_online_rollout = use_online_rollout
@@ -114,7 +116,7 @@ class Rollout:
         Run one portion of rollout
         """
         # if our number is called
-        if self.use_online_rollout and utils.StepFreqTrigger(self.freq):
+        if self.use_online_rollout and utils.StepFreqTrigger(self.freq) and globals.STEP > self.warmup_nb_steps:
             
             # inits
             successes = 0.0

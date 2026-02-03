@@ -82,7 +82,7 @@ class Inference:
             beta_schedule="squaredcos_cap_v2",
             beta_start=0.0001,
             clip_sample=True,
-            num_train_timesteps=100,
+            num_train_timesteps=globals.CONFIG.common_noise_scheduler.num_train_timesteps, # type:ignore
             prediction_type="epsilon"
         )
         self.noise_scheduler.set_timesteps(globals.CONFIG.num_inference_steps) # type:ignore

@@ -79,7 +79,7 @@ class MageHandInference:
             beta_schedule="squaredcos_cap_v2",
             beta_start=0.0001,
             clip_sample=True,
-            num_train_timesteps=100,
+            num_train_timesteps=globals.CONFIG.common_noise_scheduler.num_train_timesteps, # type:ignore
             prediction_type="epsilon"
         )
         self.noise_scheduler.set_timesteps(globals.CONFIG.num_inference_steps) # type:ignore
@@ -92,22 +92,33 @@ class MageHandInference:
         obs_dict,
     ):  
         """
-        obs dict, not normalized, cpu numpy
+        obs dict, not normalized, cpu numpy, must confirm it has the required keys
         """
+        # check keys
+        obs_keys = globals.CONFIG.obs_keys_to_use # type:ignore
+        
+        for key in obs_keys:
+            assert(key in obs_dict)
+            
+        out_obs_dict = {}
+        
         # iterate over items
-        for key, val in obs_dict.items():
+        for key in obs_keys:
+            val = obs_dict[key]
             # numpy it
             val = np.array(val)
             
             # see if it's only 1 dimensional
             if len(val.shape) == 1:
                 # add batch dim AND traj dim
-                obs_dict[key] = val.reshape(1, 1, -1)
+                val = val.reshape(1, 1, -1)
             elif len(val.shape) == 2:
                 # add batch dim
-                obs_dict[key] = val.reshape(1, val.shape[0], val.shape[1])
+                val = val.reshape(1, val.shape[0], val.shape[1])
                 
-        self.obs_dict = obs_dict
+            out_obs_dict[key] = val
+                
+        self.obs_dict = out_obs_dict
         
     def infer(self):
         
@@ -146,14 +157,19 @@ class MageHandInference:
         return nobs_torch
     
     def unnorm_cpu_action(self, naction_gpu):
+        """
+        split into joint_action and pose_action. See batch_loader.MageHandBatchLoader.__next__ for ordering information
         
-        # split into joint_action and pose_action. See batch_loader.MageHandBatchLoader.__next__ for ordering information
+        assumes pose order is wxyz, xyz (consistent with my Drake utils)
+        """
         nb_joints = 22
         joint_action = naction_gpu[..., :nb_joints]
         rel_pose_action = naction_gpu[..., nb_joints:]
+        rel_quat_action = rel_pose_action[..., 0:4]
+        rel_pos_action = rel_pose_action[..., 4:]
         
         naction_gpu_dd = {
-            "joint_action": joint_action, "rel_pose_action": rel_pose_action
+            "joint_action": joint_action, "rel_quat_action": rel_quat_action, "rel_pos_action": rel_pos_action
         }
         
         action_cpu_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)

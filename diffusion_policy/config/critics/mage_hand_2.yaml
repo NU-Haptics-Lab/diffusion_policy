@@ -2,9 +2,9 @@
 ###################################################
 ###################################################
 ###################################################
-description: "mage hand 2: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state. Reduce target pose to just position for a simpler learning problem for PoC"
+description: "mage hand 2: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state. Reduce target pose to just position for a simpler learning problem for PoC. Pose is ALWAYS ordered wxyz, xyz, aka quat, pos, in order to be consistent with Drake"
 # global controls
-debug: true # 
+debug: false # 
 total_num_epochs: 501
 batches_per_epoch: 100
 batch_size: 128
@@ -18,12 +18,12 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
 run_tag: mage_hand
 
-resume_tag: step=0050001
+resume_tag: latest
 output_dir: /media/dexnex_ssd/models/mage_hand
 
 tasks_to_use:
@@ -31,18 +31,26 @@ tasks_to_use:
   # - success
   # - failure
 
-# which obs the obs_encoder will use -- note: they don't actually have to exist in the dataset, but they do have to be produced by the sampler
+# which obs the obs_encoder (aka the policy) will use -- note: they don't actually have to exist in the dataset, but they do have to be produced by the sampler
 obs_keys_to_use:
-  - joint_state
-  - haptics
-  - rel_fk
-  - rel_object_target_pos
+  - joint_state # need to know the robot's current state
+  - haptics # need to know the robot's current state
+  - rel_fk # need to know the robot's current state
+  - rel_object_pos # need to know the object's current state
+  - rel_object_target_pos # need to know the object's target state
+
+# unused, but nice for reference
+action_keys_to_use:
+  - joint_action # need to know how to move the robot
+  - rel_pos_action # need to know how to move the robot
+  - rel_quat_action # need to know how to move the robot
 
 # which obs the sarsa_sampler will load from the replay buffer -- also used in BatchLoader.get_static_nns
 obs_keys_to_load:
   - joint_state
   - haptics
   - rel_fk
+  - rel_object_pos
   - rel_object_target_pos
 
 models_to_train:
@@ -69,11 +77,14 @@ use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
 num_inference_steps: 8 # for inference
-clamp: false # clamp actions (and diffusion noise)
+
+# experiment with clamping on all object rel inputs to ensure no out of distribution inputs when doing inference
+clamp: true # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 1
+rollout_frequency: 500
+rollout_warmup_nb_steps: 2499
 
 ###################################################
 ###################################################
@@ -127,6 +138,11 @@ shape_meta:
     shape:
     - 1 # 1 id. agent needs some way to differentiate between types of objects
 
+  # this is the object's position, relative to the robot's position
+  rel_object_pos:
+    shape:
+      - 3 # xyz only
+
   rel_object_target_pose:
     shape:
       - 7 # wxyz, xyz. agent needs to know where the object is
@@ -135,13 +151,26 @@ shape_meta:
     shape:
       - 3 # xyz only
 
+  rel_object_target_quat:
+    shape:
+      - 4 # wxyz only
+
   joint_action:
     shape:
     - 22 # th (5), ff (4), mf (4), rf (4), lf (5)
 
+
   rel_pose_action:
     shape:
     - 7 # pose (7)
+
+  rel_pos_action:
+    shape:
+    - 3 # pos (3)
+
+  rel_quat_action:
+    shape:
+    - 4 # quat (4)
 
   action:
     shape:
@@ -175,16 +204,19 @@ logging:
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
 
+  obs_keys_to_use: ${obs_keys_to_use}
+
   rgbs: {} # dummy
   ch: 0 # dummy
   cw: 0 # dummy
 
+  # this is still needed because some obs are images and others are lowdims. Can get the shape from shape meta though
   lowdims:
-    pose_state:
-      shape: ${shape_meta.pose_state.shape}
-
-    joint_state:
-      shape: ${shape_meta.joint_state.shape}
+    - joint_state
+    - haptics
+    - rel_fk
+    - rel_object_pos
+    - rel_object_target_pos
 
 
 
@@ -241,6 +273,7 @@ session_trainer:
     rollouts:
       _target_: projects.mage_hand.mage_hand_rollout.MageHandRollout
       freq: ${rollout_frequency} # in steps
+      warmup_nb_steps: ${rollout_warmup_nb_steps}
       rb_id: all
       num_rollouts_per_trigger: 1
       use_online_rollout: ${use_online_rollout}
@@ -309,7 +342,7 @@ common_dataset:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 8
+      num_workers: 12
       persistent_workers: true
       pin_memory: true
       shuffle: true # can't use with use_weighted_dataloader
@@ -321,7 +354,7 @@ common_dataset:
 
   # child
   sampler:
-    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    _target_: diffusion_policy.samplers.mage_hand_sampler.MageHandDatasetSampler
     rb_id: default
 
     ep_sampler_class: diffusion_policy.samplers.mage_hand_sampler.MageHandEpisodeSampler
@@ -393,7 +426,7 @@ common_noise_scheduler:
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
   clip_sample: true # apparently you want this true when prediction_type is sample
-  num_train_timesteps: 100
+  num_train_timesteps: 50
   prediction_type: epsilon # epsilon or sample
      
 device: cuda:0
