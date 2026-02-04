@@ -104,6 +104,34 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         return rel_pose_action
     
+    def get_rel_pos_only_action_sample(self, ep_idx):
+        """ rel pose actions are relative, so we need to reset the forward-fill part of the trajectory to `staitonary`, aka zeros for pos and 1, 0, 0, 0 for quat 
+        
+        this version decouples the position and quat parts, only making the position part relative
+        """
+        # action is the same as the state
+        pose_action = self.get_mage_hand_action_trajectory(ep_idx, "pose_state")
+        
+        # make relative to pose at ep_idx
+        ref_pose = self.get_key_sample("pose_state", ep_idx)
+        
+        rel_pose_action = utils.drake_compute_rel_pose(
+            src_pose=ref_pose,
+            dst_pose=pose_action
+        )
+        
+        # reset the forward-fill part of the trajectory to stationary
+        is_past_indices = self.get_post_target_indices(ep_idx)
+        if len(is_past_indices) > 0:
+            # get the integer element
+            first_past_idx = is_past_indices[0]
+            
+            # set to stationary
+            rel_pose_action = self.set_stationary(rel_pose_action, first_past_idx)
+        
+        
+        return rel_pose_action
+    
     def get_rel_pos_action_sample(self, ep_idx):
         rel_pose_action = self.get_rel_pose_action_sample(ep_idx)
         
@@ -116,6 +144,39 @@ class MageHandEpisodeSampler(EpisodeSampler):
         rel_quat_action = rel_pose_action[:, 0:4]
         return rel_quat_action
     
+    def get_rel_pose(self, src, dst):
+        """
+        experiment with different options?
+        """   
+        rel_pose = utils.drake_compute_rel_pose(
+            src_pose=src,
+            dst_pose=dst
+        )
+        
+        return rel_pose
+    
+    def get_rel_pos_only(self, src_v, dst_v):
+        """
+        compute rel pos only, dst w.r.t. src
+        """
+        assert(src_v.shape[-1] == 3)
+        assert(dst_v.shape[-1] == 3)
+        rel_pos = dst_v - src_v
+        return rel_pos
+        
+    def get_rel_pos_only_from_pose(self, src_pose, dst_pose):
+        """
+        compute rel pos only, dst w.r.t. src
+        both poses are [7] wxyz, xyz
+        """
+        # extract pos
+        src_pos = src_pose[..., 4:7]
+        dst_pos = dst_pose[..., 4:7]
+        
+        rel_pos = self.get_rel_pos_only(src_pos, dst_pos)
+        
+        return rel_pos
+    
     def get_rel_object_target_pose(self, ep_idx, target_idx):
         # get target pose
         object_target_pose = self.get_key_sample("object_target_pose", target_idx)
@@ -124,12 +185,30 @@ class MageHandEpisodeSampler(EpisodeSampler):
         pose_state = self.get_key_sample("pose_state", ep_idx)
         
         # compute rel pose
-        rel_object_target_pose = utils.drake_compute_rel_pose(
-            src_pose=pose_state,
-            dst_pose=object_target_pose
+        rel_object_target_pose = self.get_rel_pose(
+            src = pose_state,
+            dst = object_target_pose
         )
         
         return rel_object_target_pose
+    
+    def get_rel_object_target_pos_only(self, ep_idx, target_idx):
+        """
+        only considers position part of the pose when computing relative position
+        """
+        # get target pose
+        object_target_pose = self.get_key_sample("object_target_pose", target_idx)
+        
+        # make the relative object target pose
+        pose_state = self.get_key_sample("pose_state", ep_idx)
+        
+        # compute rel pose
+        rel_object_target_pos = self.get_rel_pos_only_from_pose(
+            src_pose = pose_state,
+            dst_pose = object_target_pose
+        )
+        
+        return rel_object_target_pos
     
     def get_rel_object_target_pos(self, ep_idx, target_idx):
         rel_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
@@ -140,14 +219,21 @@ class MageHandEpisodeSampler(EpisodeSampler):
     def get_rel_object_pos(self, ep_idx):
         # same interface, but now the target is just this ep_idx
         return self.get_rel_object_target_pos(ep_idx, ep_idx)
+    
+    def get_rel_object_pos_only(self, ep_idx):
+        """
+        only considers position part of the pose when computing relative position
+        """
+        # same interface, but now the target is just this ep_idx
+        return self.get_rel_object_target_pos_only(ep_idx, ep_idx)
         
     def get_all_rel_object_target_pose(self):
         all_rel_object_poses = []
         
         # iterate over each ep idx
-        # for ep_idx in range(len(self)):
+        for ep_idx in range(len(self)):
         # using tqdm
-        for ep_idx in tqdm(range(len(self)), desc="getting rel object target poses (outer)"):
+        # for ep_idx in tqdm(range(len(self)), desc="getting rel object target poses (outer)"):
             
             # iterate over ep_idx + 1 to end of episode
             for target_idx in range(ep_idx + 1, len(self)):
@@ -179,9 +265,9 @@ class MageHandEpisodeSampler(EpisodeSampler):
     def get_all_rel_object_pos(self):
         # iterate over each ep idx
         all_rel_object_pos = []
-        # for ep_idx in range(len(self)):
+        for ep_idx in range(len(self)):
         # using tqdm for progress bar
-        for ep_idx in tqdm(range(len(self)), desc="getting rel object pos (outer)"):
+        # for ep_idx in tqdm(range(len(self)), desc="getting rel object pos (outer)"):
             # get rel object pos
             rel_object_pos = self.get_rel_object_pos(ep_idx)
             
@@ -197,9 +283,9 @@ class MageHandEpisodeSampler(EpisodeSampler):
         all_rel_pos_actions = []
         
         # iterate over each ep idx
-        # for ep_idx in range(len(self)):
+        for ep_idx in range(len(self)):
         # using tqdm for progress bar
-        for ep_idx in tqdm(range(len(self)), desc="getting rel pos actions (outer)"):
+        # for ep_idx in tqdm(range(len(self)), desc="getting rel pos actions (outer)"):
             # iterating over each target idx is very slow, so to save time just set target_idx to len(self) - 1
             target_idx = len(self) - 1
             
@@ -252,9 +338,9 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         # rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
         
-        rel_object_target_pos = self.get_rel_object_target_pos(ep_idx, target_idx)
+        rel_object_target_pos = self.get_rel_object_target_pos_only(ep_idx, target_idx)
         
-        rel_object_pos = self.get_rel_object_pos(ep_idx)
+        rel_object_pos = self.get_rel_object_pos_only(ep_idx)
         
         # default output dict
         default_obs_sample = {
@@ -333,3 +419,36 @@ class MageHandDatasetSampler(DatasetSampler):
             total += ep_sampler.total_unique_datapoints()
         
         return total
+        
+    
+            
+    def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset):
+        """ 
+        custom: skip the first couple indices of magehand because right now my state saver spends a couple steps snapping to the haptx glove pose
+        """
+        beginning_of_ep_step_modifier = 5
+        rb_offset += beginning_of_ep_step_modifier
+        
+        assert(self.inlier_mask is not None)
+        
+        # already made
+        if not rb_episode_end in self.ep_samplers:
+            # check if rb_offset is valid
+            if rb_offset >= rb_episode_end:
+                print("Skipping episode creation because rb_offset >= rb_episode_end")
+                return None
+            
+            # make the ep sampler
+            ep_sampler = self.ep_sampler_class(
+                self.rb_id,
+                rb_offset,
+                rb_episode_end,
+                self.inlier_mask[rb_offset:rb_episode_end]
+            )
+
+            self.ep_samplers[rb_episode_end] = ep_sampler
+            
+            self.tr_ep_offsets.append(tr_ep_offset)
+            
+        # return the ep
+        return self.ep_samplers[rb_episode_end]

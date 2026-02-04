@@ -41,6 +41,9 @@ class ManipAnythingRolloutEnv(RolloutEnv):
     
 class MageHandRolloutEnv(RolloutEnv):
     def setup(self):
+        
+        import logging; logging.getLogger("drake").setLevel(logging.ERROR)
+        
         # Register environment with gym globally
         gym.envs.register(id="MageHandGymEnv-v0", entry_point="avatar_drake_sim.sandbox.mage_hand_gym_env:MageHandGymEnv") #type:ignore
             

@@ -109,7 +109,7 @@ class TrainAndVal:
             whether_to_use = True,
             use_weighted_dataloader = False,
             ):
-        self.sampler = sampler
+        self.sampler = sampler # should be the entire dataset
         self.rb_id = sampler.rb_id
         self.options = options
         self.val_ratio = val_ratio
@@ -282,7 +282,7 @@ class TrainAndVal:
         self.val_sampler = copy.deepcopy(self.sampler)
         self.val_sampler.Init(val_mask)
 
-        # init the original sampler
+        # init the original sampler with the entire dataset (useful for stats for normalizers)
         all = np.logical_or(val_mask, train_mask)
         self.sampler.Init(all)
         

@@ -102,7 +102,7 @@ common_indices:
   _target_: diffusion_policy.common.sarsa_sampler.Indices
   rb_id: default
   rb_offset: 0
-  episode_end: 0
+  rb_episode_end: 0
   pad_before: 0
   pad_after: 0
   debug: ${debug}

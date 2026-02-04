@@ -101,14 +101,14 @@ class Indices:
     def __init__(self,
         rb_id: str,
         rb_offset: int,
-        episode_end: int, 
+        rb_episode_end: int, 
         pad_before : int=0, 
         pad_after : int=0,
         debug : bool=True,
         ):
         self.rb_id = rb_id
         self.rb_offset = rb_offset
-        self.episode_end = episode_end
+        self.rb_episode_end = rb_episode_end
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.debug = debug
@@ -130,10 +130,13 @@ class Indices:
         start_idx = self.rb_offset
 
         # set up end index
-        end_idx = self.episode_end
+        end_idx = self.rb_episode_end
 
         # episode length is relative
         episode_length = end_idx - start_idx
+        
+        # mask should be the same length as the episode length
+        assert(len(self.mask) == episode_length)
         
         # ep length
         # self.ep_length = episode_length # SHOULDN"T be used
@@ -378,7 +381,7 @@ class EpisodeSampler:
         with open_dict(indices_cfg):
             indices_cfg.rb_id = self.rb_id
             indices_cfg.rb_offset = int(self.rb_offset)
-            indices_cfg.episode_end = int(self.rb_ep_end)
+            indices_cfg.rb_episode_end = int(self.rb_ep_end)
 
         # make using the config for this dataset. Could move this to the constructor?
         self.indices: Indices = hydra.utils.instantiate(indices_cfg)
@@ -687,25 +690,25 @@ class DatasetSampler:
         if False:
             self.print_dataset_stats()
             
-    def make_episode(self, episode_end, rb_offset, tr_ep_offset):
+    def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset):
         assert(self.inlier_mask is not None)
         
         # already made
-        if not episode_end in self.ep_samplers:
+        if not rb_episode_end in self.ep_samplers:
             # make the ep sampler
             ep_sampler = self.ep_sampler_class(
                 self.rb_id,
                 rb_offset,
-                episode_end,
-                self.inlier_mask[rb_offset:episode_end]
+                rb_episode_end,
+                self.inlier_mask[rb_offset:rb_episode_end]
             )
 
-            self.ep_samplers[episode_end] = ep_sampler
+            self.ep_samplers[rb_episode_end] = ep_sampler
             
             self.tr_ep_offsets.append(tr_ep_offset)
             
         # return the ep
-        return self.ep_samplers[episode_end]
+        return self.ep_samplers[rb_episode_end]
             
             
 
@@ -722,20 +725,21 @@ class DatasetSampler:
         assert(self.inlier_mask is not None)
 
         # one episode sampler per episode
-        for idx, episode_end in tqdm(enumerate(self.replay_buffer.episode_ends)): #type:ignore
+        for idx, rb_episode_end in tqdm(enumerate(self.replay_buffer.episode_ends)): #type:ignore
             # if skip a.k.a. episode mask
             if self.ep_mask is None or self.ep_mask[idx]:
                 # make the episode (or retrieve it)
-                ep_sampler = self.make_episode(episode_end, rb_offset, tr_ep_offset)
+                ep_sampler = self.make_episode(rb_episode_end, rb_offset, tr_ep_offset)
 
-                # add the length of the training episode
-                tr_ep_offset += len(ep_sampler)
-                
-                # save the indices
-                my_indices = np.concatenate([my_indices, ep_sampler.get_all_rb_indices()])
+                if ep_sampler is not None:
+                    # add the length of the training episode
+                    tr_ep_offset += len(ep_sampler)
+                    
+                    # save the indices
+                    my_indices = np.concatenate([my_indices, ep_sampler.get_all_rb_indices()])
 
-            # set rb offset to the old episode_end
-            rb_offset = episode_end
+            # set rb offset to the old rb_episode_end
+            rb_offset = rb_episode_end
             
         # convert to np
         self.my_indices = np.array(my_indices, dtype=int)

@@ -5,7 +5,7 @@
 description: "mage hand 2: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state. Reduce target pose to just position for a simpler learning problem for PoC. Pose is ALWAYS ordered wxyz, xyz, aka quat, pos, in order to be consistent with Drake"
 # global controls
 debug: false # 
-total_num_epochs: 501
+total_num_epochs: 1501
 batches_per_epoch: 100
 batch_size: 128
 val_every: 20
@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
 run_tag: mage_hand
@@ -76,7 +76,7 @@ action_relative_to_state: false
 use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
-num_inference_steps: 8 # for inference
+num_inference_steps: 16 # for inference
 
 # experiment with clamping on all object rel inputs to ensure no out of distribution inputs when doing inference
 clamp: true # clamp actions (and diffusion noise)
@@ -84,7 +84,7 @@ clamp: true # clamp actions (and diffusion noise)
 # rollouts?
 use_online_rollout: true
 rollout_frequency: 500
-rollout_warmup_nb_steps: 2499
+rollout_warmup_nb_steps: 1499
 
 ###################################################
 ###################################################
@@ -224,7 +224,7 @@ common_indices:
   _target_: diffusion_policy.common.sarsa_sampler.Indices
   rb_id: default
   rb_offset: 0
-  episode_end: 0
+  rb_episode_end: 0
   pad_before: 0
   pad_after: 0
   debug: ${debug}
@@ -270,6 +270,7 @@ session_trainer:
       w_batch_losses:
         all: ${common_wbatch_loss}
 
+    # alias: rollout:
     rollouts:
       _target_: projects.mage_hand.mage_hand_rollout.MageHandRollout
       freq: ${rollout_frequency} # in steps
@@ -426,7 +427,7 @@ common_noise_scheduler:
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
   clip_sample: true # apparently you want this true when prediction_type is sample
-  num_train_timesteps: 50
+  num_train_timesteps: 100
   prediction_type: epsilon # epsilon or sample
      
 device: cuda:0

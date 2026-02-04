@@ -248,6 +248,20 @@ def flatten_nested_dict(nested_dict, parent_key='', sep='.'):
             
     return dict(items)
 
+def drake_pos_to_pose(pos):
+    """
+    convert a position [3] to a pose [7] wxyz, xyz
+    """
+    pos2 = np.array(pos).flatten()
+    assert(pos2.shape == (3,))
+    
+    # identity quat
+    quat = np.array([1.0, 0.0, 0.0, 0.0])
+    
+    pose = np.concatenate([quat, pos2], axis=0)
+    
+    return pose
+
 def drake_compute_rel_pose(src_pose, dst_pose):
     """
     compute the relative pose from src to dst

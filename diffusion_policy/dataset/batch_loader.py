@@ -1,3 +1,13 @@
+
+
+
+
+
+
+
+
+
+import tqdm
 import torch
 import numpy as np
 import zarr
@@ -756,9 +766,11 @@ class MageHandBatchLoader(BatchLoader):
     
     def update_nns_from_saved_stats(self, nns):
         # from a previous calculation:
-        # rel_object_target_pos
-        min = [-1.1244, -0.7520, -0.9715]
-        max = [0.8342, 0.7548, 0.7096]
+        # Fitted nn: rel_object_target_pos: min Parameter containing:
+        # tensor([-0.9400, -1.1962, -1.1595]) max Parameter containing:
+        # tensor([0.8342, 0.7548, 0.7228])
+        min = [-0.94, -1.2, -1.16]
+        max = [0.83, 0.75, 0.72]
         
         # make a single field linear normalizer
         normalizer = get_range_normalizer_from_stat(
@@ -770,10 +782,11 @@ class MageHandBatchLoader(BatchLoader):
         nns['obs']['rel_object_target_pos'] = normalizer
         
         # now for rel pos action
-        # tensor([-0.7658, -0.7278, -1.1967]) max Parameter containing:
-        # tensor([0.4897, 0.8665, 0.3568])
-        min = [-0.77, -0.73, -1.2]
-        max = [0.49, 0.87, 0.36]
+        # Fitted nn: rel_pos_action: min Parameter containing:
+        # tensor([-0.7708, -0.9370, -1.1876]) max Parameter containing:
+        # tensor([0.4897, 0.8645, 0.3913])
+        min = [-0.77, -0.94, -1.19]
+        max = [0.49, 0.87, 0.39]
         normalizer = get_range_normalizer_from_stat(
             {'min': np.array(min, dtype=np.float32),
              'max': np.array(max, dtype=np.float32)}
@@ -783,10 +796,11 @@ class MageHandBatchLoader(BatchLoader):
         nns['rel_pos_action'] = normalizer
         
         # now for rel object pos
-        # tensor([-0.8933, -0.6479, -0.8084]) max Parameter containing:
-        # tensor([0.8341, 0.6964, 0.6944])
-        min = [-0.89, -0.65, -0.81]
-        max = [0.83, 0.70, 0.69]
+        # Fitted nn: rel_object_pos: min Parameter containing:
+        # tensor([-0.8601, -1.1959, -1.1595]) max Parameter containing:
+        # tensor([0.8341, 0.6964, 0.6762])
+        min = [-0.86, -1.2, -1.16]
+        max = [0.83, 0.7, 0.68]
         normalizer = get_range_normalizer_from_stat(
             {'min': np.array(min, dtype=np.float32),
              'max': np.array(max, dtype=np.float32)}
@@ -794,6 +808,47 @@ class MageHandBatchLoader(BatchLoader):
         nns['obs']['rel_object_pos'] = normalizer
         
         return nns
+    
+    def shrink_nn(self, nn, shrink_rate):
+        input_stats_dict = nn.get_input_stats()
+        min = input_stats_dict['min']
+        max = input_stats_dict['max']
+        
+        # shrink it
+        center = (min + max) / 2.0
+        half_range = (max - min) / 2.0 * shrink_rate
+        new_min = center - half_range
+        new_max = center + half_range
+        
+        normalizer = get_range_normalizer_from_stat(
+            {'min': new_min,
+             'max': new_max}
+        )
+        return normalizer
+    
+    def shrink_nns_inplace(self, nns, key):
+        shrink_rate = 0.8
+        
+        nn = nns[key]
+        nn = self.shrink_nn(nn, shrink_rate)
+        
+        nns[key] = nn
+    
+    def shrink_nns(self, nns):
+        """
+        in inference, often the inputs are OOD, and are clamped to 1.0. Because we set the normalizer to the dataset min/max, very few training points will be clamped, maybe making inference harder.
+        
+        Can experiment with shrinking the min/max a bit to force more clamping during training.
+        
+        only the inputs matter, so only modify obs
+        
+        note** from the histogram analysis, vast majority of input points follow a gaussian, meaning that shrinking the min/max will not affect many points.
+        """
+        # get rel_object_target_pos min/max
+        self.shrink_nns_inplace(nns['obs'], 'rel_object_target_pos')
+        
+        # rel object pos
+        self.shrink_nns_inplace(nns['obs'], 'rel_object_pos')
     
     def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = ""):
         nn.fit(data, mode='limits')
@@ -809,14 +864,15 @@ class MageHandBatchLoader(BatchLoader):
         # get ref to dataloaders
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
-        # must get a reference to the mage hand sampler
+        # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
         ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
         
         ###
         # must get all datapoints for all episodes
         ep_sampler: MageHandEpisodeSampler
         d = []
-        for key, ep_sampler in ep_samplers.items():
+        # for key, ep_sampler in ep_samplers.items():
+        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting rel_object_target_pos NN"):
             d_ep = ep_sampler.get_all_rel_object_target_pos()
             d.append(d_ep)
             
@@ -826,6 +882,10 @@ class MageHandBatchLoader(BatchLoader):
         
         self.fit_nn(d_np, nns['obs']['rel_object_target_pos'], "rel_object_target_pos")
         
+        
+        if True:
+            self.plot_histogram(d_np, descriptor="rel_object_target_pos")
+        
     def fit_rel_pos_action(self, nns):
         """
         only pos, NO QUAT
@@ -833,14 +893,15 @@ class MageHandBatchLoader(BatchLoader):
         # get ref to dataloaders
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
-        # must get a reference to the mage hand sampler
+        # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
         ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
         
         ###
         # must get all datapoints for all episodes
         ep_sampler: MageHandEpisodeSampler
         d = []
-        for key, ep_sampler in ep_samplers.items():
+        # for key, ep_sampler in ep_samplers.items():
+        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting rel_pos_action NN"):
             d_ep = ep_sampler.get_all_rel_pos_actions()
             d.append(d_ep)
             
@@ -850,6 +911,17 @@ class MageHandBatchLoader(BatchLoader):
         
         self.fit_nn(d_np, nns['rel_pos_action'], "rel_pos_action")
         
+    def plot_histogram(self, data, descriptor=""):
+        import matplotlib.pyplot as plt
+        
+        plt.figure()
+        plt.hist(data, bins=100)
+        plt.title("Histogram of {}".format(descriptor))
+        plt.xlabel("Value")
+        plt.ylabel("Count")
+        plt.grid()
+        plt.show()
+        
     def fit_rel_object_pos(self, nns):
         """
         only pos, NO QUAT
@@ -857,14 +929,15 @@ class MageHandBatchLoader(BatchLoader):
         # get ref to dataloaders
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
-        # must get a reference to the mage hand sampler
+        # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
         ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
         
         ###
         # must get all datapoints for all episodes
         ep_sampler: MageHandEpisodeSampler
         d = []
-        for key, ep_sampler in ep_samplers.items():
+        # for key, ep_sampler in ep_samplers.items():
+        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting rel_object_pos NN"):
             d_ep = ep_sampler.get_all_rel_object_pos()
             d.append(d_ep)
             
@@ -873,6 +946,9 @@ class MageHandBatchLoader(BatchLoader):
         ###
         
         self.fit_nn(d_np, nns['obs']['rel_object_pos'], "rel_object_pos")
+        
+        if True:
+            self.plot_histogram(d_np, descriptor="rel_object_pos")
     
     def get_fitted_nns(self):
         """
@@ -896,6 +972,7 @@ class MageHandBatchLoader(BatchLoader):
         """
         nns = self.get_static_nns()
         
+        # uses entire dataset
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
         
         # joint state isn't modified and has no quats
@@ -914,7 +991,7 @@ class MageHandBatchLoader(BatchLoader):
             # rel object pos
             self.fit_rel_object_pos(nns)
             
-        if True:
+        else:
             nns = self.update_nns_from_saved_stats(nns)
         
         
@@ -922,7 +999,9 @@ class MageHandBatchLoader(BatchLoader):
         nns['joint_action'] = nns['obs']['joint_state']
         
             
-        
+        # experiment with shrinking the input ranges a bit
+        if True:
+            self.shrink_nns(nns)
             
         return nns
     
