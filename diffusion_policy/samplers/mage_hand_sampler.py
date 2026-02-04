@@ -339,6 +339,32 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         return out
     
+    def generate_new_target_idx(self, ep_idx):
+        # option A: just a random value between ep_idx and end of episode
+        if False:    
+            # randomly sample the target idx -- episode-relative
+            target_idx = np.random.randint(ep_idx, len(self))
+            
+        # option B: only sample from ep_idx + horizon so that we never have to forward-fill the action trajectory (which I'm guessing might be causing the network to learn a bunch of stationary actions)
+        if True:
+            action_rel_indices = globals.CONFIG.action_rel_indices # type:ignore
+            
+            horizon = action_rel_indices[-1]
+            
+            first_valid_target_idx = ep_idx + horizon
+            
+            # rb episode length w.r.t. training start so we can see how many extra waypoints there are after the end of the training episode
+            rb_episode_end_wrt_training_start = self.indices.rb_episode_end - self.indices.training_episode_start
+            
+            final_valid_target_idx = rb_episode_end_wrt_training_start
+            
+            # extra_waypoints = rb_episode_end_wrt_training_start - len(self)
+            
+            target_idx = np.random.randint(first_valid_target_idx, final_valid_target_idx)
+            
+            return target_idx
+            
+    
     def get_obs_sample(self, ep_idx):
         """
         randomly sample an object pose between ep_idx and the end of the episode, and set that as the target pose.
@@ -357,8 +383,12 @@ class MageHandEpisodeSampler(EpisodeSampler):
             'qval': 0.0,
         }
         """
-        # randomly sample the target idx -- episode-relative
-        target_idx = np.random.randint(ep_idx, len(self))
+        target_idx = self.generate_new_target_idx(ep_idx)
+        
+        ### should be handled in episode creation
+        # # invalid target idx
+        # if target_idx is None:
+        #     return None
         
         # save it for use in get_action_sample
         self.target_idx = target_idx
@@ -464,9 +494,20 @@ class MageHandDatasetSampler(DatasetSampler):
     def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset): #type:ignore
         """ 
         custom: skip the first couple indices of magehand because right now my state saver spends a couple steps snapping to the haptx glove pose
+        
         """
         beginning_of_ep_step_modifier = 5
-        rb_offset += beginning_of_ep_step_modifier
+        training_episode_start = rb_offset + beginning_of_ep_step_modifier
+        
+        # option: end an episode len(horizon) early to ensure we never have to forward-fill the action trajectory
+        if True:
+            horizon = globals.CONFIG.action_rel_indices[-1] # type:ignore
+            training_episode_end = rb_episode_end - horizon
+            
+            # check if valid
+            if training_episode_start >= training_episode_end:
+                print("Skipping episode creation because rb_offset >= rb_episode_end after horizon adjustment")
+                return None
         
         assert(self.inlier_mask is not None)
         
@@ -477,12 +518,16 @@ class MageHandDatasetSampler(DatasetSampler):
                 print("Skipping episode creation because rb_offset >= rb_episode_end")
                 return None
             
+            mask = self.inlier_mask[training_episode_start:training_episode_end]
+            
             # make the ep sampler
             ep_sampler = self.ep_sampler_class(
-                self.rb_id,
-                rb_offset,
-                rb_episode_end,
-                self.inlier_mask[rb_offset:rb_episode_end]
+                rb_id = self.rb_id,
+                rb_episode_start_idx = rb_offset,
+                rb_episode_end = rb_episode_end,
+                training_episode_start = training_episode_start,
+                training_episode_end = training_episode_end,
+                mask = mask,
             )
 
             self.ep_samplers[rb_episode_end] = ep_sampler
@@ -496,7 +541,7 @@ class MageHandDatasetSampler(DatasetSampler):
         all_rel_fk = []
         
         ep_sampler: MageHandEpisodeSampler
-        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel fk"):
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel fk"): #type:ignore
             ep_rel_fk = ep_sampler.get_all_rel_fk()
             all_rel_fk.append(ep_rel_fk)
         
@@ -508,7 +553,7 @@ class MageHandDatasetSampler(DatasetSampler):
         all_rel_object_target_pos = []
         
         ep_sampler: MageHandEpisodeSampler
-        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel object target pos"):
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel object target pos"):#type:ignore
             ep_rel_object_target_pos = ep_sampler.get_all_rel_object_target_pos()
             all_rel_object_target_pos.append(ep_rel_object_target_pos)
         
@@ -520,7 +565,7 @@ class MageHandDatasetSampler(DatasetSampler):
         all_rel_pos_actions = []
         
         ep_sampler: MageHandEpisodeSampler
-        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel pos actions"):
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel pos actions"):#type:ignore
             ep_rel_pos_actions = ep_sampler.get_all_rel_pos_actions()
             all_rel_pos_actions.append(ep_rel_pos_actions)
         
@@ -532,7 +577,7 @@ class MageHandDatasetSampler(DatasetSampler):
         all_rel_object_pos = []
         
         ep_sampler: MageHandEpisodeSampler
-        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel object pos"):
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel object pos"):#type:ignore
             ep_rel_object_pos = ep_sampler.get_all_rel_object_pos()
             all_rel_object_pos.append(ep_rel_object_pos)
         
@@ -544,7 +589,7 @@ class MageHandDatasetSampler(DatasetSampler):
         all_pose_pitch_roll = []
         
         ep_sampler: MageHandEpisodeSampler
-        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all pose pitch roll"):
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all pose pitch roll"):#type:ignore
             ep_pose_pitch_roll = ep_sampler.get_all_pose_pitch_roll()
             all_pose_pitch_roll.append(ep_pose_pitch_roll)
         

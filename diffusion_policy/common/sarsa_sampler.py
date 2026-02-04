@@ -100,15 +100,25 @@ class Indices:
     """
     def __init__(self,
         rb_id: str,
-        rb_offset: int,
-        rb_episode_end: int, 
+        rb_episode_start_idx: int, # start of the rb episode on the rb buffer
+        rb_episode_end: int, # end of the rb episode on the rb buffer
+        training_episode_start: int, # start of the training episode. This is >= rb_episode_start_idx
+        training_episode_end: int, # end of the training episode. This is strictly <= rb_episode_end
         pad_before : int=0, 
         pad_after : int=0,
         debug : bool=True,
         ):
+        
+        # assertions
+        assert(training_episode_start >= rb_episode_start_idx)
+        assert(training_episode_end <= rb_episode_end)
+        assert(training_episode_start < training_episode_end)
+        
         self.rb_id = rb_id
-        self.rb_offset = rb_offset
+        self.rb_episode_start_idx = rb_episode_start_idx
         self.rb_episode_end = rb_episode_end
+        self.training_episode_start = training_episode_start
+        self.training_episode_end = training_episode_end
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.debug = debug
@@ -121,16 +131,18 @@ class Indices:
         """
         generate training indices based on padding before / after an episode and the mask.
         Positive and negative pad values are allowed
+        
+        NOTE: I don't like the mask anymore (doesn't make sense to cherry-pick waypoints when it's in the context of a trajectory), so think of it as being all True
         """
         # make mapping from mask_indice to non-mask-indice
         self.mask = mask
         self.mask_indices = np.where(self.mask)[0]
         
         # set up start index
-        start_idx = self.rb_offset
+        start_idx = self.training_episode_start
 
         # set up end index
-        end_idx = self.rb_episode_end
+        end_idx = self.training_episode_end
 
         # episode length is relative
         episode_length = end_idx - start_idx
@@ -145,7 +157,7 @@ class Indices:
         # # max future action
         # max_future_action = np.array(globals.CONFIG.action_rel_indices).max()
 
-        # these are the training indices. Add padding before, add padding after
+        # these are the training indices. Add padding before, add padding after.
         self.train_indices = range(-self.pad_before, self.mask_length + self.pad_after)
         pass
         
@@ -160,11 +172,20 @@ class Indices:
     
     def get_ep_idx_from_train_idx(self, train_idx):
         # must pass through the mask to get non-mask index
-        nonmask_idx = self.get_mask_indices()[train_idx]
+        
+        # I don't like the mask anymore, so stop using it
+        if False:
+            nonmask_idx = self.get_mask_indices()[train_idx]
+            
+        else:
+            nonmask_idx = train_idx
+            
         return nonmask_idx
 
     def __len__(self):
         """
+        Length of the training set.
+        
         This len includes padding. For a length that doesn't, use self.ep_length
         """
         return self.get_len_of_training_indices()
@@ -178,24 +199,41 @@ class Indices:
 
     def get_rb_indices(self, train_indices):
         """
-        train_indices - mask-relative indices. Uses fill-back & fill-forward for indices out of bounds
+        train_indices - mask-relative indices. Uses fill-back & fill-forward for indices out of bounds of the REPLAY BUFFER episode.
+        
+        Allows indices outside of the training range
         """
         # ensure it's numpy
         ti2 = np.array(train_indices).copy()
 
-        # fill-back any indices less than zero
-        mask = ti2 < 0
-        ti2[mask] = 0
+        # I don't like this approach anymore
+        if False:
+            # fill-back any indices less than zero
+            mask = ti2 < 0
+            ti2[mask] = 0
 
-        # fill-forward any indices greater than mask length, minus one
-        mask = ti2 > self.get_len_of_training_indices() - 1
-        ti2[mask] = self.get_len_of_training_indices() - 1
+            # fill-forward any indices greater than mask length, minus one
+            mask = ti2 > self.get_len_of_training_indices() - 1
+            ti2[mask] = self.get_len_of_training_indices() - 1
         
         # get ep indices
-        ep_indices = self.get_ep_idx_from_train_idx(ti2)
+        train_ep_indices = self.get_ep_idx_from_train_idx(ti2)
 
         # add on rb ep offset to make the indices rb-relative
-        rb_indices = ep_indices + self.rb_offset
+        rb_indices = train_ep_indices + self.training_episode_start
+        
+        if True:
+            # get all values less than the start
+            mask = rb_indices < self.rb_episode_start_idx
+            
+            # back-fill
+            rb_indices[mask] = self.rb_episode_start_idx
+            
+            # get all values greater than the end - 1
+            mask = rb_indices > self.rb_episode_end - 1
+            
+            # forward-fill
+            rb_indices[mask] = self.rb_episode_end - 1
 
         return rb_indices
     
@@ -361,15 +399,27 @@ class EpisodeSampler:
             # indices: Indices,
             # tr_offset,
             rb_id,
-            rb_offset,
-            rb_ep_end,
+            rb_episode_start_idx: int, # start of the rb episode on the rb buffer
+            rb_episode_end: int, # end of the rb episode on the rb buffer
+            training_episode_start: int, # start of the training episode. This is >= rb_episode_start_idx
+            training_episode_end: int, # end of the training episode. This is strictly <= rb_episode_end
             mask,
             ):
         # self.tr_offset = tr_offset
         self.rb_id = rb_id
-        self.rb_offset = rb_offset
-        self.rb_ep_end = rb_ep_end
+        self.rb_episode_start_idx = rb_episode_start_idx
+        self.rb_episode_end = rb_episode_end
+        self.training_episode_start = training_episode_start
+        self.training_episode_end = training_episode_end
         self.mask = mask
+        
+        # I don't like the mask anymore, so enforce all True's to effectively disable it
+        assert(np.all(self.mask))
+        
+        # assertions
+        assert(training_episode_start >= rb_episode_start_idx)
+        assert(training_episode_end <= rb_episode_end)
+        assert(training_episode_start < training_episode_end)
         
         # my members
         self.qvals: np.ndarray = None # type:ignore
@@ -380,8 +430,10 @@ class EpisodeSampler:
         # update indices cfg
         with open_dict(indices_cfg):
             indices_cfg.rb_id = self.rb_id
-            indices_cfg.rb_offset = int(self.rb_offset)
-            indices_cfg.rb_episode_end = int(self.rb_ep_end)
+            indices_cfg.rb_episode_start_idx = int(self.rb_episode_start_idx)
+            indices_cfg.rb_episode_end = int(self.rb_episode_end)
+            indices_cfg.training_episode_start = int(self.training_episode_start)
+            indices_cfg.training_episode_end = int(self.training_episode_end)
 
         # make using the config for this dataset. Could move this to the constructor?
         self.indices: Indices = hydra.utils.instantiate(indices_cfg)
@@ -401,9 +453,10 @@ class EpisodeSampler:
         assert(i >= 0)
         assert(i < len(self))
 
-        return i + self.rb_offset
+        return i + self.rb_episode_start_idx
 
     def __len__(self):
+        """ the training set length """
         return len(self.indices)
     
     def get(self, idx, key):
@@ -582,7 +635,7 @@ class EpisodeSampler:
         
         if sum1.max() > 100:
             print()
-            print(self.rb_offset)
+            print(self.rb_episode_start_idx)
             print(sum1.max())
             print(sum1.argmax())
             print(s[sum1.argmax()])
@@ -693,14 +746,22 @@ class DatasetSampler:
     def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset):
         assert(self.inlier_mask is not None)
         
+        training_episode_start = rb_offset
+        training_episode_end = rb_episode_end
+        
+        mask = self.inlier_mask[training_episode_start:training_episode_end]
+        
+        
         # already made
         if not rb_episode_end in self.ep_samplers:
             # make the ep sampler
             ep_sampler = self.ep_sampler_class(
-                self.rb_id,
-                rb_offset,
-                rb_episode_end,
-                self.inlier_mask[rb_offset:rb_episode_end]
+                rb_id = self.rb_id,
+                rb_episode_start_idx = rb_offset,
+                rb_episode_end = rb_episode_end,
+                training_episode_start = training_episode_start,
+                training_episode_end = training_episode_end,
+                mask = mask
             )
 
             self.ep_samplers[rb_episode_end] = ep_sampler
