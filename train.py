@@ -64,6 +64,14 @@ def main(cfg: OmegaConf):
     # Temporarily disable strict mode to add new keys
     OmegaConf.set_struct(globals.CONFIG, False) # type: ignore
     
+    # whether we want to run single threaded for debugging purposes
+    if globals.CONFIG.single_thread:
+        globals.CONFIG.common_dataset.options.train.num_workers = 0 # type: ignore
+        globals.CONFIG.common_dataset.options.train.persistent_workers = False # type: ignore
+        
+        globals.CONFIG.logging.use_wandb = False # type: ignore
+        
+    
     # whether we're debugging
     if globals.CONFIG.debug:  # type: ignore
         # no resuming

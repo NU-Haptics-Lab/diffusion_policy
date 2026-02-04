@@ -452,3 +452,39 @@ def normalize_quaternions_inplace(quats):
         norm = np.linalg.norm(quat)
         quat /= norm
         
+def drake_compute_rel_fk(pose_state, fk, get_rel_pose_fcn):
+    # reshape fk into [N, 3] for fingers, xyz
+    fk = fk.reshape(-1, 3)
+    
+    # expand each entry to start with wxyz = 1, 0, 0, 0
+    fk_poses = np.concatenate([
+        np.tile(np.array([[1.0, 0.0, 0.0, 0.0]]), (fk.shape[0], 1)),
+        fk
+    ], axis=-1) # [N, 7]
+    
+    # compute rel fk
+    rel_fk = get_rel_pose_fcn(
+        src = pose_state,
+        dst = fk_poses
+    )
+    
+    # extract just the xyz's
+    rel_fk = rel_fk[:, 4:7]
+    
+    # reshape to a long 2d vector
+    rel_fk = rel_fk.reshape(1, -1)
+    
+    return rel_fk
+
+def get_rel_yaw_pose(src, dst):
+    """
+    get rel pose but ONLY considering yaw rotation of src
+    """
+    src_yaw_only_pose = drake_compute_yaw_only_pose_from_pose(src)
+    
+    rel_pose = drake_compute_rel_pose(
+        src_pose=src_yaw_only_pose,
+        dst_pose=dst
+    )
+    
+    return rel_pose

@@ -5,7 +5,8 @@
 description: "mage hand 2: state -> T[q]. assumes only rigid bodies for now. all poses are relative to the pose_state, so therefore we don't need to pass in pose_state. Reduce target pose to just position for a simpler learning problem for PoC. Pose is ALWAYS ordered wxyz, xyz, aka quat, pos, in order to be consistent with Drake"
 # global controls
 debug: false # 
-total_num_epochs: 1501
+single_thread: false
+total_num_epochs: 2001
 batches_per_epoch: 100
 batch_size: 128
 val_every: 20
@@ -33,6 +34,7 @@ tasks_to_use:
 
 # which obs the obs_encoder (aka the policy) will use -- note: they don't actually have to exist in the dataset, but they do have to be produced by the sampler
 obs_keys_to_use:
+  # - yaw_pose_state # just for reference. This has been factored out to reduce input dimensionality
   - pose_pitch_roll # need to know the robot's current state
   - joint_state # need to know the robot's current state
   - haptics # need to know the robot's current state
@@ -85,8 +87,8 @@ clamp: true # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 1
-rollout_warmup_nb_steps: 1
+rollout_frequency: 500
+rollout_warmup_nb_steps: 1499
 
 ###################################################
 ###################################################

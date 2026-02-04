@@ -92,16 +92,6 @@ class MageHandEpisodeSampler(EpisodeSampler):
             dst=pose_action
         )
         
-        # reset the forward-fill part of the trajectory to stationary
-        is_past_indices = self.get_post_target_indices(ep_idx)
-        if len(is_past_indices) > 0:
-            # get the integer element
-            first_past_idx = is_past_indices[0]
-            
-            # set to stationary
-            rel_pose_action = self.set_stationary(rel_pose_action, first_past_idx)
-        
-        
         return rel_pose_action
     
     def get_rel_pos_action_sample(self, ep_idx):
@@ -129,12 +119,9 @@ class MageHandEpisodeSampler(EpisodeSampler):
             
         # option B: represent orient as yaw, pitch, roll (in that order), and recognize the fact that once gravity is turned on, the problem will be pos & yaw invariant, but will vary w.r.t. pitch & roll, so we can decouple pos & yaw from pitch & roll. If this option is used, then we must provide the current pose's pitch and roll in the obs.
         if True:
-            ## get a pose based off src_pose which keeps its xyz and yaw, and sets pitch & roll to zero
-            src_yaw_only_pose = utils.drake_compute_yaw_only_pose_from_pose(src)
-            
-            rel_pose = utils.drake_compute_rel_pose(
-                src_pose=src_yaw_only_pose,
-                dst_pose=dst
+            rel_pose = utils.get_rel_yaw_pose(
+                src,
+                dst
             )
         
         return rel_pose
@@ -287,16 +274,24 @@ class MageHandEpisodeSampler(EpisodeSampler):
     
     def get_pose_pitch_roll(self, ep_idx):
         """
-        extract pitch and roll from the pose at ep_idx
+        extract pitch and roll from the pose at ep_idx.
+        
+        rel_pose_state from self.get_rel_pose
         """
         pose_state = self.get_key_sample("pose_state", ep_idx)
         
-        pitch_roll = utils.drake_extract_pitch_roll_from_pose(pose_state)
+        rel_pose_state = self.get_rel_pose(
+            src = pose_state,
+            dst = pose_state
+        )
+        
+        # pitch, roll w.r.t. rel pose --- this might be the same value as pose_state, and if so we can save some compute by exploiting that fact. w/e though
+        rel_pitch_roll = utils.drake_extract_pitch_roll_from_pose(rel_pose_state)
         
         # must ensure it's 2d
-        pitch_roll = pitch_roll.reshape(1, -1)
+        rel_pitch_roll = rel_pitch_roll.reshape(1, -1)
         
-        return pitch_roll
+        return rel_pitch_roll
     
     def get_all_pose_pitch_roll(self):
         all_pose_pitch_roll = []
@@ -311,6 +306,36 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         # stack
         out = np.stack(all_pose_pitch_roll, axis=0)
+        
+        return out
+    
+    def get_rel_fk(self, ep_idx):
+        """
+        get rel fk at ep_idx
+        """
+        # get fk at ep_idx
+        fk = self.get_key_sample("fk", ep_idx)
+        
+        # get pose at ep_idx
+        pose_state = self.get_key_sample("pose_state", ep_idx)
+        
+        rel_fk = utils.drake_compute_rel_fk(pose_state, fk, self.get_rel_pose)
+        
+        return rel_fk
+    
+    def get_all_rel_fk(self):
+        all_rel_fk = []
+        
+        # iterate over each ep idx
+        for ep_idx in range(len(self)):
+            # get rel fk
+            rel_fk = self.get_rel_fk(ep_idx)
+            
+            # append
+            all_rel_fk.append(rel_fk)
+        
+        # stack
+        out = np.stack(all_rel_fk, axis=0)
         
         return out
     
@@ -345,7 +370,7 @@ class MageHandEpisodeSampler(EpisodeSampler):
         haptics = self.get_key_sample("haptics", ep_idx)
         
         # rel-fk
-        rel_fk = self.get_key_sample("rel_fk", ep_idx)
+        rel_fk = self.get_rel_fk(ep_idx)
         
         # rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
         
@@ -466,3 +491,63 @@ class MageHandDatasetSampler(DatasetSampler):
             
         # return the ep
         return self.ep_samplers[rb_episode_end]
+    
+    def get_all_rel_fk(self):
+        all_rel_fk = []
+        
+        ep_sampler: MageHandEpisodeSampler
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel fk"):
+            ep_rel_fk = ep_sampler.get_all_rel_fk()
+            all_rel_fk.append(ep_rel_fk)
+        
+        out = np.vstack(all_rel_fk)
+        
+        return out
+    
+    def get_all_rel_object_target_pos(self):
+        all_rel_object_target_pos = []
+        
+        ep_sampler: MageHandEpisodeSampler
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel object target pos"):
+            ep_rel_object_target_pos = ep_sampler.get_all_rel_object_target_pos()
+            all_rel_object_target_pos.append(ep_rel_object_target_pos)
+        
+        out = np.vstack(all_rel_object_target_pos)
+        
+        return out
+    
+    def get_all_rel_pos_actions(self):
+        all_rel_pos_actions = []
+        
+        ep_sampler: MageHandEpisodeSampler
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel pos actions"):
+            ep_rel_pos_actions = ep_sampler.get_all_rel_pos_actions()
+            all_rel_pos_actions.append(ep_rel_pos_actions)
+        
+        out = np.vstack(all_rel_pos_actions)
+        
+        return out
+    
+    def get_all_rel_object_pos(self):
+        all_rel_object_pos = []
+        
+        ep_sampler: MageHandEpisodeSampler
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all rel object pos"):
+            ep_rel_object_pos = ep_sampler.get_all_rel_object_pos()
+            all_rel_object_pos.append(ep_rel_object_pos)
+        
+        out = np.vstack(all_rel_object_pos)
+        
+        return out
+    
+    def get_all_pose_pitch_roll(self):
+        all_pose_pitch_roll = []
+        
+        ep_sampler: MageHandEpisodeSampler
+        for ep_sampler in tqdm(self.get_ep_list(), desc="Getting all pose pitch roll"):
+            ep_pose_pitch_roll = ep_sampler.get_all_pose_pitch_roll()
+            all_pose_pitch_roll.append(ep_pose_pitch_roll)
+        
+        out = np.vstack(all_pose_pitch_roll)
+        
+        return out

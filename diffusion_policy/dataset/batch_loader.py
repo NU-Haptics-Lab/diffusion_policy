@@ -26,7 +26,7 @@ from diffusion_policy.common.normalize_util import get_identity_normalizer_from_
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
-from diffusion_policy.samplers.mage_hand_sampler import MageHandEpisodeSampler
+from diffusion_policy.samplers.mage_hand_sampler import MageHandEpisodeSampler, MageHandDatasetSampler
 
 """ 
 joint limits for the normalizer. Only thing that matters is the scale and offset. stat's aren't used in normalization
@@ -765,12 +765,6 @@ class MageHandBatchLoader(BatchLoader):
         return nns
     
     def update_nns_from_saved_stats(self, nns):
-        # from a previous calculation:
-        # true rel:
-        # Fitted nn: rel_object_target_pos: min Parameter containing:
-        # tensor([-0.9400, -1.1962, -1.1595]) max Parameter containing:
-        # tensor([0.8342, 0.7548, 0.7228])
-        
         # yaw rel:
         # Fitted nn: rel_object_target_pos: min Parameter containing:
         # tensor([-0.9948, -0.9292, -0.3309]) max Parameter containing:
@@ -787,12 +781,6 @@ class MageHandBatchLoader(BatchLoader):
         # set it
         nns['obs']['rel_object_target_pos'] = normalizer
         
-        # now for rel pos action
-        # true rel:
-        # Fitted nn: rel_pos_action: min Parameter containing:
-        # tensor([-0.7708, -0.9370, -1.1876]) max Parameter containing:
-        # tensor([0.4897, 0.8645, 0.3913])
-        
         # yaw rel:
         # Fitted nn: rel_pos_action: min Parameter containing:
         # tensor([-0.6253, -0.7827, -1.1875]) max Parameter containing:
@@ -807,12 +795,6 @@ class MageHandBatchLoader(BatchLoader):
         # set it
         nns['rel_pos_action'] = normalizer
         
-        # now for rel object pos
-        # true rel:
-        # Fitted nn: rel_object_pos: min Parameter containing:
-        # tensor([-0.8601, -1.1959, -1.1595]) max Parameter containing:
-        # tensor([0.8341, 0.6964, 0.6762])
-        
         # yaw rel:
         # Fitted nn: rel_object_pos: min Parameter containing:
         # tensor([-0.8819, -0.8892, -0.2709]) max Parameter containing:
@@ -824,6 +806,33 @@ class MageHandBatchLoader(BatchLoader):
              'max': np.array(max, dtype=np.float32)}
         )
         nns['obs']['rel_object_pos'] = normalizer
+        
+        # yaw rel:
+        # Fitted nn: pose_pitch_roll: min Parameter containing:
+        # tensor([-0.5999, -3.1281]) max Parameter containing:
+        # tensor([1.5325, 3.1075])
+        min = [-0.6, -3.13]
+        max = [1.53, 3.11]
+        normalizer = get_range_normalizer_from_stat(
+            {'min': np.array(min, dtype=np.float32),
+             'max': np.array(max, dtype=np.float32)}
+        )
+        nns['obs']['pose_pitch_roll'] = normalizer
+        
+        # Fitted nn: rel_fk: min Parameter containing:
+        # tensor([-0.3321, -0.3412, -0.3299, -0.3946, -0.4109, -0.4037, -0.3786, -0.4136,
+        #         -0.4078, -0.3651, -0.4055, -0.4020, -0.3508, -0.3984, -0.3924]) max Parameter containing:
+        # tensor([0.3118, 0.3328, 0.3303, 0.3916, 0.4106, 0.4120, 0.4001, 0.4133, 0.4160,
+        #         0.4051, 0.4094, 0.4120, 0.4000, 0.3981, 0.4036])
+        min = [-0.33, -0.34, -0.33, -0.39, -0.41, -0.40, -0.38, -0.41,
+               -0.41, -0.37, -0.41, -0.40, -0.35, -0.40, -0.39]
+        max = [0.31, 0.33, 0.33, 0.39, 0.41, 0.41, 0.40, 0.41,
+               0.42, 0.41, 0.41, 0.41, 0.40, 0.40, 0.40]
+        normalizer = get_range_normalizer_from_stat(
+            {'min': np.array(min, dtype=np.float32),
+                'max': np.array(max, dtype=np.float32)}
+        )
+        nns['obs']['rel_fk'] = normalizer
         
         return nns
     
@@ -885,20 +894,9 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
         
-        ###
-        # must get all datapoints for all episodes
-        ep_sampler: MageHandEpisodeSampler
-        d = []
-        # for key, ep_sampler in ep_samplers.items():
-        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting rel_object_target_pos NN"):
-            d_ep = ep_sampler.get_all_rel_object_target_pos()
-            d.append(d_ep)
-            
-        # convert to np
-        d_np = np.vstack(d)
-        ###
+        d_np = sampler.get_all_rel_object_target_pos()
         
         self.fit_nn(d_np, nns['obs']['rel_object_target_pos'], "rel_object_target_pos")
         
@@ -914,19 +912,9 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
         
-        ###
-        # must get all datapoints for all episodes
-        ep_sampler: MageHandEpisodeSampler
-        d = []
-        # for key, ep_sampler in ep_samplers.items():
-        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting rel_pos_action NN"):
-            d_ep = ep_sampler.get_all_rel_pos_actions()
-            d.append(d_ep)
-            
-        # convert to np
-        d_np = np.vstack(d)
+        d_np = sampler.get_all_rel_pos_actions()
         ###
         
         self.fit_nn(d_np, nns['rel_pos_action'], "rel_pos_action")
@@ -950,19 +938,9 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
         
-        ###
-        # must get all datapoints for all episodes
-        ep_sampler: MageHandEpisodeSampler
-        d = []
-        # for key, ep_sampler in ep_samplers.items():
-        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting rel_object_pos NN"):
-            d_ep = ep_sampler.get_all_rel_object_pos()
-            d.append(d_ep)
-            
-        # convert to np
-        d_np = np.vstack(d)
+        d_np = sampler.get_all_rel_object_pos()
         ###
         
         self.fit_nn(d_np, nns['obs']['rel_object_pos'], "rel_object_pos")
@@ -978,22 +956,26 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        ep_samplers: dict[int: MageHandEpisodeSampler] = dls.sampler.ep_samplers #type:ignore
+        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
         
-        ###
-        # must get all datapoints for all episodes
-        ep_sampler: MageHandEpisodeSampler
-        d = []
-        # for key, ep_sampler in ep_samplers.items():
-        for key, ep_sampler in tqdm.tqdm(ep_samplers.items(), desc="Fitting pose_pitch_roll NN"):
-            d_ep = ep_sampler.get_all_pose_pitch_roll()
-            d.append(d_ep)
-            
-        # convert to np
-        d_np = np.vstack(d)
-        ###
+        d_np = sampler.get_all_pose_pitch_roll()
         
         self.fit_nn(d_np, nns['obs']['pose_pitch_roll'], "pose_pitch_roll")
+        
+    def fit_rel_fk(self, nns):
+        """
+        only pos, NO QUAT
+        """
+        # get ref to dataloaders
+        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
+        
+        # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
+        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
+        
+        d_np = sampler.get_all_rel_fk()
+        ###
+        
+        self.fit_nn(d_np, nns['obs']['rel_fk'], "rel_fk")
     
     def get_fitted_nns(self):
         """
@@ -1027,9 +1009,10 @@ class MageHandBatchLoader(BatchLoader):
         # joint state isn't modified and has no quats
         self.fit_nn(rb['joint_state'], nns['obs']['joint_state'], "joint_state")
         
-        # rel-fk isn't modified and has no quats
-        self.fit_nn(rb['rel_fk'], nns['obs']['rel_fk'], "rel_fk")
+        # same nn for joint action as for joint state
+        nns['joint_action'] = nns['obs']['joint_state']
         
+        # all calculated inputs, not directly from the RB
         if False:
             # rel object target pos is calculated per sample, so we must extract all values first
             self.fit_rel_object_target_pos(nns)
@@ -1040,17 +1023,15 @@ class MageHandBatchLoader(BatchLoader):
             # rel object pos
             self.fit_rel_object_pos(nns)
             
+            # pose pitch roll
+            self.fit_pose_pitch_roll(nns)
+            
+            self.fit_rel_fk(nns)
+            
         else:
             nns = self.update_nns_from_saved_stats(nns)
             
-        self.fit_pose_pitch_roll(nns)
-        
-        
-        # same nn for joint action as for joint state
-        nns['joint_action'] = nns['obs']['joint_state']
-        
-            
-        # experiment with shrinking the input ranges a bit
+        # experiment with shrinking the input ranges a bit. idk if it helps
         if True:
             self.shrink_nns(nns)
             
