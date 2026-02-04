@@ -504,9 +504,13 @@ class MageHandDatasetSampler(DatasetSampler):
             horizon = globals.CONFIG.action_rel_indices[-1] # type:ignore
             training_episode_end = rb_episode_end - horizon
             
+            ep_len = training_episode_end - training_episode_start
+            rb_ep_len = rb_episode_end - rb_offset
+            
             # check if valid
             if training_episode_start >= training_episode_end:
-                print("Skipping episode creation because rb_offset >= rb_episode_end after horizon adjustment")
+                print("Skipping episode, too short.")
+                print(f"ep_len: {ep_len}, rb_ep_len: {rb_ep_len}")
                 return None
         
         assert(self.inlier_mask is not None)
