@@ -87,37 +87,9 @@ class MageHandEpisodeSampler(EpisodeSampler):
         # make relative to pose at ep_idx
         ref_pose = self.get_key_sample("pose_state", ep_idx)
         
-        rel_pose_action = utils.drake_compute_rel_pose(
-            src_pose=ref_pose,
-            dst_pose=pose_action
-        )
-        
-        # reset the forward-fill part of the trajectory to stationary
-        is_past_indices = self.get_post_target_indices(ep_idx)
-        if len(is_past_indices) > 0:
-            # get the integer element
-            first_past_idx = is_past_indices[0]
-            
-            # set to stationary
-            rel_pose_action = self.set_stationary(rel_pose_action, first_past_idx)
-        
-        
-        return rel_pose_action
-    
-    def get_rel_pos_only_action_sample(self, ep_idx):
-        """ rel pose actions are relative, so we need to reset the forward-fill part of the trajectory to `staitonary`, aka zeros for pos and 1, 0, 0, 0 for quat 
-        
-        this version decouples the position and quat parts, only making the position part relative
-        """
-        # action is the same as the state
-        pose_action = self.get_mage_hand_action_trajectory(ep_idx, "pose_state")
-        
-        # make relative to pose at ep_idx
-        ref_pose = self.get_key_sample("pose_state", ep_idx)
-        
-        rel_pose_action = utils.drake_compute_rel_pose(
-            src_pose=ref_pose,
-            dst_pose=pose_action
+        rel_pose_action = self.get_rel_pose(
+            src=ref_pose,
+            dst=pose_action
         )
         
         # reset the forward-fill part of the trajectory to stationary
@@ -148,10 +120,22 @@ class MageHandEpisodeSampler(EpisodeSampler):
         """
         experiment with different options?
         """   
-        rel_pose = utils.drake_compute_rel_pose(
-            src_pose=src,
-            dst_pose=dst
-        )
+        # option A: complete relative pose, hard to debug if things are going wrong. Also pos direction is dependent on future quat, they're coupled, so perhaps that's a harder learning problem
+        if False:
+            rel_pose = utils.drake_compute_rel_pose(
+                src_pose=src,
+                dst_pose=dst
+            )
+            
+        # option B: represent orient as yaw, pitch, roll (in that order), and recognize the fact that once gravity is turned on, the problem will be pos & yaw invariant, but will vary w.r.t. pitch & roll, so we can decouple pos & yaw from pitch & roll. If this option is used, then we must provide the current pose's pitch and roll in the obs.
+        if True:
+            ## get a pose based off src_pose which keeps its xyz and yaw, and sets pitch & roll to zero
+            src_yaw_only_pose = utils.drake_compute_yaw_only_pose_from_pose(src)
+            
+            rel_pose = utils.drake_compute_rel_pose(
+                src_pose=src_yaw_only_pose,
+                dst_pose=dst
+            )
         
         return rel_pose
     
@@ -284,8 +268,6 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         # iterate over each ep idx
         for ep_idx in range(len(self)):
-        # using tqdm for progress bar
-        # for ep_idx in tqdm(range(len(self)), desc="getting rel pos actions (outer)"):
             # iterating over each target idx is very slow, so to save time just set target_idx to len(self) - 1
             target_idx = len(self) - 1
             
@@ -301,6 +283,35 @@ class MageHandEpisodeSampler(EpisodeSampler):
         # since rel_pos_action is already 2d, we have to vstack instead of convert to array
         out = np.vstack(all_rel_pos_actions)
     
+        return out
+    
+    def get_pose_pitch_roll(self, ep_idx):
+        """
+        extract pitch and roll from the pose at ep_idx
+        """
+        pose_state = self.get_key_sample("pose_state", ep_idx)
+        
+        pitch_roll = utils.drake_extract_pitch_roll_from_pose(pose_state)
+        
+        # must ensure it's 2d
+        pitch_roll = pitch_roll.reshape(1, -1)
+        
+        return pitch_roll
+    
+    def get_all_pose_pitch_roll(self):
+        all_pose_pitch_roll = []
+        
+        # iterate over each ep idx
+        for ep_idx in range(len(self)):
+            # get pose pitch roll
+            pose_pitch_roll = self.get_pose_pitch_roll(ep_idx)
+            
+            # append
+            all_pose_pitch_roll.append(pose_pitch_roll)
+        
+        # stack
+        out = np.stack(all_pose_pitch_roll, axis=0)
+        
         return out
     
     def get_obs_sample(self, ep_idx):
@@ -338,12 +349,15 @@ class MageHandEpisodeSampler(EpisodeSampler):
         
         # rel_object_target_pose = self.get_rel_object_target_pose(ep_idx, target_idx)
         
-        rel_object_target_pos = self.get_rel_object_target_pos_only(ep_idx, target_idx)
+        rel_object_target_pos = self.get_rel_object_target_pos(ep_idx, target_idx)
         
-        rel_object_pos = self.get_rel_object_pos_only(ep_idx)
+        rel_object_pos = self.get_rel_object_pos(ep_idx)
+        
+        pose_pitch_roll = self.get_pose_pitch_roll(ep_idx)
         
         # default output dict
         default_obs_sample = {
+            'pose_pitch_roll': pose_pitch_roll,
             'joint_state': joint_state,
             'haptics': haptics,
             'rel_fk': rel_fk,
@@ -422,7 +436,7 @@ class MageHandDatasetSampler(DatasetSampler):
         
     
             
-    def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset):
+    def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset): #type:ignore
         """ 
         custom: skip the first couple indices of magehand because right now my state saver spends a couple steps snapping to the haptx glove pose
         """

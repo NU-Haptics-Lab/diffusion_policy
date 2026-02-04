@@ -169,7 +169,9 @@ class MageHandInference:
         rel_pos_action = rel_pose_action[..., 4:]
         
         naction_gpu_dd = {
-            "joint_action": joint_action, "rel_quat_action": rel_quat_action, "rel_pos_action": rel_pos_action
+            "joint_action": joint_action, 
+            "rel_quat_action": rel_quat_action, 
+            "rel_pos_action": rel_pos_action
         }
         
         action_cpu_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)

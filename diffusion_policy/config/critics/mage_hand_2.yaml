@@ -33,6 +33,7 @@ tasks_to_use:
 
 # which obs the obs_encoder (aka the policy) will use -- note: they don't actually have to exist in the dataset, but they do have to be produced by the sampler
 obs_keys_to_use:
+  - pose_pitch_roll # need to know the robot's current state
   - joint_state # need to know the robot's current state
   - haptics # need to know the robot's current state
   - rel_fk # need to know the robot's current state
@@ -47,6 +48,7 @@ action_keys_to_use:
 
 # which obs the sarsa_sampler will load from the replay buffer -- also used in BatchLoader.get_static_nns
 obs_keys_to_load:
+  - pose_pitch_roll
   - joint_state
   - haptics
   - rel_fk
@@ -83,8 +85,8 @@ clamp: true # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 500
-rollout_warmup_nb_steps: 1499
+rollout_frequency: 1
+rollout_warmup_nb_steps: 1
 
 ###################################################
 ###################################################
@@ -118,6 +120,10 @@ checkpoint:
 
 # common data
 shape_meta:  
+  pose_pitch_roll:
+    shape:
+    - 2 # pitch, roll
+
   pose_state:
     shape:
     - 7 # root pose (7)
@@ -212,6 +218,7 @@ common_obs_encoder:
 
   # this is still needed because some obs are images and others are lowdims. Can get the shape from shape meta though
   lowdims:
+    - pose_pitch_roll
     - joint_state
     - haptics
     - rel_fk

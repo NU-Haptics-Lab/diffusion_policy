@@ -318,3 +318,137 @@ def drake_compute_rel_pose(src_pose, dst_pose):
     rel_pose = np.stack(rel_poses, axis=0)
     
     return rel_pose
+
+def drake_compute_yaw_only_pose_from_pose(pose):
+    """
+    given a pose [7] wxyz, xyz
+    compute a new pose that only has yaw rotation
+    
+    output: [7] wxyz, xyz
+    """
+    pose2 = np.array(pose).flatten()
+    assert(pose2.shape == (7,))
+    
+    from pydrake.all import (
+        RigidTransform,
+        Quaternion,
+        RollPitchYaw
+    )
+    
+    q = pose2[0:4]
+    p = pose2[4:7]
+    
+    quat = Quaternion(q[0], q[1], q[2], q[3])
+        
+    rpy = RollPitchYaw(quat)
+    
+    yaw = rpy.yaw_angle()
+    
+    yaw_rpy = RollPitchYaw(0.0, 0.0, yaw)
+    
+    yaw_quat = yaw_rpy.ToQuaternion()
+        
+    yaw_pose = np.concatenate([yaw_quat.wxyz(), p], axis=0)
+    
+    return yaw_pose
+
+def drake_extract_pitch_roll_from_pose(pose):
+    """
+    given a pose [7] wxyz, xyz
+    extract pitch and roll angles in radians
+    
+    output: [2] pitch, roll
+    """
+    pose2 = np.array(pose).flatten()
+    assert(pose2.shape == (7,))
+    
+    from pydrake.all import (
+        RigidTransform,
+        Quaternion,
+        RollPitchYaw
+    )
+    
+    q = pose2[0:4]
+    
+    quat = Quaternion(q[0], q[1], q[2], q[3])
+    
+    rpy = RollPitchYaw(quat)
+    
+    pitch = rpy.pitch_angle()
+    roll = rpy.roll_angle()
+        
+    pitch_roll = np.array([pitch, roll], dtype=np.float32)
+    
+    return pitch_roll
+
+def drake_compute_rel_pos(src_pose, dst_pose):
+    rel_pose = drake_compute_rel_pose(src_pose, dst_pose)
+    
+    rel_pos = rel_pose[:, 4:7]
+    return rel_pos
+
+def drake_compute_abs_pose_from_rel(src_pose, rel_pose):
+    """
+    compute the absolute pose from src and rel pose
+    both poses are [7] wxyz, xyz
+    
+    use tf2
+    """
+    # only allowed to have a single src pose
+    src_pose2 = np.array(src_pose).flatten()
+    assert(src_pose2.shape == (7,))
+    
+    # can have multiple dst poses
+    rel_pose2 = np.array(rel_pose).reshape(-1, 7)
+    
+    from pydrake.all import (
+        RigidTransform,
+        Quaternion
+    )
+    
+
+    def numpy_to_pose(array: np.ndarray) -> RigidTransform:
+        q = array[:4]
+        p = array[4:7]
+        
+        quat = Quaternion(q[0], q[1], q[2], q[3])
+        
+        pose = RigidTransform(quat, p)
+        
+        return pose
+    
+    
+
+    def pose_to_numpy(pose: RigidTransform) -> np.ndarray:
+        q = pose.rotation().ToQuaternion()
+        p = pose.translation()
+        
+        # Pack row
+        row = np.concatenate([q.wxyz(), p])
+        
+        return row
+    
+    src_tf = numpy_to_pose(src_pose2)
+    
+    abs_poses = []
+    for rel_pose in rel_pose2:
+        rel_tf = numpy_to_pose(rel_pose)
+    
+        abs_tf = src_tf @ rel_tf
+    
+        abs_pose = pose_to_numpy(abs_tf)
+        abs_poses.append(abs_pose)
+        
+    # stack abs poses
+    abs_pose = np.stack(abs_poses, axis=0)
+    
+    return abs_pose
+
+def normalize_quaternions_inplace(quats):
+    assert(quats.ndim == 2)
+    
+    
+    for quat in quats:
+        norm = np.linalg.norm(quat)
+        quat /= norm
+        
