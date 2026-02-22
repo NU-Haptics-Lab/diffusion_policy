@@ -161,6 +161,7 @@ class DiffusionModel(BaseImagePolicy):
             action_relative_to_state = False,
             use_tree = False,
             use_simple_model = False,
+            num_mid_module_repeats = 4,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -229,7 +230,8 @@ class DiffusionModel(BaseImagePolicy):
                 down_dims=down_dims,
                 kernel_size=kernel_size,
                 n_groups=n_groups,
-                cond_predict_scale=cond_predict_scale
+                cond_predict_scale=cond_predict_scale,
+                num_mid_module_repeats = num_mid_module_repeats,
             )
         #### end trunk
         

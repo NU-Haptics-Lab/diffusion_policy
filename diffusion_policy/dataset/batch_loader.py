@@ -1096,7 +1096,7 @@ class SandboxRobotBCBatchLoader(BatchLoader):
         # default nns
         nns = self.get_static_nns()
         
-        # uses entire dataset
+        # uses the 'all' dataset ... special keyword for now...
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
         obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load # type: ignore
         

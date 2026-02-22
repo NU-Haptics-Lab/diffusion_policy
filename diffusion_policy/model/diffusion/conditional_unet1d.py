@@ -87,6 +87,7 @@ class ConditionalUnet1D(nn.Module):
         n_groups=8,
         cond_predict_scale=False,
         embed_task_id = False,
+        num_mid_module_repeats = 4,
         ):
         super().__init__()
         all_dims = [input_dim] + list(down_dims)
@@ -110,7 +111,7 @@ class ConditionalUnet1D(nn.Module):
         in_out = list(zip(all_dims[:-1], all_dims[1:]))
         
         # TODO: put in config
-        num_repeats = 4
+        num_repeats = num_mid_module_repeats
 
         local_cond_encoder = None
         if local_cond_dim is not None:
@@ -196,7 +197,7 @@ class ConditionalUnet1D(nn.Module):
     def forward(self, 
             sample: torch.Tensor, 
             timestep: Union[torch.Tensor, float, int], 
-            task_ids,
+            task_ids = None,
             local_cond=None, global_cond=None, **kwargs):
         """
         x: (B,T,input_dim)
