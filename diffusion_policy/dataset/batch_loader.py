@@ -388,6 +388,13 @@ class BatchLoader:
         
         # reset
         self.reset()
+    
+    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = ""):
+        nn.fit(data, mode='limits')
+        
+        # print the results for min max
+        input_stats_dict = nn.get_input_stats()
+        # print("Fitted nn: {}: min {} max {}".format(descriptor, input_stats_dict['min'], input_stats_dict['max']))
         
     def get_static_nns(self):
         obs = {}
@@ -878,14 +885,6 @@ class MageHandBatchLoader(BatchLoader):
         self.shrink_nns_inplace(nns['obs'], 'rel_object_pos')
         
         
-    
-    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = ""):
-        nn.fit(data, mode='limits')
-        
-        # print the results for min max
-        input_stats_dict = nn.get_input_stats()
-        print("Fitted nn: {}: min {} max {}".format(descriptor, input_stats_dict['min'], input_stats_dict['max']))
-        
     def fit_rel_object_target_pos(self, nns):
         """
         only pos, NO QUAT
@@ -1059,6 +1058,57 @@ class MageHandBatchLoader(BatchLoader):
         nbatch['action'] = action
 
         return nbatch
+    
+class SandboxRobotBCBatchLoader(BatchLoader):
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
+        act_key = 'robot_joint_action'
+        
+        # default identity normalizer
+        for obs_key in obs_keys_to_load:
+            # get shape meta from the config
+            nb = globals.CONFIG.shape_meta[obs_key].shape # type: ignore
+            
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+                )
+            
+        # actions
+        # get shape meta from the config
+        nb = globals.CONFIG.shape_meta[act_key].shape # type: ignore
+        
+        # required keyword
+        nns["action"] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb, dtype=np.float32)}
+            )
+        
+        # final assembly
+        nns = nns | {
+            'obs': obs,
+        }
+        
+        # we're done
+        return nns
+    
+    def get_fitted_nns(self):
+        # default nns
+        nns = self.get_static_nns()
+        
+        # uses entire dataset
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all'] #type:ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load # type: ignore
+        
+        # each observation
+        for obs_key in obs_keys_to_load:
+            if obs_key in rb:
+                self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+                
+        # for the action
+        self.fit_nn(rb['robot_joint_action'], nns['action'], 'robot_joint_action')
+        
+        return nns
 
 class NestedBatchLoader(dict):
     """

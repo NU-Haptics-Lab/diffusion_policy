@@ -126,7 +126,7 @@ class BatchLoss:
 
         # get the action mse error
         if self.current_batch is not None:
-            task_id = self.current_batch['task_id']
+            task_id = self.current_batch['task_id'] if 'task_id' in self.current_batch else None
             action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=task_id)
 
         return loss, action_mse_error

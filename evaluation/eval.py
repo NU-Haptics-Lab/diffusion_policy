@@ -52,6 +52,152 @@ from ros2_to_rlds_msgs.msg import Float64array
 from moveit.core.robot_model import RobotModel
 from moveit.core.robot_state import RobotState
 
+class SimpleInference:
+    """
+    no state history, no task_id
+    """
+    def __init__(self,
+                 policy: DiffusionModel,
+                 ) -> None:
+        self.policy = policy
+        
+        # my members
+        self.current_obs: dict = None #type:ignore
+        
+        # save a handle
+        self.batch_loader = globals.DEFAULT_BATCH_LOADER
+        
+        # make the scheduler, hard-coded
+        self.noise_scheduler = DDIMScheduler(
+            beta_end=0.02,
+            beta_schedule="squaredcos_cap_v2",
+            beta_start=0.0001,
+            clip_sample=True,
+            num_train_timesteps=globals.CONFIG.common_noise_scheduler.num_train_timesteps, # type:ignore
+            prediction_type="epsilon"
+        )
+        self.noise_scheduler.set_timesteps(globals.CONFIG.num_inference_steps) # type:ignore
+        
+        self.original_policy_noise_scheduler = None
+        
+        
+    def set_policy(self, policy):
+        self.policy = policy
+        self.original_policy_noise_scheduler = self.policy.noise_scheduler
+        
+    
+    def save_obs(self,
+            obs,
+        ):  
+        self.current_obs = obs
+        
+    
+    def norm_gpu_obs(self, obs_dict_np):
+        # wrap in a data dict, which is what the batch loader expects
+        dd = {"obs": obs_dict_np}
+        
+        # put into 
+        dd_torch = pytorch_util.dict_to_torch(dd)
+        
+        # must normalize ourselves, here, because of the way co-training works with separate normalizers per dataset
+        ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
+        
+        nobs_torch = ndd_torch['obs']
+        
+        return nobs_torch
+    
+    def unnorm_cpu_action(self, naction_gpu):
+        naction_gpu_dd = {"action": naction_gpu}
+        
+        action_dd = self.batch_loader.unnorm_and_transfer(naction_gpu_dd)
+        
+        action_cpu = action_dd['action']
+        
+        return action_cpu
+    
+    def norm_gpu_action(self, action_cpu):
+        action_cpu_dd = {"action": action_cpu}
+        
+        naction_dd = self.batch_loader.transfer_and_norm(action_cpu_dd)
+        
+        naction_gpu = naction_dd['action']
+        
+        return naction_gpu
+        
+    def GetObs(self):
+        obs = self.current_obs
+        
+        if obs is None:
+            return None
+                
+        # get obs keys to use
+        obs_keys_to_use: list = globals.CONFIG.obs_keys_to_use #type:ignore
+
+        # confirm all keys are in obs
+        for key in obs_keys_to_use:
+            assert(key in obs)
+            
+        # only keep the ones in obs_keys_to_use
+        obs = {key: obs[key] for key in obs_keys_to_use}
+        
+        # get the lowdims keys from obs_encoder in config
+        lowdim_keys = globals.CONFIG.common_obs_encoder.lowdims # type:ignore
+        
+        # for each lowdim key
+        for key in lowdim_keys:
+            val = obs[key]
+            if isinstance(val, np.ndarray):
+                if val.ndim == 1:
+                    # add batch and traj dim
+                    val2 = np.expand_dims(val, axis=(0,1))
+                elif val.ndim == 2:
+                    val2 = np.expand_dims(val, axis=0)
+                else:
+                    val2 = val
+                    
+                # save it
+                obs[key] = val2
+    
+        # done
+        return obs
+    
+    
+    def RunInference(self, obs_dict_np):
+                
+        # run inference
+        with torch.no_grad():
+            nobs_torch = self.norm_gpu_obs(obs_dict_np)
+            
+            # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
+            naction_gpu, naction_rel_gpu, all_nactions_gpu = self.policy.infer(nobs_torch)
+                        
+            future_actions = self.unnorm_cpu_action(naction_gpu)
+            test = self.unnorm_cpu_action(naction_rel_gpu)
+            all_actions = self.unnorm_cpu_action(all_nactions_gpu)
+        
+            return future_actions, all_actions
+        
+    def infer(self):
+        # get observation
+        obs_dict_np = self.GetObs()
+        
+        if obs_dict_np is None:
+            print("No obs yet.")
+            return None, None
+            
+        # replace the policy's scheduler for inference
+        self.policy.noise_scheduler = self.noise_scheduler
+        
+        # run inference
+        action, all_actions = self.RunInference(obs_dict_np)
+        
+        # put the original back in for training
+        assert(self.original_policy_noise_scheduler is not None)
+        self.policy.noise_scheduler = self.original_policy_noise_scheduler
+        
+        assert(not np.isnan(all_actions).any())
+        return action, all_actions
+
 class Inference:
     def __init__(self,
                  policy: DiffusionModel,

@@ -85,7 +85,8 @@ class ConditionalUnet1D(nn.Module):
         down_dims=[256,512,1024],
         kernel_size=3,
         n_groups=8,
-        cond_predict_scale=False
+        cond_predict_scale=False,
+        embed_task_id = False,
         ):
         super().__init__()
         all_dims = [input_dim] + list(down_dims)
@@ -99,7 +100,10 @@ class ConditionalUnet1D(nn.Module):
             nn.Linear(dsed * 4, dsed),
         )
         cond_dim = dsed # timestamp embedder
-        cond_dim += dsed # task_id embedder
+        
+        if embed_task_id:
+            cond_dim += dsed # task_id embedder
+            
         if global_cond_dim is not None:
             cond_dim += global_cond_dim
 
@@ -177,12 +181,13 @@ class ConditionalUnet1D(nn.Module):
         self.down_modules = down_modules
         self.final_conv = final_conv
 
-        self.task_id_encoder = nn.Sequential(
-            SinusoidalPosEmb(dsed),
-            nn.Linear(dsed, dsed * 4),
-            nn.LeakyReLU(0.1),
-            nn.Linear(dsed * 4, dsed),
-        )
+        if embed_task_id:
+            self.task_id_encoder = nn.Sequential(
+                SinusoidalPosEmb(dsed),
+                nn.Linear(dsed, dsed * 4),
+                nn.LeakyReLU(0.1),
+                nn.Linear(dsed * 4, dsed),
+            )
 
         logger.info(
             "number of parameters: %e", sum(p.numel() for p in self.parameters())
@@ -213,17 +218,26 @@ class ConditionalUnet1D(nn.Module):
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         timesteps = timesteps.expand(sample.shape[0])
         
-        # remove variable dimension
-        task_ids2 = torch.reshape(task_ids, [-1])
 
         global_feature = self.diffusion_step_encoder(timesteps)
-        gf2 = self.task_id_encoder(task_ids2)
-
-        if global_cond is not None:
-            global_feature = torch.cat([
-                global_feature, gf2, global_cond
-            ], axis=-1)
         
+        # TODO: remove task_ids, just pass them in as an additional observation...
+        if task_ids is not None:
+            # remove variable dimension
+            task_ids2 = torch.reshape(task_ids, [-1])
+            gf2 = self.task_id_encoder(task_ids2)
+
+            if global_cond is not None:
+                global_feature = torch.cat([
+                    global_feature, gf2, global_cond
+                ], axis=-1)
+                
+        else:
+            if global_cond is not None:
+                global_feature = torch.cat([
+                    global_feature, global_cond
+                ], axis=-1)
+            
         # encode local features
         h_local = list()
         if local_cond is not None:
