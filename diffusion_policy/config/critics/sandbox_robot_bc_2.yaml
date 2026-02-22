@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox bc 1: train a bc policy for use in RL exploration / reward generation, no rollouts"
+description: "sandbox bc 2: train a bc policy for use in RL exploration / reward generation, no rollouts. Action is the robot joint position now, not the torque"
 # global controls
 debug: false # 
 single_thread: ${debug}
@@ -38,6 +38,8 @@ obs_keys_to_use:
   - object_pos
   - task_obs
 
+action_key: robot_joint_pos
+
 # which obs the sampler will load from the replay buffer
 obs_keys_to_load:
   - robot_joint_pos
@@ -64,7 +66,7 @@ action_relative_to_state: false
 use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
-num_inference_steps: 8 # for the critic I think
+num_inference_steps: 25 # for the critic I think
 clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
@@ -98,10 +100,6 @@ checkpoint:
 
 # common data
 shape_meta:
-  robot_joint_action:
-    shape:
-    - 30 # max from sandbox_common.MaxParams
-
   # required for the model. Just sum up all action inputs
   action:
     shape:

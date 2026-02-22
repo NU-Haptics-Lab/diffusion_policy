@@ -1064,7 +1064,7 @@ class SandboxRobotBCBatchLoader(BatchLoader):
         nns = {}
         obs = {}
         obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
-        act_key = 'robot_joint_action'
+        act_key = globals.CONFIG.action_key # type: ignore
         
         # default identity normalizer
         for obs_key in obs_keys_to_load:
@@ -1106,7 +1106,8 @@ class SandboxRobotBCBatchLoader(BatchLoader):
                 self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
                 
         # for the action
-        self.fit_nn(rb['robot_joint_action'], nns['action'], 'robot_joint_action')
+        act_key = globals.CONFIG.action_key # type: ignore
+        self.fit_nn(rb[act_key], nns['action'], act_key)
         
         return nns
 

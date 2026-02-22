@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox bc 1: train a bc policy for use in RL exploration / reward generation, no rollouts"
+description: "sandbox bc 2: train a bc policy for use in RL exploration / reward generation, no rollouts. Action is the robot joint position now, not the torque"
 # global controls
 debug: false # 
 single_thread: ${debug}
@@ -19,7 +19,7 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
 run_tag: sandbox
@@ -37,6 +37,8 @@ obs_keys_to_use:
   - object_quat
   - object_pos
   - task_obs
+
+action_key: robot_joint_pos
 
 # which obs the sampler will load from the replay buffer
 obs_keys_to_load:
@@ -98,10 +100,6 @@ checkpoint:
 
 # common data
 shape_meta:
-  robot_joint_action:
-    shape:
-    - 30 # max from sandbox_common.MaxParams
-
   # required for the model. Just sum up all action inputs
   action:
     shape:
