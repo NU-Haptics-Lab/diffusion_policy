@@ -191,7 +191,7 @@ class ConditionalUnet1D(nn.Module):
     def forward(self, 
             sample: torch.Tensor, 
             timestep: Union[torch.Tensor, float, int], 
-            task_ids,
+            task_ids = None,
             local_cond=None, global_cond=None, **kwargs):
         """
         x: (B,T,input_dim)
