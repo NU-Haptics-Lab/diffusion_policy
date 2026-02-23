@@ -68,6 +68,7 @@ class Rollout:
                  save_rollouts = True,
                  use_energy_limited_actions = True,
                  task_id = 0,
+                 env_maker = None,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -83,6 +84,7 @@ class Rollout:
         self.save_rollouts = save_rollouts
         self.use_energy_limited_actions = use_energy_limited_actions
         self.task_id = task_id
+        self.env_maker = env_maker
 
         # refs
         self.critic = None
@@ -91,7 +93,10 @@ class Rollout:
         
     def setup(self):
         if self.use_online_rollout:
-            env_maker = MageHandRolloutEnv()
+            if self.env_maker is None:
+                env_maker = ManipAnythingRolloutEnv()
+            else:
+                env_maker = self.env_maker
             self.env = env_maker.setup()
 
             # setup the evaluator

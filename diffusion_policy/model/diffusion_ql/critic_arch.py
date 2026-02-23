@@ -224,6 +224,9 @@ class QLModel(nn.Module):
         
     
 class QLModelSimple(QLModel):
+    """
+    differences: no tree, no history stacking
+    """
     def __init__(self,
                  obs_encoder_maker: ObsEncoderMaker,
                  hidden_dim = 256

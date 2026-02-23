@@ -141,6 +141,17 @@ class ObsEncoderMaker():
     def get(self):
         return self.obs_encoder
     
+    def copy(self):
+        # make a new one with the same config
+        other = ObsEncoderMaker(
+            obs_keys_to_use=self.obs_keys_to_use,
+            rgbs=self.rgbs,
+            lowdims=self.lowdims,
+            ch=self.ch,
+            cw=self.cw
+        )
+        return other
+    
 class WeightedFeature:
     """
     
