@@ -17,6 +17,7 @@ import diffusion_policy.globals as globals
 
 from diffusion_policy.common.sarsa_sampler import DatasetSampler, EpisodeSampler
 
+import diffusion_policy.globals as globals
 
 class SandboxRobotBCEpisodeSampler(EpisodeSampler):
     """
@@ -29,11 +30,13 @@ class SandboxRobotBCEpisodeSampler(EpisodeSampler):
         """
         For an action, we want a sequence from ep_idx - n_obs_steps to ep_idx + horizon.
         """
+        action_key = globals.CONFIG.action_key # type: ignore
+        
         # make indices which are episode-relative
         indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
         
         # get the sample
-        sample = self.indices.get_sequence_by_train_indices_and_key(indices, "robot_joint_action")
+        sample = self.indices.get_sequence_by_train_indices_and_key(indices, action_key)
         
         return sample
     
@@ -69,7 +72,7 @@ class SandboxRobotBCEpisodeSampler(EpisodeSampler):
         return sample
     
     
-class SandboxRobotBCBatchLoaderBackwardsCompat(SandboxRobotBCEpisodeSampler):
+class SandboxRobotBCEpisodeSamplerBackwardsCompat(SandboxRobotBCEpisodeSampler):
     """
     backwards compat with old zarr datasets which only have ["img", "img2", "state", "action", "reward"]
     """

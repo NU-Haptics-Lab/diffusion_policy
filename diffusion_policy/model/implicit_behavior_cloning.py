@@ -59,12 +59,15 @@ import diffusion_policy.globals as globals
 
 from torch._functorch.apis import vmap, grad
 
+from tqdm import (
+    tqdm
+)
+
 class ImplicitBehaviorCloningPolicy(nn.Module):
     def __init__(self,
             action_shape: dict,
             obs_encoder_maker: ObsEncoderMaker,
             n_obs_steps, # input time-length
-            diffusion_step_embed_dim=256,
             down_dims=(256,512,1024),
             kernel_size=5,
             n_groups=8,
@@ -124,19 +127,27 @@ class ImplicitBehaviorCloningAlgorithm(BaseImagePolicy):
         self.action_rel_indices = globals.CONFIG.action_rel_indices #type:ignore
         self.horizon = len(self.action_rel_indices)
         
-    def per_sample_backward(self, batch_score):
-        def fcn(s):
-            return s.squeeze()
+    def per_sample_backward(self, btrajectory, timestep, bglobal_cond):
+        def fcn(trajectory, global_cond):
+            return self.policy(trajectory.unsqueeze(0), timestep, global_cond = global_cond.unsqueeze(0)).squeeze()
         
         # 2. Vectorize the gradient calculation across the batch dimension
         # (0, 0) tells vmap to map over the 0th dimension of x and y
-        per_sample_grads = vmap(grad(fcn), in_dims=(0))(batch_score)
+        vmap_fcn = vmap(grad(fcn), in_dims=(0, 0))
+        per_sample_grads = vmap_fcn(btrajectory, bglobal_cond)
         
+        assert(per_sample_grads.shape == btrajectory.shape)
         return per_sample_grads
 
     # alias
     def predict_action(self, nobs): #type:ignore
         return self.inference(nobs)
+    
+    # alias
+    def infer(self, nobs_dict: dict, task_id=None, noise_scheduler=None):
+        # return 3 things for backwards compat
+        action = self.inference(nobs_dict)
+        return action, None, action
     
     @torch.enable_grad()
     def inference(self, nobs: dict):
@@ -167,19 +178,13 @@ class ImplicitBehaviorCloningAlgorithm(BaseImagePolicy):
 
         # do gradient ascent
         for _ in range(self.num_inference_steps):
-            # forward
-            score = self.policy(trajectory, timestep, global_cond = global_cond)
-            
-            assert(score.grad_fn is not None)
-
-            # backward
-            a_grad = self.per_sample_backward(score)
-            assert(a_grad is not None)
-            
-            a_grad = a_grad.unsqueeze(2)
+        # for _ in tqdm(range(self.num_inference_steps), desc="Inference steps"):
+            # forward & backward
+            a_grad = self.per_sample_backward(trajectory, timestep, global_cond)
 
             # grad-free update step, to make a new trajectory object
             with torch.no_grad():
+                assert(a_grad.shape == trajectory.shape)
                 trajectory = trajectory + step_size * a_grad
             
         return trajectory

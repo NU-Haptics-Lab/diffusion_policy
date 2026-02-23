@@ -172,5 +172,6 @@ class ConditionalSlashnet1D(nn.Module):
         
         x = self.final_layers(x)
 
-        assert(not x.isnan().any())
+        # doesn't play well with vmap(grad())
+        # assert(not x.isnan().any())
         return x

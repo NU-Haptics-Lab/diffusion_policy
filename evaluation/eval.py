@@ -172,7 +172,7 @@ class SimpleInference:
             naction_gpu, naction_rel_gpu, all_nactions_gpu = self.policy.infer(nobs_torch)
                         
             future_actions = self.unnorm_cpu_action(naction_gpu)
-            test = self.unnorm_cpu_action(naction_rel_gpu)
+            # test = self.unnorm_cpu_action(naction_rel_gpu)
             all_actions = self.unnorm_cpu_action(all_nactions_gpu)
         
             return future_actions, all_actions

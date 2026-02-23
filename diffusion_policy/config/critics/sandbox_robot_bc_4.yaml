@@ -5,7 +5,7 @@
 description: "sandbox bc 4: implicit BC instead of diffusion model"
 # global controls
 debug: false # 
-single_thread: ${debug}
+single_thread: false # nice for debugging
 total_num_epochs: 501
 batches_per_epoch: 100
 batch_size: 32
@@ -321,6 +321,9 @@ models:
         model:
           _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningAlgorithm
 
+          num_inference_steps: 50
+          step_size: 2e-2
+
           policy:
             _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningPolicy
             action_shape: ${shape_meta.action.shape}
@@ -448,19 +451,19 @@ override:
     d:
       block_transfer:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: block_transfer
       bnb_1cam:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: bnb_1cam
       bnb_2cams:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: bnb_2cams
       sim_hitl_toby:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: sim_hitl_toby
 
       all:

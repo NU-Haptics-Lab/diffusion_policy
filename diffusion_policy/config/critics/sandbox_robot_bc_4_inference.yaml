@@ -2,13 +2,13 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox bc 2: train a bc policy for use in RL exploration / reward generation, no rollouts. Action is the robot joint position now, not the torque"
+description: "sandbox bc 4: implicit BC instead of diffusion model"
 # global controls
 debug: false # 
-single_thread: ${debug}
+single_thread: false # nice for debugging
 total_num_epochs: 501
 batches_per_epoch: 100
-batch_size: 128
+batch_size: 32
 val_every: 20
 
 ### Global Control Panel ###
@@ -22,13 +22,17 @@ to_load:
 resume: true
 
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox
+run_tag: sandbox4
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/sandbox
+output_dir: /media/dexnex_ssd/models/sandbox4
 
 tasks_to_use:
-  - all
+  # - block_transfer
+  # - bnb_1cam
+  - bnb_2cams
+  # - sim_hitl_toby
+  - all # currently, 'all' is a special keyword used in the batch_loader, and is required
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
@@ -66,7 +70,7 @@ action_relative_to_state: false
 use_denoise: false # false for residual actor
 ### End Global Control Panel ###
 
-num_inference_steps: 8 # for the critic I think
+num_inference_steps: 25 # for the critic I think
 clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
@@ -76,7 +80,7 @@ use_online_rollout: false
 ###################################################
 ###################################################
 ###################################################
-action_rel_indices: [0, 1, 2, 3] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 
@@ -176,15 +180,24 @@ common_indices:
 
 
 data_directory: /media/dexnex_ssd/data/sandbox/
+bnb_data_directory: /media/dexnex_ssd/data/bnb/
 
 # NODE -- replay buffer loader entry point
 replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
 
   rb_paths:
+    block_transfer: ${bnb_data_directory}bt.reward.zarr
+    bnb_1cam: ${bnb_data_directory}1cam.reward.zarr
+    bnb_2cams: ${bnb_data_directory}2cams.reward.zarr
+    sim_hitl_toby: ${bnb_data_directory}sim_hitl_toby.reward.zarr
     all: ${data_directory}sandbox1.zarr
 
   modes:
+    block_transfer: r
+    bnb_1cam: r
+    bnb_2cams: r
+    sim_hitl_toby: r
     all: r
 
 # to be used for norming / unnorming without loading
@@ -212,9 +225,11 @@ session_trainer:
     
       # weighted batch loss dict
       w_batch_losses:
+        block_transfer: ${common_wbatch_loss}
+        bnb_1cam: ${common_wbatch_loss}
+        bnb_2cams: ${common_wbatch_loss}
+        sim_hitl_toby: ${common_wbatch_loss}
         all: ${common_wbatch_loss}
-        success: ${common_wbatch_loss}
-        failure: ${common_wbatch_loss}
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -223,9 +238,11 @@ session_trainer:
 
     # weighted batch loss dict
     w_batch_losses:
+      block_transfer: ${common_wbatch_loss}
+      bnb_1cam: ${common_wbatch_loss}
+      bnb_2cams: ${common_wbatch_loss}
+      sim_hitl_toby: ${common_wbatch_loss}
       all: ${common_wbatch_loss}
-      success: ${common_wbatch_loss}
-      failure: ${common_wbatch_loss}
 
 
 
@@ -251,6 +268,10 @@ dataloaders:
   _target_: diffusion_policy.dataset.train_and_val.DataLoaders
 
   d: 
+    block_transfer: ${common_dataset}
+    bnb_1cam: ${common_dataset}
+    bnb_2cams: ${common_dataset}
+    sim_hitl_toby: ${common_dataset}
     all: ${common_dataset}
 
 common_dataset:
@@ -265,7 +286,7 @@ common_dataset:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 8
+      num_workers: 4 # remember, this is PER dataloader, so plan appropriately for the number of datasets you're loading
       persistent_workers: true
       pin_memory: true
       shuffle: true # can't use with use_weighted_dataloader
@@ -298,23 +319,21 @@ models:
       model:
         _target_: diffusion_policy.model.model.Model
         model:
-          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-          action_shape: ${shape_meta.action.shape}
-          noise_scheduler: ${common_noise_scheduler}
-          obs_encoder_maker: ${common_obs_encoder}
-          eval_fixed_crop: true
-          obs_as_global_cond: true
-          obs_encoder_group_norm: true
-          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
-          down_dims: # must be divisible by nb_groups (8)
-            - 128
-            - 256
-            - 512
-          diffusion_step_embed_dim: 32
+          _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningAlgorithm
 
-          action_relative_to_state: ${action_relative_to_state}
-          use_tree: false
-          use_simple_model: false
+          num_inference_steps: 50
+          step_size: 2e-2
+
+          policy:
+            _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningPolicy
+            action_shape: ${shape_meta.action.shape}
+            obs_encoder_maker: ${common_obs_encoder}
+            n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+            down_dims: # must be divisible by nb_groups (8)
+              - 128
+              - 256
+              - 512
+            num_mid_module_repeats: 2
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -359,6 +378,30 @@ override:
     epoch_trainer:
       step_trainer: 
         w_batch_losses:
+          block_transfer: 
+            weight: 0.25
+            batch_loss: 
+              batch_loader:
+                rb_id: block_transfer
+
+          bnb_1cam:
+            weight: 0.25
+            batch_loss:
+              batch_loader:
+                rb_id: bnb_1cam
+
+          bnb_2cams:
+            weight: 0.25
+            batch_loss: 
+              batch_loader:
+                rb_id: bnb_2cams
+
+          sim_hitl_toby:
+            weight: 0.25
+            batch_loss: 
+              batch_loader:
+                rb_id: sim_hitl_toby
+
           all:
             weight: 1.0
             batch_loss: 
@@ -367,6 +410,35 @@ override:
               use_bc_loss: ${use_bc_loss}
     epoch_evaluator:
       w_batch_losses:
+        block_transfer: 
+          weight: 0.25
+          batch_loss: 
+            batch_loader:
+              rb_id: block_transfer
+              train_or_val: val
+
+        bnb_1cam:
+          weight: 0.25
+          batch_loss:
+            batch_loader:
+              rb_id: bnb_1cam
+              train_or_val: val
+
+        bnb_2cams:
+          weight: 0.25
+          batch_loss: 
+            batch_loader:
+              rb_id: bnb_2cams
+              train_or_val: val
+
+        sim_hitl_toby:
+          weight: 0.25
+          batch_loss: 
+            batch_loader:
+              rb_id: sim_hitl_toby
+              train_or_val: val
+
+
         all:
           weight: 1.0
           batch_loss: 
@@ -377,14 +449,31 @@ override:
 
   dataloaders:
     d:
+      block_transfer:
+        sampler:
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          rb_id: block_transfer
+      bnb_1cam:
+        sampler:
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          rb_id: bnb_1cam
+      bnb_2cams:
+        sampler:
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          rb_id: bnb_2cams
+      sim_hitl_toby:
+        sampler:
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          rb_id: sim_hitl_toby
+
       all:
         sampler:
           rb_id: all
 
-  models:
-    models:
-      actor:
-        model:
-          model:
-            noise_scheduler:
-              variance_type: fixed_small # ah, I need this here because it only exists in the DDPM scheduler, so it's not common to DDIM & DDPM
+  # models:
+  #   models:
+  #     actor:
+  #       model:
+  #         model:
+  #           noise_scheduler:
+  #             variance_type: fixed_small # ah, I need this here because it only exists in the DDPM scheduler, so it's not common to DDIM & DDPM

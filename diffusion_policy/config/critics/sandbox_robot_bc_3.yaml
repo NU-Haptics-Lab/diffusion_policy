@@ -454,19 +454,19 @@ override:
     d:
       block_transfer:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: block_transfer
       bnb_1cam:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: bnb_1cam
       bnb_2cams:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: bnb_2cams
       sim_hitl_toby:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCBatchLoaderBackwardsCompat
+          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: sim_hitl_toby
 
       all:
