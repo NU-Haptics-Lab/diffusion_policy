@@ -321,8 +321,8 @@ models:
         model:
           _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningAlgorithm
 
-          num_inference_steps: 50
-          step_size: 2e-2
+          num_inference_steps: 10
+          step_size: 1e-1
 
           policy:
             _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningPolicy
