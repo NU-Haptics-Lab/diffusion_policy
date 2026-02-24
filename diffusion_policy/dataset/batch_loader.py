@@ -26,7 +26,8 @@ from diffusion_policy.common.normalize_util import get_identity_normalizer_from_
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.train_and_val import TrainAndVal
 
-from diffusion_policy.samplers.mage_hand_sampler import MageHandEpisodeSampler, MageHandDatasetSampler
+import diffusion_policy.samplers.mage_hand_sampler as mage_hand_sampler
+# import MageHandEpisodeSampler, MageHandDatasetSampler
 
 """ 
 joint limits for the normalizer. Only thing that matters is the scale and offset. stat's aren't used in normalization
@@ -893,7 +894,7 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
+        sampler: mage_hand_sampler.MageHandDatasetSampler = dls.sampler #type:ignore
         
         d_np = sampler.get_all_rel_object_target_pos()
         
@@ -911,7 +912,7 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
+        sampler: mage_hand_sampler.MageHandDatasetSampler = dls.sampler #type:ignore
         
         d_np = sampler.get_all_rel_pos_actions()
         ###
@@ -937,7 +938,7 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
+        sampler: mage_hand_sampler.MageHandDatasetSampler = dls.sampler #type:ignore
         
         d_np = sampler.get_all_rel_object_pos()
         ###
@@ -955,7 +956,7 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
+        sampler: mage_hand_sampler.MageHandDatasetSampler = dls.sampler #type:ignore
         
         d_np = sampler.get_all_pose_pitch_roll()
         
@@ -969,7 +970,7 @@ class MageHandBatchLoader(BatchLoader):
         dls: TrainAndVal = globals.DATALOADERS[self.rb_id]
         
         # must get a reference to the mage hand sampler. Use sampler because it contains the entire dataset
-        sampler: MageHandDatasetSampler = dls.sampler #type:ignore
+        sampler: mage_hand_sampler.MageHandDatasetSampler = dls.sampler #type:ignore
         
         d_np = sampler.get_all_rel_fk()
         ###

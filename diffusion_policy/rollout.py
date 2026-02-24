@@ -5,7 +5,7 @@ from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
 import diffusion_policy.model
 import diffusion_policy.model.res_actor
-from evaluation.eval import EvalDexNex, EvalMixin
+from diffusion_policy.evaluation.eval import EvalDexNex, EvalMixin
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.common.sarsa_sampler import DatasetSampler
 from diffusion_policy.dataset.train_and_val import TrainAndVal

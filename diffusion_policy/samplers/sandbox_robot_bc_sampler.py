@@ -15,11 +15,12 @@ from operator import itemgetter
 
 import diffusion_policy.globals as globals
 
-from diffusion_policy.common.sarsa_sampler import DatasetSampler, EpisodeSampler
+import diffusion_policy.common.sarsa_sampler as sarsa_sampler
+# import DatasetSampler, EpisodeSampler
 
 import diffusion_policy.globals as globals
 
-class SandboxRobotBCEpisodeSampler(EpisodeSampler):
+class SandboxRobotBCEpisodeSampler(sarsa_sampler.EpisodeSampler):
     """
     Get a sample from an episode for the object manipulation policy.
     

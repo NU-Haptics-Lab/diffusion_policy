@@ -12,8 +12,13 @@ import copy
 from diffusion_policy import utils
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
-from diffusion_policy.common.sarsa_sampler import (
-    DatasetSampler, get_val_mask, downsample_mask, get_not_done)
+
+
+import diffusion_policy.common.sarsa_sampler as sarsa_sampler 
+# # import (
+#     DatasetSampler, get_val_mask, downsample_mask, get_not_done)
+
+
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
@@ -24,8 +29,9 @@ from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 # TODO: move this class to its own file
 class DexNexDataset(BaseImageDataset):
     def __init__(self,
-                 sampler: DatasetSampler
+                 sampler
         ):
+        assert(isinstance(sampler, sarsa_sampler.DatasetSampler))
         self.sampler = sampler
     
     def _fix_obs(self, obs):
@@ -101,7 +107,7 @@ class TrainAndVal:
     - state
     """
     def __init__(self,
-            sampler: DatasetSampler, # default sampler, not init'd
+            sampler, # default sampler, not init'd
             options: dict,
             seed=42,
             val_ratio=0.0,
@@ -109,6 +115,8 @@ class TrainAndVal:
             whether_to_use = True,
             use_weighted_dataloader = False,
             ):
+        assert(isinstance(sampler, sarsa_sampler.DatasetSampler))
+        
         self.sampler = sampler # should be the entire dataset
         self.rb_id = sampler.rb_id
         self.options = options
@@ -262,14 +270,14 @@ class TrainAndVal:
             raise
 
         # TODO: rewrite to use datapoints instead of episodes...
-        val_mask = get_val_mask(
+        val_mask = sarsa_sampler.get_val_mask(
             n_episodes=nb_episodes, 
             val_ratio=self.val_ratio,
             seed=self.seed)
         train_mask = ~val_mask
 
         # downsamples if max_train_episodes is not None
-        train_mask = downsample_mask(
+        train_mask = sarsa_sampler.downsample_mask(
             mask=train_mask, 
             max_n=self.max_train_episodes, 
             seed=self.seed)

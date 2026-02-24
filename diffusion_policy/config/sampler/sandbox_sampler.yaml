@@ -1,0 +1,42 @@
+
+
+action_key: robot_joint_pos
+
+# which obs the sampler will load from the replay buffer
+obs_keys_to_load:
+  - robot_joint_pos
+  - robot_joint_vel
+  - object_quat
+  - object_pos
+  - object_linear_vel
+  - object_angular_vel
+  - task_obs
+
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6]
+obs_rel_indices: [0]
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: false
+
+
+data_directory: /media/dexnex_ssd/data/sandbox/
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: ${data_directory}sandbox1.zarr
+
+  modes:
+    all: r
+

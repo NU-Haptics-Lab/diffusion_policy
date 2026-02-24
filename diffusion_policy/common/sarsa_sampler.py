@@ -13,7 +13,6 @@ import copy
 from omegaconf import OmegaConf, open_dict
 from operator import itemgetter
 
-import diffusion_policy.globals as globals
 
 
 
@@ -750,6 +749,13 @@ class DatasetSampler:
         if False:
             self.print_dataset_stats()
             
+    def InitAll(self):
+        n_eps = len(self.replay_buffer.episode_ends) #type:ignore
+        
+        ep_mask = np.ones(n_eps, dtype=bool)
+        
+        self.Init(ep_mask)
+            
     def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset):
         assert(self.inlier_mask is not None)
         
@@ -854,7 +860,11 @@ class DatasetSampler:
         ep = list(self.get_ep_list())[ep_idx]
         return ep
     
-    def get_random_episode(self) -> EpisodeSampler:
+    def get_random_episode(self) -> EpisodeSampler | None:
+        if len(self.get_ep_list()) == 0:
+            print("sampler_ql.get_random_episode: no episodes to sample from.")
+            return None
+        
         ep_idx = np.random.randint(len(self.get_ep_list()))
         ep = self.get_episode(ep_idx)
         return ep
