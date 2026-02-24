@@ -1,6 +1,6 @@
 import os
 import hydra
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, DictConfig
 import pathlib
 import copy
 import random
@@ -22,7 +22,7 @@ from diffusion_policy.trainers.session_trainer import SessionTrainer
 """
 Global config access
 """
-CONFIG: OmegaConf
+CONFIG: OmegaConf # backwards compat
 
 """
 Contains replay buffers for each dataset specified
@@ -56,3 +56,43 @@ DEFAULT_BATCH_LOADER: BatchLoader
 
 
 SESSION_TRAINER: SessionTrainer
+
+class Globals:
+    """
+    Global config access
+    """
+    def __init__(self,      
+                 
+        CONFIG: DictConfig,
+        
+        REPLAY_BUFFER_LOADER: ReplayBufferLoader,
+        
+        DATALOADERS: DataLoaders,
+        
+        LOGGER: Logging,
+        
+        CHECKPOINTER: TopKCheckpointManager,
+        
+        DEFAULT_BATCH_LOADER: BatchLoader,
+        
+        SESSION_TRAINER: SessionTrainer,
+        
+        MODELS: Models = None, # type:ignore
+        
+        EPOCH = 1, # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoch
+        
+        STEP = 1, # start on 1 so that rollouts won't trigger immediately
+        
+        ):
+        self.CONFIG = CONFIG
+        self.REPLAY_BUFFER_LOADER = REPLAY_BUFFER_LOADER
+        self.DATALOADERS = DATALOADERS
+        self.MODELS = MODELS
+        self.LOGGER = LOGGER
+        self.CHECKPOINTER = CHECKPOINTER
+        self.DEFAULT_BATCH_LOADER = DEFAULT_BATCH_LOADER
+        self.SESSION_TRAINER = SESSION_TRAINER
+        self.EPOCH = EPOCH
+        self.STEP = STEP
+        
+GLOBALS_DICT = {}

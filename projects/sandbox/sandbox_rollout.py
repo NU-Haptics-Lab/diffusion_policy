@@ -26,6 +26,8 @@ from diffusion_policy.common import pytorch_util
 from diffusion_policy import utils
 
 
+import diffusion_policy.globals as globals
+
     
 class SandboxRLRolloutEnv(RolloutEnv):
     def setup(self):
@@ -49,7 +51,7 @@ class SandboxRollout(Rollout):
     
     def save_data(self, obs):
         # convert
-        obs = self.convert_drake_obs(obs)
+        self.obs = self.convert_drake_obs(obs)
         
         # save to evaluator
         self.evaluator.save_data(obs)
@@ -142,6 +144,12 @@ class SandboxRollout(Rollout):
             
             # step the env
             new_obs, rewards, terminated, truncated, infos = self.env.step(action) #type:ignore
+            
+            # save sample using the old obs. Required for RL
+            self.save_samples(action, rewards, samples)
+            
+            # must save the obs for the next save_samples
+            self.save_data(new_obs)
                         
             done = terminated or truncated
             
@@ -174,3 +182,30 @@ class SandboxRollout(Rollout):
         ]
         
         return waypoint_actions
+    
+    
+    
+    def save_samples(self, actions, rewards, samples):
+        """
+        each sample must contain all the obs keys, the action key, and 'reward'
+        """
+        # save the sample using the old obs, current action, current reward
+        action_key = globals.CONFIG.action_key # type: ignore
+        
+        obs = self.obs
+        
+        assert(obs is not None)
+        
+        data = {
+            action_key: actions,
+            'reward': np.float32(rewards),
+        }
+        
+        data.update(obs)
+        
+        to_save = data
+        # for key in globals.CONFIG.obs_keys_to_load:
+        #     to_save[key] = data[key]
+        
+        # append the data
+        samples.append(to_save)

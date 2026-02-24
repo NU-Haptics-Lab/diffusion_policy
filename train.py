@@ -102,8 +102,8 @@ def main(cfg: OmegaConf):
         #     globals.CONFIG.step_freqs[key] = 1
         
         # testing rollouts
-        # globals.CONFIG.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
-        # globals.CONFIG.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1 # type:ignore
+        globals.CONFIG.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
+        globals.CONFIG.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1 # type:ignore
         
         # # no rollouts
         # globals.CONFIG.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore

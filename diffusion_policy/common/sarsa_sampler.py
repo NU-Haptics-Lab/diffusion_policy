@@ -467,7 +467,7 @@ class EpisodeSampler:
         # last valid sample in the ep => second to last ep_idx, and don't forget python is zero-indexed.
 
         # sanity check: with 2 data-points [d1, d2], len(self) = 2, => ep_idx of 0 is done ... so we add 2
-        done = ep_idx + 2 == len(self)
+        done = ep_idx + 2 >= len(self)
         not_done = not done
         
         # convert to np array, must add a dimension

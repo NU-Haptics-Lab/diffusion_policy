@@ -1110,6 +1110,27 @@ class SandboxRobotBCBatchLoader(BatchLoader):
         self.fit_nn(rb[act_key], nns['action'], act_key)
         
         return nns
+    
+class SandboxRobotRLBatchLoader(SandboxRobotBCBatchLoader):
+    """
+    same exact as SandboxRobotBCBatchLoader, but duplicate obs into obs_next and action into action_next
+    """
+    
+    def get_fitted_nns(self):
+        nns = super().get_fitted_nns()
+        
+        # duplicate obs into obs_next
+        nns['obs_next'] = nns['obs']
+        
+        # duplicate action into action_next
+        nns['action_next'] = nns['action']
+        
+        
+        nns['not_done'] = get_identity_normalizer_from_stat({'min': np.array([0], dtype=np.float32)})
+        
+        nns['reward'] = get_identity_normalizer_from_stat({'min': np.array([0], dtype=np.float32)})
+        
+        return nns
 
 class NestedBatchLoader(dict):
     """

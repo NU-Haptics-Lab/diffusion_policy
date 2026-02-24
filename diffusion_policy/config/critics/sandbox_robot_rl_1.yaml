@@ -20,13 +20,13 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox_rl_1
+run_tag: sandbox_robot_rl_1
 
 resume_tag: latest
 output_dir: /media/dexnex_ssd/models/sandbox_rl_1
 
 tasks_to_use:
-  - all # currently, 'all' is a special keyword used in the batch_loader, and is required
+  # - all # currently, 'all' is a special keyword used in the batch_loader, and is required
   - rl_replay_buffer
 
 # which obs the obs_encoder will use
@@ -68,6 +68,8 @@ clamp: false # clamp actions (and diffusion noise)
 use_online_rollout: true
 rollout_frequency: 10
 rollout_warmup_nb_steps: 100
+
+num_inference_steps: 10
 
 ###################################################
 ###################################################
@@ -188,7 +190,7 @@ replay_buffer_loader:
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
-  _target_: diffusion_policy.dataset.batch_loader.SandboxRobotBCBatchLoader
+  _target_: diffusion_policy.dataset.batch_loader.SandboxRobotRLBatchLoader
   rb_id: "default" # forces a load
   train_or_val: eval # unnecessary during inference
   use_dataloader: false # must be false during inference
@@ -223,13 +225,14 @@ session_trainer:
       num_rollouts_per_trigger: 1
       use_online_rollout: ${use_online_rollout}
       rollout_num_actions: 8
-      task_id: 0 # refer to tasks.md / task catalog
       use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 2
       only_save_successful_episodes: false
-      save_rollouts: false
+      save_rollouts: true # required for RL to work properly
       use_energy_limited_actions: false
+      which_model_to_use_for_inference: critic
+      use_ema_model: false
 
       env_maker:
         _target_: projects.sandbox.sandbox_rollout.SandboxRLRolloutEnv
@@ -257,7 +260,7 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    _target_: diffusion_policy.losses.batch_loss.CriticOnlyBatchLoss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
@@ -265,7 +268,7 @@ common_wbatch_loss:
     # children
     # for normalizing
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.SandboxRobotBCBatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.SandboxRobotRLBatchLoader
       rb_id: default # forces a load
       train_or_val: train
 
@@ -303,7 +306,7 @@ common_dataset:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
-    ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSampler
+    ep_sampler_class: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotRLEpisodeSampler
 
     # child
 
@@ -314,6 +317,7 @@ models:
   models:
     critic:
       _target_: diffusion_policy.model.bc_exploration_algorithm.BCExplorationAlgorithm # responsible for exploration
+      use_bc_explore: false # testing
 
       # children
       policy:

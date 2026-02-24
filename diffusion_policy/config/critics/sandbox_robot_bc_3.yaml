@@ -22,7 +22,7 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox3
+run_tag: sandbox_robot_bc_3
 
 resume_tag: latest
 output_dir: /media/dexnex_ssd/models/sandbox3

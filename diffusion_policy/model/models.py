@@ -18,6 +18,17 @@ class Models(nn.Module):
 
         for key in models:
             self.models[key] = models[key]
+            
+    def update(self, other):
+        """
+        add all of other's models to my models dict
+        """
+        assert(isinstance(other, Models))
+        
+        other_models = other.models
+        assert(isinstance(other_models, nn.ModuleDict))
+        
+        self.models.update(other_models) #type:ignore
         
     # def eval(self):
     #     for idx, model in self.models.items():

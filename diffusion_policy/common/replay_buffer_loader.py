@@ -42,3 +42,10 @@ class ReplayBufferLoader:
     
     def __len__(self):
         return len(self.rbs)
+    
+    def update(self, other):
+        """
+        add all of other's replay buffers to my replay buffer dict
+        """
+        assert(isinstance(other, ReplayBufferLoader))
+        self.rbs.update(other.rbs)

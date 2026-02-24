@@ -53,7 +53,6 @@ class CriticAlgorithm(nn.Module):
                  grad_norm=1.0,
                  use_target_network = True,
                  use_double_q = True,
-                 use_tree = False,
                  action_relative_to_state = False,
                  use_denoise = False,
                  ):
@@ -63,7 +62,6 @@ class CriticAlgorithm(nn.Module):
         self.grad_norm = grad_norm
         self.use_target_network = use_target_network
         self.use_double_q = use_double_q
-        self.use_tree = use_tree
         self.action_relative_to_state = action_relative_to_state
         self.use_denoise = use_denoise
 
@@ -100,8 +98,6 @@ class CriticAlgorithm(nn.Module):
     def MakeOptions(self, task_id):
         options = {}
         
-        if self.use_tree:
-            options['leaf'] = task_id
         return options
     
     def ForwardCritic(self, *args, **kwargs):
@@ -110,7 +106,7 @@ class CriticAlgorithm(nn.Module):
         else:
             return self.ema.averaged_model(*args, **kwargs)
         
-    def LossCritic(self, nbatch_dict, next_action_TEST_UNUSED, options):
+    def LossCritic(self, nbatch_dict):
         """
         We need the g.t. state, action, reward, and next_state for QL training. 
         
@@ -141,7 +137,7 @@ class CriticAlgorithm(nn.Module):
         # action = torch.squeeze_copy(action)
 
         """ Q Training """
-        current_q1, current_q2 = self.critic(state, action, options)
+        current_q1, current_q2 = self.critic(state, action)
 
         """ max-q-backup not yet integrated, Kumar et al. 2020 """
         # if self.max_q_backup:
@@ -160,12 +156,10 @@ class CriticAlgorithm(nn.Module):
             target_network = self.critic
             
         # get the next q-value, Q(s', a')
-        target_q1, target_q2 = target_network(next_state, next_action, options)
+        target_q1, target_q2 = target_network(next_state, next_action)
         
         # if using double-q learning
         if self.use_double_q:
-            # this will pose issues when q-values are negative ?
-            # actually maybe that's intended. it's a pessimistic q-value
             target_qm = torch.min(target_q1, target_q2)
         else:
             target_qm = target_q1
@@ -182,10 +176,7 @@ class CriticAlgorithm(nn.Module):
         
         # logging
         dd = {}
-        if self.use_tree:
-            dd["qval/" + self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
-        else:
-            dd["qval/" + self.get_mode_string() + ": avg q-value"] = current_q1.mean()
+        dd["qval/" + self.get_mode_string() + ": avg q-value"] = current_q1.mean()
         globals.LOGGER.log(dd)
         
         if reward.mean() > 0.0:
@@ -218,68 +209,24 @@ class CriticAlgorithm(nn.Module):
             self.critic_lr_scheduler.step()
 
         return metric
-    
-    def ActionRelativeToState(self, nbatch0, inference=False):
-        """
-        subtract the state value off the action values
-        """
-        # copy to prevent modifying the upstream object
-        nbatch = pytorch_util.dict_of_tensor_copy(nbatch0)
         
-        nobs = nbatch['obs']
-        nactions = nbatch['action']
-        
-        nb_actions = nactions.shape[-1]
-        
-        nstate = nobs['state']
-        
-        # assume the first n state values correspond to action values
-        nstate_actions = nstate[..., 0:nb_actions]
-        
-        if inference:
-            # if inferring, action = state + rel_action
-            nactions += nstate_actions
-        else:
-            # subtract off, using broadcasting in the trajectory-dimension
-            nactions -= nstate_actions
-        
-        # save in nbatch
-        nbatch['action'] = nactions
-        
-        return nbatch
-        
-    def Loss(self, nbatch_dict, new_action, next_action, task_id,
-             a0 = None, timesteps = None
-             ):
+    def loss(self, nbatch_dict):
         """
         next_action - grad-free denoised next observation using the actor
         task_id - task identifier
         a0 - grad-full diffusion policy outputs, replaces new_action
         
-        new_action should be used to compute the DQL actor loss
-        next_action should be used to compute the DQL critic loss
+        next_action should be used to compute the critic loss
         """
         dd = {}
-        if self.action_relative_to_state:
-            nbatch_dict = self.ActionRelativeToState(nbatch_dict)
-            # a0?
-        
-        options = self.MakeOptions(task_id)
-        models_to_train: list = globals.CONFIG.models_to_train #type:ignore
-        
+                
         # training the critic
-        if "critic" in models_to_train:
-            # calc loss for the critic, using (s, a, r, s') & a'
-            critic_loss = self.LossCritic(nbatch_dict, next_action, options)
-            
-            # critic logging
-            dd[self.get_mode_string() + " mode. " + task_id + ": dql_critic_loss"] = critic_loss
-        else:
-            critic_loss = None
+        # calc loss for the critic, using (s, a, r, s') & a'
+        critic_loss = self.LossCritic(nbatch_dict)
         
-        # extract the state
-        state = nbatch_dict['obs']
-        
+        # critic logging
+        dd[self.get_mode_string() + ": critic_loss"] = critic_loss
+                
         # logging
         globals.LOGGER.log(dd)
         

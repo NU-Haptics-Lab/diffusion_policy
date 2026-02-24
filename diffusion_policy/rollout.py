@@ -69,6 +69,8 @@ class Rollout:
                  use_energy_limited_actions = True,
                  task_id = 0,
                  env_maker = None,
+                 which_model_to_use_for_inference = "actor",
+                 use_ema_model = True,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -85,6 +87,9 @@ class Rollout:
         self.use_energy_limited_actions = use_energy_limited_actions
         self.task_id = task_id
         self.env_maker = env_maker
+        self.which_model_to_use_for_inference = which_model_to_use_for_inference
+        self.use_ema_model = use_ema_model
+        
 
         # refs
         self.critic = None
@@ -102,9 +107,11 @@ class Rollout:
             # setup the evaluator
             # get the model
             if True:
-                actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
+                policy = globals.MODELS[self.which_model_to_use_for_inference] #type:ignore
                 # ema or regular model?
-                policy = actor.get_ema_model()
+                
+                if self.use_ema_model:
+                    policy = policy.get_ema_model()
             else:
                 policy = diffusion_policy.model.res_actor.ResInference()
             

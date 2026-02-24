@@ -106,6 +106,10 @@ from avatar_drake_sim.sims.sandbox.classes.run_diffusion_policy import (
 )
 
 
+from diffusers.schedulers.scheduling_ddim import (
+    DDIMScheduler
+)
+
 # the max allowable nb joints
 NUM_ACTIONS = MaxParams().max_nb_joint_pos
 
@@ -121,25 +125,36 @@ class BCExplorationAlgorithm(nn.Module):
                  exploration_rate_policy = 0.4,
                  exploration_rate_metric = 0.0,
                  use_min_dist_explore = False, # the bc policy now does this
+                 use_bc_explore = True,
                  ):
         super().__init__()
         self.policy = policy
         self.use_min_dist_explore = use_min_dist_explore
+        self.use_bc_explore = use_bc_explore
+        
+        # backwards compat:
+        self.noise_scheduler = DDIMScheduler()
         
         # my B.C. policy
         # self.diffusion_bc_runner = DiffusionPolicyRunner()
         # self.diffusion_bc_runner = SandboxRobotBCPolicyRunner()
-        self.diffusion_bc_runner = SandboxRobotImplicitBCPolicyRunner()
+        if self.use_bc_explore:
+            self.diffusion_bc_runner = SandboxRobotImplicitBCPolicyRunner()
         
-        # save in our loaded ML runners
-        LOADED_ML_RUNNERS['diffusion_policy_runner'] = self.diffusion_bc_runner
+            # save in our loaded ML runners
+            LOADED_ML_RUNNERS['diffusion_policy_runner'] = self.diffusion_bc_runner
         
         # my exploration schedulers
         self.exploration_policy = SimpleConstantScheduler(value = 1.0)
         self.exploration_random = SimpleExponentialScheduler(initial_value = 0.1, decay_rate=0.99995)
         self.exploration_BC = SimpleExponentialScheduler(initial_value = 4.0, decay_rate = 0.99995)
         
-        self.exploration_chooser = MultipleSchedulersSampler([self.exploration_random, self.exploration_policy, self.exploration_BC])
+        if self.use_bc_explore:
+            explorers = [self.exploration_random, self.exploration_policy, self.exploration_BC]
+        else:
+            explorers = [self.exploration_random, self.exploration_policy]
+        
+        self.exploration_chooser = MultipleSchedulersSampler(explorers)
         
         # my I/O noise schedulers -- inputs: max noise mag, max nb training steps
         self.noise_action_sch = SimpleSigmoidLowToHighScheduler(0.1, 100000) # noise in torque
@@ -148,6 +163,19 @@ class BCExplorationAlgorithm(nn.Module):
         self.optimal_metric_link_name = "hand_palm_link"
         
         self.setup_gofa_drake_plant()
+        
+    def reset(self):
+        self.policy.reset()
+        
+    def get_model(self):
+        return self.policy.get_model()
+    
+    def step(self):
+        self.policy.step()
+        
+        
+    def loss(self, nbatch, rb_id=None):
+        return self.policy.loss(nbatch)
         
     def setup_gofa_drake_plant(self):
         """

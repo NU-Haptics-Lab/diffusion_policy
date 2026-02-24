@@ -848,6 +848,58 @@ class ResSAC(BatchLoss):
         
         return loss, action_mse_error
 
+class CriticOnlyBatchLoss(BatchLoss):
+    def __init__(self,
+            batch_loader: BatchLoader,
+            eta: float = 0.0, # weight of the critic loss
+            use_bc_loss = True,
+            freqs = {}, # training frequencies, units: steps
+        ):
+        self.batch_loader = batch_loader
+        self.eta = eta
+        self.use_bc_loss = use_bc_loss
+        self.freqs = freqs
+                
+        # get the rb_id
+        self.rb_id = self.batch_loader.rb_id
+
+        # my members
+        self.current_batch: dict = None #type:ignore
+        
+        # get a handle to the critic
+        self.critic = globals.MODELS["critic"] #type:ignore
+
+    def compute_loss(self):
+        """
+        compute loss for one batch.
+        """
+        # get the batch from the batch loader
+        nbatch = next(self.batch_loader)
+        self.current_batch = nbatch
+
+        # get the DQL losses
+        critic_loss = self.critic.loss(nbatch, self.rb_id)
+        
+        losses = {
+            'critic': critic_loss
+        }
+        
+        # we're done
+        return losses
+    
+    def eval(self):
+        losses = self.compute_loss()
+        
+        assert(losses is not None)
+
+        loss = np.array(0.0)
+        
+        # get the action mse error
+        action_mse_error = np.array(0.0)
+        
+        # right now eval is hard-coded to expect two tensors on cpu
+        return loss, action_mse_error
+
     
 class WeightedBatchLoss:
     """
@@ -874,7 +926,9 @@ class WeightedBatchLoss:
         # losses can now be a nested dict
         # hack
         wloss = {}
-        wloss['actor'] = dict_apply(losses['actor'], lambda x: self.weight * x)
+        
+        if 'actor' in losses:
+            wloss['actor'] = dict_apply(losses['actor'], lambda x: self.weight * x)
         
         if 'critic' in losses:
             wloss['critic'] = self.weight_loss(losses['critic'])

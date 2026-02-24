@@ -32,7 +32,7 @@ def CalcSumLoss(w_batch_losses):
     # iterate over the batch losses and get the total loss
     for key, batch_loss in w_batch_losses.items():
         # task toggle check
-        if key not in globals.CONFIG.tasks_to_use:
+        if key not in globals.CONFIG.tasks_to_use: #type:ignore
             continue
         
         # dict

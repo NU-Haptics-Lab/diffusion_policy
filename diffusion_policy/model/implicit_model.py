@@ -93,7 +93,7 @@ class ImplicitPolicy(nn.Module):
         
         
 
-        print_nb_params(self.model, "Diffusion params")
+        print_nb_params(self.model, "Dense params")
         print_nb_params(self.obs_encoder, "Vision params")
 
     def forward_obs_encoder(self, *args, **kwargs):
@@ -213,14 +213,18 @@ class ImplicitAlgorithm(BaseImagePolicy):
 
 
     
-    def forward(self, nbatch):
+    def forward(self, state_dict, action, options = None):
+        this_nobs = state_dict
+        
+        batch_size = next(iter(this_nobs.values())).shape[0]
+        
         # get encoded obs
         nobs_features = self.policy.forward_obs_encoder(this_nobs)
         
         global_cond = nobs_features.reshape(batch_size, -1)
 
         # predict
-        x = self.policy.forward(noisy_trajectory, timesteps, global_cond=global_cond)
+        x = self.policy.forward(action, global_cond=global_cond)
 
         return x
 
