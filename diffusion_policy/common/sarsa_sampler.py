@@ -515,6 +515,13 @@ class EpisodeSampler:
             
         return sample
     
+    def get_random_weighted_obs_sample(self, weights):
+        # draw weighted random index
+        idx = np.random.choice(len(self), p=weights)
+        
+        sample = self.get_obs_sample(idx)
+        return sample
+    
     def get_key_sample(self, key, ep_idx, flatten = False):
         """
         Get sequence by key
@@ -842,6 +849,15 @@ class DatasetSampler:
 
         # we're done
         return sample
+    
+    def get_episode(self, ep_idx) -> EpisodeSampler:
+        ep = list(self.get_ep_list())[ep_idx]
+        return ep
+    
+    def get_random_episode(self) -> EpisodeSampler:
+        ep_idx = np.random.randint(len(self.get_ep_list()))
+        ep = self.get_episode(ep_idx)
+        return ep
 
     def __len__(self):
         count = 0

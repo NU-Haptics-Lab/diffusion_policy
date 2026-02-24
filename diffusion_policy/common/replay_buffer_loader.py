@@ -8,7 +8,7 @@ class ReplayBufferLoader:
     def __init__(self,
         rb_paths: dict,
         do_loading: bool = True,
-        modes = {},
+        modes = {}, # read/write/all: 'r', 'w', 'a'
             ):
         self.rb_paths = rb_paths
         self.modes = modes
@@ -22,6 +22,9 @@ class ReplayBufferLoader:
             # this will load directly from disk, and not into RAM. There's no noticeable slowdown. You really don't want to load into RAM, so that we don't save the entire dataset into each checkpoint during pickling
 
             if self.do_loading:
+                if key not in self.modes:
+                    raise ValueError("mode not specified for replay buffer {}".format(key))
+                
                 rb = ReplayBuffer.create_from_path(val, mode=self.modes[key])
                 self.rbs[key] = rb
                 
