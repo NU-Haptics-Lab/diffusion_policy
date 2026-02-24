@@ -169,7 +169,7 @@ class SimpleInference:
             nobs_torch = self.norm_gpu_obs(obs_dict_np)
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            naction_gpu, naction_rel_gpu, all_nactions_gpu = self.policy.infer(nobs_torch)
+            naction_gpu, all_nactions_gpu = self.policy.infer(nobs_torch)
                         
             future_actions = self.unnorm_cpu_action(naction_gpu)
             # test = self.unnorm_cpu_action(naction_rel_gpu)

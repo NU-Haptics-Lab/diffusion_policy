@@ -228,8 +228,10 @@ session_trainer:
       use_critic_preferred_actions: false
       use_critic_preferred_actions_early_exit: false
       critic_preferred_actions_nb: 2
+      use_filter_successful_and_failed_episodes: false
       only_save_successful_episodes: false
       save_rollouts: true # required for RL to work properly
+
       use_energy_limited_actions: false
       which_model_to_use_for_inference: critic
       use_ema_model: false
@@ -238,7 +240,7 @@ session_trainer:
         _target_: projects.sandbox.sandbox_rollout.SandboxRLRolloutEnv
 
       evaluator:
-        _target_: evaluation.eval.SimpleInference
+        _target_: diffusion_policy.evaluation.eval.SimpleInference
 
         policy: null
 
@@ -340,8 +342,8 @@ models:
           qlmodel:
             _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithm # the actual critic alg
 
-            num_inference_steps: 50
-            step_size: 2e-2
+            num_inference_steps: ${num_inference_steps}
+            step_size: 1e-1
 
             policy:
               _target_: diffusion_policy.model.implicit_model.ImplicitPolicy # the actual critic NN architecture

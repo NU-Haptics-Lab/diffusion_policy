@@ -77,12 +77,12 @@ class ImplicitPolicy(nn.Module):
 
         # parse shape_meta
         assert len(self.action_shape) == 1
-        self.action_dim_0 = action_shape[0]
+        self.action_dim = action_shape[0]
         obs_feature_dim = self.obs_encoder.output_shape()[0]
         global_cond_dim = obs_feature_dim * n_obs_steps
 
         self.model = ConditionalSlashnet1D(
-                        input_dim=self.action_dim_0,
+                        input_dim=self.action_dim,
                         global_cond_dim=global_cond_dim,
                         down_dims=down_dims,
                         kernel_size=kernel_size,
@@ -152,10 +152,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return self.inference(nobs)
     
     # alias
-    def infer(self, nobs_dict: dict, task_id=None, noise_scheduler=None):
+    def infer(self, nobs_dict: dict, action = None, task_id=None, noise_scheduler=None):
         # return 3 things for backwards compat
         action = self.inference(nobs_dict)
-        return action, None, action
+        return action
     
     @torch.enable_grad()
     def inference(self, nobs: dict):

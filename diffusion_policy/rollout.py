@@ -71,6 +71,7 @@ class Rollout:
                  env_maker = None,
                  which_model_to_use_for_inference = "actor",
                  use_ema_model = True,
+                 use_filter_successful_and_failed_episodes = True,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -89,12 +90,11 @@ class Rollout:
         self.env_maker = env_maker
         self.which_model_to_use_for_inference = which_model_to_use_for_inference
         self.use_ema_model = use_ema_model
+        self.use_filter_successful_and_failed_episodes = use_filter_successful_and_failed_episodes
         
 
         # refs
         self.critic = None
-
-        self.setup()
         
     def setup(self):
         if self.use_online_rollout:
@@ -558,14 +558,20 @@ class Rollout:
         
     def get_rb(self):
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] # type:ignore
+        
+        assert(rb is not None)
         return rb
         
     def get_success_rb(self):
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER["success"] # type:ignore
+        
+        assert(rb is not None)
         return rb
         
     def get_failure_rb(self):
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER["failure"] # type:ignore
+        
+        assert(rb is not None)
         return rb
     
     def save_episode_to_rb(self, episode, rb):
@@ -578,9 +584,9 @@ class Rollout:
         
         data_dict['task_id'] = np.float32(self.task_id) * np.ones([ep_len])
         
+        assert(isinstance(rb, ReplayBuffer))
         # use the replay buffer to write to disk
         rb.add_episode(data_dict, compressors='disk')
-            
             
     def save_episode(self, episode, successful=None):
         ep_len = len(episode)
@@ -589,15 +595,21 @@ class Rollout:
                 rb = self.get_rb()
                 rb_id = self.rb_id
                 
-            if successful:
-                rb = self.get_success_rb()
-                rb_id = "success"
-                print("save success")
-                
+            # whether to separate out episodes into success and failure buffers
+            if self.use_filter_successful_and_failed_episodes:
+                if successful:
+                    rb = self.get_success_rb()
+                    rb_id = "success"
+                    print("save success")
+                    
+                else:
+                    rb = self.get_failure_rb()
+                    rb_id = "failure"
+                    print("save failure")
+                    
             else:
-                rb = self.get_failure_rb()
-                rb_id = "failure"
-                print("save failure")
+                rb = self.get_rb()
+                rb_id = self.rb_id
                 
             self.save_episode_to_rb(episode, rb)
             

@@ -124,7 +124,7 @@ GLOBALS_DICT: dict[str, GlobalConfig] = {}
 ########################################
 ########################################
 
-def load_global_config(cfg: DictConfig):
+def load_global_config(cfg: DictConfig, cfg_key):
     """
     loads the global config locally, does not save to the current global vars
     """
@@ -187,10 +187,6 @@ def load_global_config(cfg: DictConfig):
         SESSION_TRAINER: SessionTrainer = hydra.utils.instantiate(cfg.session_trainer) # type: ignore
     else:
         SESSION_TRAINER = None
-    
-    # if resuming, load
-    if CHECKPOINTER:
-        CHECKPOINTER.load()
 
     # make the struct
     globals_struct = GlobalConfig(
@@ -203,18 +199,23 @@ def load_global_config(cfg: DictConfig):
         CHECKPOINTER            =CHECKPOINTER,
         SESSION_TRAINER         =SESSION_TRAINER
     )
-
-    return globals_struct
-    
-def load_global_config_from_path(cfg_path):
-    cfg = OmegaConf.load(cfg_path)
-    return load_global_config(cfg) #type:ignore
-    
-def load_global_config_from_path_and_save_to_globals(cfg_path, cfg_key):
-    global GLOBALS_DICT
-    
-    globals_struct = load_global_config_from_path(cfg_path)
+        
+    # must now save
     GLOBALS_DICT[cfg_key] = globals_struct
+    
+    # if resuming, load
+    if CHECKPOINTER:
+        CHECKPOINTER.load()
+
+    if SESSION_TRAINER:        
+        SESSION_TRAINER.epoch_trainer.rollouts.setup()
+    
+def load_global_config_from_path(cfg_path, cfg_key):
+    cfg = OmegaConf.load(cfg_path)
+    load_global_config(cfg, cfg_key)
+    
+def load_global_config_from_path_and_save_to_globals(cfg_path, cfg_key):    
+    load_global_config_from_path(cfg_path, cfg_key)
 
 def load_config_to_global(config_key):
     global CURRENT_CONFIG_KEY, CONFIG, REPLAY_BUFFER_LOADER, DATALOADERS, LOGGER, CHECKPOINTER, DEFAULT_BATCH_LOADER, MODELS, SESSION_TRAINER
@@ -245,3 +246,20 @@ def use_config(cfg_key):
     # revert to backup config
     finally:
         load_config_to_global(backup)
+        
+def save_current_config_to_globals(cfg_key):
+    global CURRENT_CONFIG_KEY, CONFIG, REPLAY_BUFFER_LOADER, DATALOADERS, LOGGER, CHECKPOINTER, DEFAULT_BATCH_LOADER, MODELS, SESSION_TRAINER
+    
+    globals_struct = GlobalConfig(
+        CONFIG=CONFIG,
+        REPLAY_BUFFER_LOADER    =REPLAY_BUFFER_LOADER,
+        DATALOADERS             =DATALOADERS,
+        LOGGER                  =LOGGER,
+        DEFAULT_BATCH_LOADER    =DEFAULT_BATCH_LOADER,
+        MODELS                  =MODELS,
+        CHECKPOINTER            =CHECKPOINTER,
+        SESSION_TRAINER         =SESSION_TRAINER
+    )
+    
+    GLOBALS_DICT[cfg_key] = globals_struct
+    CURRENT_CONFIG_KEY = cfg_key

@@ -28,6 +28,8 @@ from diffusion_policy import utils
 
 import diffusion_policy.globals as globals
 
+from diffusion_policy.evaluation.eval import SimpleInference
+
     
 class SandboxRLRolloutEnv(RolloutEnv):
     def setup(self):
@@ -54,7 +56,8 @@ class SandboxRollout(Rollout):
         self.obs = self.convert_drake_obs(obs)
         
         # save to evaluator
-        self.evaluator.save_data(obs)
+        assert(isinstance(self.evaluator, SimpleInference))
+        self.evaluator.save_obs(obs)
     
     def convert_action(self, action_dict):
         """
@@ -159,31 +162,6 @@ class SandboxRollout(Rollout):
                 break
             
         return samples, new_obs, total_reward, done, infos, total_jerk
-    
-    def prep_action_for_stepping(self, actions):
-        """
-        for mage hand, we need to convert from a dict of traj to a list of dicts
-        """
-        assert(isinstance(actions, dict))
-        
-        # dict apply x.numpy()
-        actions_np = pytorch_util.dict_to_numpy(actions)
-        
-        ## zip each waypoint in the action trajectory into a list of actions
-        
-        # assumes the first dim is the batch dim and the second dim is the traj dim
-        assert(len(actions_np[list(actions_np.keys())[0]].shape) == 3)
-        num_waypoints = actions_np[list(actions_np.keys())[0]].shape[1]
-        
-        # Reconstruct into a list of dictionaries
-        waypoint_actions = [
-            {key: val[:, i, :] for key, val in actions_np.items()}
-            for i in range(num_waypoints)
-        ]
-        
-        return waypoint_actions
-    
-    
     
     def save_samples(self, actions, rewards, samples):
         """

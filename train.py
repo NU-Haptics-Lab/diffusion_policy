@@ -108,7 +108,8 @@ def main(cfg: DictConfig):
         
         # testing rollouts
         globals.CONFIG.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
-        globals.CONFIG.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1 # type:ignore
+        globals.CONFIG.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
+        globals.CONFIG.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
         
         # # no rollouts
         # globals.CONFIG.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore
@@ -152,8 +153,16 @@ def main(cfg: DictConfig):
     globals.SESSION_TRAINER: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer) # type: ignore
     print("Session Trainer spun.")
     
+    # save our config
+    globals.save_current_config_to_globals("train")
+    
+    ####### can only set stuff up after I've saved the current config
+    
     # if resuming, load
     globals.CHECKPOINTER.load()
+    
+    # rollouts setup
+    globals.SESSION_TRAINER.epoch_trainer.rollouts.setup()
 
     # run it
     print("Begin running.")

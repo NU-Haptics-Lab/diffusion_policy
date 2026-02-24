@@ -305,10 +305,8 @@ class DoubleCritic(nn.Module, BaseCritic):
             
         return q1, q2
     
-    def infer(self, state_dict, action, options: dict | None = None):
-        q1 = self.q1_model(state_dict, action, options)
-            
-        return q1
+    def infer(self, state_dict, action = None, options: dict | None = None):
+        return self.q1_model.infer(state_dict, action, options)
                
     def q1(self, state_dict, action):
         return self.q1_model(state_dict, action)

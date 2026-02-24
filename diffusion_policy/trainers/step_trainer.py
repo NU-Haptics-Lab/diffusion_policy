@@ -137,6 +137,7 @@ class StepTrainer:
         
 
     def train(self):
+        globals.MODELS.reset() 
         # initialize a zero loss variable
         total_losses = CalcSumLoss(self.w_batch_losses)
         

@@ -256,3 +256,6 @@ class CriticAlgorithm(nn.Module):
             return self.critic_target
         else:
             return self.critic
+        
+    def inference(self, nobs):
+        return self.ema.averaged_model.infer(nobs)
