@@ -18,11 +18,16 @@ from diffusion_policy.common.logging import Logging
 from diffusion_policy.dataset.train_and_val import DataLoaders
 from diffusion_policy.dataset.batch_loader import BatchLoader
 from diffusion_policy.trainers.session_trainer import SessionTrainer
+"""
+the current config key
+"""
+CURRENT_CONFIG_KEY = ""
+
 
 """
 Global config access
 """
-CONFIG: OmegaConf # backwards compat
+CONFIG: DictConfig # backwards compat
 
 """
 Contains replay buffers for each dataset specified
@@ -57,7 +62,7 @@ DEFAULT_BATCH_LOADER: BatchLoader
 
 SESSION_TRAINER: SessionTrainer
 
-class Globals:
+class GlobalConfig:
     """
     Global config access
     """
@@ -95,4 +100,4 @@ class Globals:
         self.EPOCH = EPOCH
         self.STEP = STEP
         
-GLOBALS_DICT = {}
+GLOBALS_DICT: dict[str, GlobalConfig] = {}

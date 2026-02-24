@@ -26,7 +26,7 @@ sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
 import hydra
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, DictConfig
 import pathlib
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 import click
@@ -39,6 +39,11 @@ from diffusion_policy.trainers.session_trainer import SessionTrainer
 # to combat dataloader deadlock
 import torch
 import torch.multiprocessing
+
+from dexnex_intelligence.all import (
+    load_config_to_global,
+)
+
 
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -57,7 +62,7 @@ def Shutdown():
     config_path=str(pathlib.Path(__file__).parent.joinpath(
         'diffusion_policy','config')),
 )
-def main(cfg: OmegaConf):
+def main(cfg: DictConfig):
     # save config into the global config
     globals.CONFIG = cfg
     
