@@ -43,6 +43,10 @@ from diffusers.schedulers.scheduling_ddpm import (
     DDPMScheduler
 )
 
+from diffusers.schedulers.scheduling_ddim import (
+    DDIMScheduler,
+)
+
 import diffusion_policy.globals as globals
 
 from torch._functorch.apis import vmap, grad
@@ -157,8 +161,11 @@ class ImplicitAlgorithm(BaseImagePolicy):
         action = self.inference(nobs_dict)
         return action
     
-    @torch.enable_grad()
+    @torch.no_grad()
     def inference(self, nobs: dict):
+        """
+        use torch L-BFGS
+        """
         To = 1
         value = next(iter(nobs.values()))
         B = value.shape[0] # batch
@@ -166,7 +173,6 @@ class ImplicitAlgorithm(BaseImagePolicy):
         Da = self.policy.action_dim # action dimension
         device = self.device
         dtype = self.dtype
-        step_size = self.step_size # might come from scheduler instead
         timestep = 0.0
 
         # reshape obs: B, T, ... to B*T ...
@@ -180,21 +186,22 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # dummy trajectory
         dummy_trajectory = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
 
-        # randomly initialize a
+        # randomly initialize a traj
         trajectory = self.make_noise(dummy_trajectory)
         trajectory.requires_grad = True
 
-        # do gradient ascent
-        for _ in range(self.num_inference_steps):
-        # for _ in tqdm(range(self.num_inference_steps), desc="Inference steps"):
-            # forward & backward
-            a_grad = self.per_sample_backward(trajectory, timestep, global_cond)
+        optimizer = torch.optim.LBFGS([trajectory], lr=0.1, max_iter=10, history_size=5)
 
-            # grad-free update step, to make a new trajectory object
-            with torch.no_grad():
-                assert(a_grad.shape == trajectory.shape)
-                trajectory = trajectory + step_size * a_grad
+        def closure():
+            optimizer.zero_grad()
+            qval = self.policy(trajectory, timestep, global_cond=global_cond)
+            loss = -qval.mean()
+            loss.backward()
+            return loss
             
+        # only need to call step once    
+        optimizer.step(closure)
+
         return trajectory
 
         
