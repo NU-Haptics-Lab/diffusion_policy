@@ -162,7 +162,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return action
     
     @torch.no_grad()
-    def inference(self, nobs: dict):
+    def inference(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
         """
@@ -184,18 +184,21 @@ class ImplicitAlgorithm(BaseImagePolicy):
         global_cond = nobs_features.reshape(B, -1)
 
         # dummy trajectory
-        dummy_trajectory = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
+        if warm_start_trajectory is None:
+            dummy_trajectory = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
 
-        # randomly initialize a traj
-        trajectory = self.make_noise(dummy_trajectory)
+            # randomly initialize a traj
+            trajectory = self.make_noise(dummy_trajectory)
+        else:
+            trajectory = warm_start_trajectory.clone().detach().to(device).to(dtype)
+
         trajectory.requires_grad = True
-
         optimizer = torch.optim.LBFGS([trajectory], lr=0.1, max_iter=10, history_size=5)
 
         def closure():
             optimizer.zero_grad()
             qval = self.policy(trajectory, timestep, global_cond=global_cond)
-            loss = -qval.mean()
+            loss = -qval
             loss.backward()
             return loss
             

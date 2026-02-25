@@ -319,7 +319,7 @@ models:
   models:
     critic:
       _target_: diffusion_policy.model.bc_exploration_algorithm.BCExplorationAlgorithm # responsible for exploration
-      use_bc_explore: false # testing
+      use_bc_explore: true
 
       # children
       policy:
