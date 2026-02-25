@@ -97,20 +97,22 @@ class ObsEncoderMaker():
         self.lowdims = lowdims
         self.ch = ch
         self.cw = cw
+        
+    def setup(self):
             
         # confirm that all obs keys are accounted for
-        for key in obs_keys_to_use:
-            assert(key in rgbs or key in lowdims)
+        for key in self.obs_keys_to_use:
+            assert(key in self.rgbs or key in self.lowdims)
         
         self.obs_encoder = ObservationEncoder(feature_activation=torch.nn.ReLU)
 
         # rgb image inputs
-        for key, val in rgbs.items():
+        for key, val in self.rgbs.items():
             # check with global control
             if key not in globals.CONFIG.obs_keys_to_use:
                 continue
             
-            image_randomizer, net = make_ob(val.shape, ch, cw)
+            image_randomizer, net = make_ob(val.shape, self.ch, self.cw)
 
             # register the network for processing the modality
             self.obs_encoder.register_obs_key(
@@ -121,7 +123,7 @@ class ObsEncoderMaker():
             )
             
         # flat inputs aka lowdim or low_dim inputs
-        for key in lowdims:
+        for key in self.lowdims:
             shape = globals.CONFIG.shape_meta[key].shape
             
             # check with global control
@@ -150,6 +152,8 @@ class ObsEncoderMaker():
             ch=self.ch,
             cw=self.cw
         )
+        other.setup()
+        
         return other
     
 class WeightedFeature:

@@ -325,7 +325,7 @@ models:
           step_size: 1e-1
 
           policy:
-            _target_: diffusion_policy.model.implicit_behavior_cloning.ImplicitBehaviorCloningPolicy
+            _target_: diffusion_policy.model.implicit_model.ImplicitPolicy
             action_shape: ${shape_meta.action.shape}
             obs_encoder_maker: ${common_obs_encoder}
             n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use

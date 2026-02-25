@@ -125,6 +125,9 @@ class TrainAndVal:
         self.max_train_episodes = max_train_episodes
         self.whether_to_use = whether_to_use
         self.use_weighted_dataloader = use_weighted_dataloader
+        
+    def setup(self):
+        self.sampler.setup()
 
         # only init if we're being trained off of
         tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
@@ -331,6 +334,10 @@ class DataLoaders:
                  d: dict[int, TrainAndVal]
                  ) -> None:
         self.d = d
+        
+    def setup(self):
+        for key, d in self.d.items():
+            d.setup()
         
     def __getitem__(self, key):
         return self.d[key]

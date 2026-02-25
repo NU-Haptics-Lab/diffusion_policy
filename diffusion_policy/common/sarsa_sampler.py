@@ -672,6 +672,10 @@ class DatasetSampler:
         # convert text to class object using hydra
         self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class)
         
+    def setup(self):
+        """
+        must be called after all nodes are made
+        """
         # refs
         self.replay_buffer: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] #type:ignore
         

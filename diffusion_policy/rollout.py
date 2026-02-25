@@ -97,6 +97,9 @@ class Rollout:
         self.critic = None
         
     def setup(self):
+        self.evaluator.setup()
+        
+        
         if self.use_online_rollout:
             if self.env_maker is None:
                 env_maker = ManipAnythingRolloutEnv()

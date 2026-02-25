@@ -63,7 +63,7 @@ from tqdm import (
     tqdm
 )
 
-from dexnex_intelligence.all import (
+from diffusion_policy.model.implicit_model import (
     ImplicitPolicy,
     ImplicitAlgorithm
 )
@@ -74,7 +74,7 @@ class ImplicitBehaviorCloningAlgorithm(ImplicitAlgorithm):
             num_inference_steps = 8,
             step_size = 1e-1,
     ):
-        super().__init__()
+        super().__init__(policy, num_inference_steps, step_size)
         
         self.num_inference_steps = num_inference_steps
         self.step_size = step_size
@@ -120,8 +120,6 @@ class ImplicitBehaviorCloningAlgorithm(ImplicitAlgorithm):
     
     # alias
     def compute_loss(self, nbatch):
-        return self.forward(nbatch)
-    def forward(self, nbatch):
         """
         no impainting, no local conds, no task id, linear scheduling
         """

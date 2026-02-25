@@ -15,6 +15,8 @@ class ReplayBufferLoader:
         
         # setting for actually loading the replay buffer or just creating the structure. Used during inference.
         self.do_loading = do_loading
+        
+    def setup(self):
 
         # load replay buffers
         self.rbs = {}

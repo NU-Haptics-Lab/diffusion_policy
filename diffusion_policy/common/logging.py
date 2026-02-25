@@ -23,6 +23,8 @@ class Logging:
         self.output_dir = get_output_dir(output_dir)
         self.wandb_cfg = wandb_cfg
         
+    def setup(self):
+        
         self.reset()
         
         if self.use_wandb:

@@ -31,8 +31,12 @@ class EpochValidator(Epoch):
         self.val_every = val_every
         self.w_batch_losses = w_batch_losses
         
+    def setup(self):
         # handle to node
         self.models = globals.MODELS
+        
+        for k, v in self.w_batch_losses.items():
+            v.setup()
 
     @torch.no_grad()
     def validate(self):
@@ -94,6 +98,12 @@ class EpochTrainer(Epoch):
         self.step_trainer = step_trainer
         self.nb_batches = nb_batches
         self.rollouts = rollouts
+        
+    def setup(self):
+        self.step_trainer.setup()
+        
+        if self.rollouts is not None:
+            self.rollouts.setup()
 
     def train(self):
         """

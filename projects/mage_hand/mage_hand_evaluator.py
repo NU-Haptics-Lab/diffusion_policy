@@ -62,6 +62,12 @@ class MageHandInference:
         self.policy = policy
         self.debug = debug
         self.analytics = analytics
+        
+        
+    def setup(self):
+        """
+        must be called after all nodes are made
+        """
         self.task_id = torch.tensor([[task_id]], device=globals.CONFIG.device) # 2d #type:ignore
         
         # save a handle

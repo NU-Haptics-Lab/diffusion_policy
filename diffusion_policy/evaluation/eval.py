@@ -64,6 +64,14 @@ class SimpleInference:
         # my members
         self.current_obs: dict = None #type:ignore
         
+        
+    def setup(self):
+        if self.policy is not None:
+            self.policy.setup()
+        
+        """
+        must be called after all nodes are made
+        """
         # save a handle
         self.batch_loader = globals.DEFAULT_BATCH_LOADER
         
@@ -84,7 +92,6 @@ class SimpleInference:
     def set_policy(self, policy):
         self.policy = policy
         self.original_policy_noise_scheduler = self.policy.noise_scheduler
-        
     
     def save_obs(self,
             obs,
@@ -208,7 +215,13 @@ class Inference:
         self.policy = policy
         self.debug = debug
         self.analytics = analytics
+        
+    def setup(self):
+        """
+        must be called after all nodes are made
+        """
         self.task_id = torch.tensor([[task_id]], device=globals.CONFIG.device) # 2d #type:ignore
+        
         
         # save a handle
         self.batch_loader = globals.DEFAULT_BATCH_LOADER
@@ -398,6 +411,9 @@ class EvalMixin:
     # generic
     def save_data(self, *args, **kwargs):
         raise NotImplementedError
+    
+    def setup(self):
+        pass
 
 class EvalDexNex(Node, EvalMixin, Inference):
     """

@@ -76,23 +76,28 @@ class ImplicitPolicy(nn.Module):
         self.cond_predict_scale = cond_predict_scale
         self.num_mid_module_repeats = num_mid_module_repeats
 
+    def setup(self):
+        # setup all my children
+        self.obs_encoder_maker.setup()
+        
         # my members
         self.obs_encoder = self.obs_encoder_maker.get()
+        assert(self.obs_encoder is not None)
 
         # parse shape_meta
         assert len(self.action_shape) == 1
-        self.action_dim = action_shape[0]
+        self.action_dim = self.action_shape[0]
         obs_feature_dim = self.obs_encoder.output_shape()[0]
-        global_cond_dim = obs_feature_dim * n_obs_steps
+        global_cond_dim = obs_feature_dim * self.n_obs_steps
 
         self.model = ConditionalSlashnet1D(
                         input_dim=self.action_dim,
                         global_cond_dim=global_cond_dim,
-                        down_dims=down_dims,
-                        kernel_size=kernel_size,
-                        n_groups=n_groups,
-                        cond_predict_scale=cond_predict_scale,
-                        num_mid_module_repeats=num_mid_module_repeats,
+                        down_dims=self.down_dims,
+                        kernel_size=self.kernel_size,
+                        n_groups=self.n_groups,
+                        cond_predict_scale=self.cond_predict_scale,
+                        num_mid_module_repeats=self.num_mid_module_repeats,
                     )
         
         
@@ -117,6 +122,7 @@ class ImplicitPolicy(nn.Module):
             cond_predict_scale=self.cond_predict_scale,
             num_mid_module_repeats=self.num_mid_module_repeats,
         )
+        other.setup()
         
         return other
 
@@ -132,12 +138,26 @@ class ImplicitAlgorithm(BaseImagePolicy):
         self.step_size = step_size
 
         self.policy = policy
+        
+        
+    def setup(self):
+        self.policy.setup()
+        
         self.noise_scheduler = DDPMScheduler()
 
 
         # save from global config
         self.action_rel_indices = globals.CONFIG.action_rel_indices #type:ignore
         self.horizon = len(self.action_rel_indices)
+        
+        T = self.horizon
+        Da = self.policy.action_dim
+        device = globals.CONFIG.device # type: ignore
+        B = globals.CONFIG.batch_size # type: ignore
+        
+        # Initialize these once in your class __init__
+        
+        self.compiled_policy = torch.compile(self.policy, mode="reduce-overhead")
         
     def per_sample_backward(self, btrajectory, timestep, bglobal_cond):
         def fcn(trajectory, global_cond):
@@ -161,11 +181,12 @@ class ImplicitAlgorithm(BaseImagePolicy):
         action = self.inference(nobs_dict)
         return action
     
-    @torch.no_grad()
+    # @torch.no_grad() need grads for lbfgs
     def inference(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
         """
+        self.policy.eval()
         To = 1
         value = next(iter(nobs.values()))
         B = value.shape[0] # batch
@@ -179,9 +200,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
         this_nobs = dict_apply(nobs, 
             lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
 
-        # get encoded obs
-        nobs_features = self.policy.forward_obs_encoder(this_nobs)
-        global_cond = nobs_features.reshape(B, -1)
+        # get encoded obs, no grad to save time
+        with torch.no_grad():
+            nobs_features = self.policy.forward_obs_encoder(this_nobs)
+            global_cond = nobs_features.reshape(B, -1)
 
         # dummy trajectory
         if warm_start_trajectory is None:
@@ -192,27 +214,41 @@ class ImplicitAlgorithm(BaseImagePolicy):
         else:
             trajectory = warm_start_trajectory.clone().detach().to(device).to(dtype)
 
-        trajectory.requires_grad = True
-        optimizer = torch.optim.LBFGS([trajectory], 
-                                        lr=0.1, 
-                                        max_iter=10, 
-                                        history_size=5,
-                                        tolerance_grad=1e-4, 
-                                        tolerance_change=1e-6,
-                                        line_search_fn="strong_wolfe",
+        original_trajectory = trajectory.clone().detach()
+        
+        
+        self.trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
+        self.optimizer = torch.optim.LBFGS([self.trajectory], 
+                                        lr=1.0, # designed to work with unit step size
+                                        max_iter=5, 
+                                        history_size=3,
+                                        tolerance_grad=1e-3, 
+                                        tolerance_change=1e-4,
+                                        line_search_fn=None, # faster than strong wolfe
                     )
+        
+        self.trajectory.copy_(trajectory)
 
         def closure():
-            optimizer.zero_grad()
-            qval = self.policy(trajectory, timestep, global_cond=global_cond)
-            loss = -qval
+            self.optimizer.zero_grad()
+            qval = self.compiled_policy(self.trajectory, timestep, global_cond=global_cond)
+            loss = -qval.mean()
             loss.backward()
             return loss
+        
+        self.trajectory.requires_grad_(True)
             
-        # only need to call step once    
-        optimizer.step(closure)
+        # speed up .backward() by not calculating gradients for the policy parameters
+        self.policy.requires_grad_(False)
+        # just to make sure
+        with torch.enable_grad():
+            # only need to call step once    
+            self.optimizer.step(closure)
+        # restore grad for policy parameters
+        self.policy.requires_grad_(True)
 
-        return trajectory
+        self.policy.train()
+        return self.trajectory.detach().clone()
 
         
     def make_noise(self, x, generator=None):
@@ -282,5 +318,6 @@ class ImplicitAlgorithm(BaseImagePolicy):
                         self.num_inference_steps,
                         self.step_size
         )
+        other.setup()
         
         return other

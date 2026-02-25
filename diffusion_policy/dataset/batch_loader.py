@@ -368,6 +368,8 @@ class BatchLoader:
         
         self.dataloaders = None #type:ignore
         
+    def setup(self):
+        
         # only continue if we're being trained off of or special rb_id of default
         tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
         if (self.rb_id not in tasks_to_use) and not self.rb_id == "default":

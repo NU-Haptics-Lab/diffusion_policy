@@ -58,20 +58,29 @@ class CriticAlgorithm(nn.Module):
                  ):
         nn.Module.__init__(self)
         
+        self.critic = critic
+        self.discount = discount
+        self.tau = tau
+        self.max_q_backup = max_q_backup
+        self.lr = lr
         self.use_lr_decay = use_lr_decay
+        self.lr_min = lr_min
+        self.lr_maxt = lr_maxt
         self.grad_norm = grad_norm
         self.use_target_network = use_target_network
         self.use_double_q = use_double_q
         self.action_relative_to_state = action_relative_to_state
         self.use_denoise = use_denoise
 
-        self.critic = critic
+        
+    def setup(self):
+        self.critic.setup()
         
         if self.use_target_network:
             self.critic_target = copy.deepcopy(self.critic)
             
         # set up the optimizer
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr, weight_decay=1.0e-06)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr, weight_decay=1.0e-06)
         
         # device transfer members, since I own them
         device = torch.device(globals.CONFIG.device) #type:ignore
@@ -89,11 +98,8 @@ class CriticAlgorithm(nn.Module):
         ema_model.to(device)
 
         if self.use_lr_decay:
-            self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=lr_maxt, eta_min=lr_min)
+            self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=self.lr_maxt, eta_min=self.lr_min)
 
-        self.discount = discount
-        self.tau = tau
-        self.max_q_backup = max_q_backup
         
     def MakeOptions(self, task_id):
         options = {}

@@ -35,9 +35,13 @@ class StepTrainer:
         self.w_batch_losses = w_batch_losses
         self.grad_norm = grad_norm
         
+    def setup(self):
         # global params
         self.use_bc_loss = globals.CONFIG.use_bc_loss # type:ignore
         self.models_to_train = globals.CONFIG.models_to_train # type:ignore
+        
+        for k, v in self.w_batch_losses.items():
+            v.setup()
         
     def backprop_model_loss(self, model, loss: torch.Tensor, grad_norm):
         # can skip backprop if the loss is zero (aka the loss was skipped due to freqs)

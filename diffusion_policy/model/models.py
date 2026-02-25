@@ -19,6 +19,10 @@ class Models(nn.Module):
         for key in models:
             self.models[key] = models[key]
             
+    def setup(self):
+        for idx, model in self.models.items():
+            model.setup()
+            
     def update(self, other):
         """
         add all of other's models to my models dict

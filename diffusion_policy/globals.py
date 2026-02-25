@@ -203,24 +203,50 @@ def load_global_config(cfg: DictConfig, cfg_key):
     # must now save
     GLOBALS_DICT[cfg_key] = globals_struct
     
-    # if resuming, load
-    if CHECKPOINTER:
-        CHECKPOINTER.load()
+    # must do the following within a context to maintain the correct global state
+    with use_config(cfg_key):
+        ## now must call setup methods for all nodes
+        if LOGGER is not None:
+            LOGGER.setup()
+            
+        if REPLAY_BUFFER_LOADER is not None:
+            REPLAY_BUFFER_LOADER.setup()
+            
+        if DATALOADERS is not None:
+            DATALOADERS.setup()
+        
+        if DEFAULT_BATCH_LOADER is not None:
+            DEFAULT_BATCH_LOADER.setup()
+            
+        if MODELS is not None:
+            MODELS.setup()
+            
+        if CHECKPOINTER is not None:
+            CHECKPOINTER.load()
+        
+        if SESSION_TRAINER is not None:        
+            SESSION_TRAINER.setup()
+        
 
-    if SESSION_TRAINER:        
-        SESSION_TRAINER.epoch_trainer.rollouts.setup()
     
 def load_global_config_from_path(cfg_path, cfg_key):
     cfg = OmegaConf.load(cfg_path)
     load_global_config(cfg, cfg_key)
     
-def load_global_config_from_path_and_save_to_globals(cfg_path, cfg_key):    
+def load_global_config_from_path_and_save_to_globals_dict(cfg_path, cfg_key):    
     load_global_config_from_path(cfg_path, cfg_key)
+    
+# def load_global_config_from_path_and_save_to_globals(cfg_path, cfg_key):    
+#     load_global_config_from_path(cfg_path, cfg_key)
+
+def load_global_config_and_save_to_globals_dict(cfg, cfg_key):
+    load_global_config(cfg, cfg_key)
 
 def load_config_to_global(config_key):
     global CURRENT_CONFIG_KEY, CONFIG, REPLAY_BUFFER_LOADER, DATALOADERS, LOGGER, CHECKPOINTER, DEFAULT_BATCH_LOADER, MODELS, SESSION_TRAINER
     
     if config_key not in GLOBALS_DICT:
+        print("Warning, config key: {} not in GLOBALS_DICT".format(config_key))
         return
     
     global_config = GLOBALS_DICT[config_key]
@@ -234,6 +260,8 @@ def load_config_to_global(config_key):
     MODELS                   = global_config.MODELS
     CHECKPOINTER             = global_config.CHECKPOINTER
     SESSION_TRAINER          = global_config.SESSION_TRAINER
+    
+    pass
     
 @contextmanager
 def use_config(cfg_key):

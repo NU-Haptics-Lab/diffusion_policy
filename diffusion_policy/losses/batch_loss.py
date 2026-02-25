@@ -38,6 +38,7 @@ class BatchLoss:
         self.use_bc_loss = use_bc_loss
         self.freqs = freqs
         
+    def setup(self):
         # save handles to nodes
         self.actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore
         self.actor_model = self.actor.get_model()
@@ -49,6 +50,8 @@ class BatchLoss:
         # my members
         self.current_batch: dict = None #type:ignore
         self.a0 = None
+        
+        self.batch_loader.setup()
         
     def init_losses(self):
         losses = {}
@@ -859,7 +862,8 @@ class CriticOnlyBatchLoss(BatchLoss):
         self.eta = eta
         self.use_bc_loss = use_bc_loss
         self.freqs = freqs
-                
+        
+    def setup(self):
         # get the rb_id
         self.rb_id = self.batch_loader.rb_id
 
@@ -868,6 +872,8 @@ class CriticOnlyBatchLoss(BatchLoss):
         
         # get a handle to the critic
         self.critic = globals.MODELS["critic"] #type:ignore
+        
+        self.batch_loader.setup()
 
     def compute_loss(self):
         """
@@ -911,6 +917,9 @@ class WeightedBatchLoss:
         ):
         self.batch_loss = batch_loss
         self.weight = weight
+        
+    def setup(self):
+        self.batch_loss.setup()
         
     def weight_loss(self, loss):
         # type protection

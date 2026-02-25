@@ -16,6 +16,10 @@ class SessionTrainer:
         self.epoch_trainer = epoch_trainer
         self.epoch_evaluator = epoch_evaluator
         self.nb_epochs = nb_epochs
+        
+    def setup(self):
+        self.epoch_trainer.setup()
+        self.epoch_evaluator.setup()
 
     def run(self):
         """

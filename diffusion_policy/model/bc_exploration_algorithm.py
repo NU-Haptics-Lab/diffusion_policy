@@ -77,6 +77,9 @@ class BCExplorationAlgorithm(nn.Module):
         self.policy = policy
         self.use_bc_explore = use_bc_explore
         
+    def setup(self):
+        self.policy.setup()
+        
         # backwards compat:
         self.noise_scheduler = DDIMScheduler()
         

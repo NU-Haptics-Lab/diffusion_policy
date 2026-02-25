@@ -219,6 +219,7 @@ class QLModel(nn.Module):
                         self.use_tree,
                         self.input_leaf_append
         )
+        other.setup()
         
         return other
         
@@ -272,6 +273,7 @@ class QLModelSimple(QLModel):
                         self.obs_encoder_maker,
                         self.hidden_dim
         )
+        other.setup()
         
         return other
     
@@ -287,6 +289,9 @@ class DoubleCritic(nn.Module, BaseCritic):
         self.use_double_q = use_double_q
         
         self.q1_model = qlmodel
+        
+    def setup(self):
+        self.q1_model.setup()
         
         if self.use_double_q:
             # can't deep copy because that'll copy the weight values, and then q2 will just be exactly like q1 ...

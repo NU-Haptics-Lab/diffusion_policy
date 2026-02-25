@@ -36,12 +36,15 @@ import diffusion_policy.globals as globals
 
 from diffusion_policy.trainers.session_trainer import SessionTrainer
 
+from diffusion_policy.common.checkpointer import TopKCheckpointManager
+
 # to combat dataloader deadlock
 import torch
 import torch.multiprocessing
 
-from dexnex_intelligence.all import (
+from diffusion_policy.globals import (
     load_config_to_global,
+    load_global_config_and_save_to_globals_dict,
 )
 
 
@@ -63,107 +66,52 @@ def Shutdown():
         'diffusion_policy','config')),
 )
 def main(cfg: DictConfig):
-    # save config into the global config
-    globals.CONFIG = cfg
-    
-    # Temporarily disable strict mode to add new keys
-    OmegaConf.set_struct(globals.CONFIG, False) # type: ignore
-    
-    # whether we want to run single threaded for debugging purposes
-    if globals.CONFIG.single_thread:
-        globals.CONFIG.common_dataset.options.train.num_workers = 0 # type: ignore
-        globals.CONFIG.common_dataset.options.train.persistent_workers = False # type: ignore
-        
-        globals.CONFIG.logging.use_wandb = False # type: ignore
-        
     
     # whether we're debugging
-    if globals.CONFIG.debug:  # type: ignore
+    if cfg.debug:  # type: ignore
         # no resuming
-        globals.CONFIG.resume = False # type:ignore
+        cfg.resume = False # type:ignore
         
-        globals.CONFIG.common_dataset.options.common.batch_size = 4 # type: ignore
-        globals.CONFIG.total_num_epochs = 4 # type: ignore
-        globals.CONFIG.batches_per_epoch = 4 # type: ignore
-        globals.CONFIG.common_dataset.options.train.num_workers = 0 # type: ignore
-        globals.CONFIG.common_dataset.options.train.persistent_workers = False # type: ignore
-        # globals.CONFIG.common_noise_scheduler.num_train_timesteps = 10 # type: ignore
-        # globals.CONFIG.models.models.critic.num_inference_steps = 4 # type: ignore
+        cfg.common_dataset.options.common.batch_size = 4 # type: ignore
+        cfg.total_num_epochs = 4 # type: ignore
+        cfg.batches_per_epoch = 4 # type: ignore
+        cfg.common_dataset.options.train.num_workers = 0 # type: ignore
+        cfg.common_dataset.options.train.persistent_workers = False # type: ignore
+        # cfg.common_noise_scheduler.num_train_timesteps = 10 # type: ignore
+        # cfg.models.models.critic.num_inference_steps = 4 # type: ignore
         
         # test small network
-        # globals.CONFIG.models.models.actor.model.model.down_dims = (16, 32, 64)
+        # cfg.models.models.actor.model.model.down_dims = (16, 32, 64)
         
         # no online logging
-        globals.CONFIG.logging.use_wandb = False # type: ignore
+        cfg.logging.use_wandb = False # type: ignore
         
         # testing checkpointing
-        globals.CONFIG.checkpoint.checkpoint_every = 1 # type: ignore
+        cfg.checkpoint.checkpoint_every = 1 # type: ignore
         
         # testing validation
-        globals.CONFIG.val_every = 1 # type: ignore
+        cfg.val_every = 1 # type: ignore
         
         # testing freq
-        # for key in globals.CONFIG.step_freqs:
-        #     globals.CONFIG.step_freqs[key] = 1
+        # for key in cfg.step_freqs:
+        #     cfg.step_freqs[key] = 1
         
         # testing rollouts
-        globals.CONFIG.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
-        globals.CONFIG.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
-        globals.CONFIG.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
+        cfg.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
+        cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
+        cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
         
         # # no rollouts
-        # globals.CONFIG.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore
+        # cfg.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore
         
         torch.autograd.set_detect_anomaly(True) # type: ignore
-    
-    # resolve immediately so all the ${now:} resolvers
-    # will use the same time.
-    OmegaConf.resolve(globals.CONFIG) # type: ignore
-    
-    # apply overrides, much faster than merge
-    OmegaConf.unsafe_merge(globals.CONFIG, globals.CONFIG.override) # type: ignore
-    print("Config merged.")
         
-    # spin up the logger
-    globals.LOGGER = hydra.utils.instantiate(globals.CONFIG.logging) # type: ignore
-    print("Logger spun.")
+    # load using a common local loader, put in a globals dict
+    load_global_config_and_save_to_globals_dict(cfg, "train")
     
-    # spin up the replay buffer loader
-    globals.REPLAY_BUFFER_LOADER = hydra.utils.instantiate(globals.CONFIG.replay_buffer_loader) # type: ignore
-    print("Replay Buffer Loader spun.")
+    # now load the config to the global singletons
+    load_config_to_global("train")
     
-    # spin up the dataloaders
-    globals.DATALOADERS = hydra.utils.instantiate(globals.CONFIG.dataloaders) # type: ignore
-    print("Dataloaders spun.")
-    
-    # spin up the dataloaders
-    globals.DEFAULT_BATCH_LOADER = hydra.utils.instantiate(globals.CONFIG.default_batch_loader) # type: ignore
-    print("DEFAULT_BATCH_LOADER spun.")
-        
-    # spin up the models
-    globals.MODELS = hydra.utils.instantiate(globals.CONFIG.models) # type: ignore
-    print("Models spun.")
-    
-    # spin up the checkpointer
-    globals.CHECKPOINTER = hydra.utils.instantiate(globals.CONFIG.checkpoint) # type: ignore
-    print("Checkpointer spun.")
-
-    # spin up the session trainer
-    # cls = hydra.utils.get_class(cfg._target_)
-    globals.SESSION_TRAINER: SessionTrainer = hydra.utils.instantiate(globals.CONFIG.session_trainer) # type: ignore
-    print("Session Trainer spun.")
-    
-    # save our config
-    globals.save_current_config_to_globals("train")
-    
-    ####### can only set stuff up after I've saved the current config
-    
-    # if resuming, load
-    globals.CHECKPOINTER.load()
-    
-    # rollouts setup
-    globals.SESSION_TRAINER.epoch_trainer.rollouts.setup()
-
     # run it
     print("Begin running.")
     try:
@@ -171,6 +119,8 @@ def main(cfg: DictConfig):
     except KeyboardInterrupt:
         if input("Save a checkpoint? y/n ") == 'y':
             # checkpoints
+            assert(isinstance(globals.CHECKPOINTER, TopKCheckpointManager))
+            assert(globals.CHECKPOINTER is not None)
             globals.CHECKPOINTER.force_save()
     print("Done")
 
