@@ -193,7 +193,14 @@ class ImplicitAlgorithm(BaseImagePolicy):
             trajectory = warm_start_trajectory.clone().detach().to(device).to(dtype)
 
         trajectory.requires_grad = True
-        optimizer = torch.optim.LBFGS([trajectory], lr=0.1, max_iter=10, history_size=5)
+        optimizer = torch.optim.LBFGS([trajectory], 
+                                        lr=0.1, 
+                                        max_iter=10, 
+                                        history_size=5,
+                                        tolerance_grad=1e-4, 
+                                        tolerance_change=1e-6,
+                                        line_search_fn="strong_wolfe",
+                    )
 
         def closure():
             optimizer.zero_grad()
