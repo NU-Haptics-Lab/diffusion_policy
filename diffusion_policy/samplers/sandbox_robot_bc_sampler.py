@@ -155,6 +155,9 @@ class SandboxRobotBCEpisodeSamplerBackwardsCompat(SandboxRobotBCEpisodeSampler):
         obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load # type: ignore
         
         obs_sample = self.make_default_obs()
+
+        # for now, only allow horizon of 1
+        assert(obs_sample["robot_joint_pos"].shape[0] == 1)
         
         # get the state
         state = self.get_key_sample("state", ep_idx)[0]
@@ -182,9 +185,26 @@ class SandboxRobotBCEpisodeSamplerBackwardsCompat(SandboxRobotBCEpisodeSampler):
         # fill in the obs sample
         ln = min(len(robot_joint_pos), len(obs_sample["robot_joint_pos"]))
         obs_sample["robot_joint_pos"][0, :ln] = robot_joint_pos[:ln]
+
+        """
+        OBJECT_IDS = {
+            "reserved": 0,
+            "block": 1,
+            "bin_with_divider": 2,
+            "cube_with_one_green_face": 3,
+            "rotating_puck": 4,
+            "ring1": 5,
+            "ring2": 6,
+            "ring3": 7,
+            "ring_toy_base": 8,
+            "pushT": 9,
+        }
+        """
         
         # object pos
-        obs_sample["object_pos"][0, :3] = block_xyz[:3]
+        id1 = 1 * 3
+        id2 = id1 + 3
+        obs_sample["object_pos"][0, id1:id2] = block_xyz[:3]
         
         # from avatar_drake_sim ... tasks.py
         """
