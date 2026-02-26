@@ -137,6 +137,10 @@ class BCExplorationAlgorithm(nn.Module):
         # move each observation to torch
         # obs_dict = {key: th.as_tensor(observation[key]).to(globals.CONFIG.device).float() for key in observation}
         obs_dict = observation
+
+        # ensure action key is joint torques
+        if not globals.CONFIG.action_key == "robot_joint_action": #type:ignore
+            raise ValueError("Method assumes action_key = robot_joint_action. Got: " + str(globals.CONFIG.action_key)) #type:ignore
         
         # do the inference
         future_action_tensor, final_action_tensor = self.policy.inference(obs_dict)
@@ -173,6 +177,9 @@ class BCExplorationAlgorithm(nn.Module):
         """
         assumes the BC policy outputs torque actions, so we don't have to do anything
         """
+        if not self.diffusion_bc_runner.get_action_key() == "robot_joint_action":
+            raise ValueError("Method assumes diffusion BC policy outputs robot_joint_action. Got: " + str(self.diffusion_bc_runner.get_action_key()))
+        
         future_torques, all_torques = self.diffusion_bc_runner.infer(observation)
         
         return future_torques, all_torques
@@ -182,6 +189,9 @@ class BCExplorationAlgorithm(nn.Module):
         """
         get the action from the diffusion BC policy
         """
+        if not self.diffusion_bc_runner.get_action_key() == "robot_joint_pos":
+            raise ValueError("Method assumes diffusion BC policy outputs robot_joint_pos. Got: " + str(self.diffusion_bc_runner.get_action_key()))
+        
         # state = observation['robot_joint_pos']
         
         # actions_joint_positions = self.diffusion_bc_runner.infer_from_robot_state(state)
@@ -258,6 +268,13 @@ class BCExplorationAlgorithm(nn.Module):
         # assert(action.shape[1] == horizon) # varying horizons actually allowed
         assert(action.shape[2] == NUM_ACTIONS) # action dim
         
+        ### Logging
+        globals.LOGGER.log_one("schedulers/exploration_BC", self.exploration_BC.get_value(globals.STEP))
+        globals.LOGGER.log_one("schedulers/exploration_random", self.exploration_random.get_value(globals.STEP))
+        globals.LOGGER.log_one("schedulers/exploration_policy", self.exploration_policy.get_value(globals.STEP))
+
+        ### End Logging
+
         return future_actions, action
     
     def infer(self, nobs):
