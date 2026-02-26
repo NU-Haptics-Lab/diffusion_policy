@@ -4,9 +4,9 @@
 ###################################################
 description: "sandbox rl 1: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic)"
 # global controls
-debug: true # 
-single_thread: true # nice for debugging
-use_compiled_policy: false # set false for debugging
+debug: false # 
+single_thread: false # nice for debugging
+use_compiled_policy: true # set false for debugging
 total_num_epochs: 1001
 batches_per_epoch: 100 # 100,000 baseline nb steps
 batch_size: 32
@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
 run_tag: sandbox_robot_rl_1
@@ -67,7 +67,7 @@ clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 10
+rollout_frequency: 100
 rollout_warmup_nb_steps: 100
 
 

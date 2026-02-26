@@ -161,6 +161,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # Initialize these once in your class __init__
         # if we're still training this policy, we MUST compile with gradient required. Use default mode for interleaving training and updated policy rollouts
         if self.use_compiled_policy:
+            print("Compiling Implicit BC policy...")
             if self.use_only_for_inference:
                 # if only for inference, we can compile with grad disabled for faster inference speed
                 self.policy.requires_grad_(False)
