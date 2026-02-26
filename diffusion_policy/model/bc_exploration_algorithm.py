@@ -269,9 +269,10 @@ class BCExplorationAlgorithm(nn.Module):
         assert(action.shape[2] == NUM_ACTIONS) # action dim
         
         ### Logging
-        globals.LOGGER.log_one("schedulers/exploration_BC", self.exploration_BC.get_value(globals.STEP))
-        globals.LOGGER.log_one("schedulers/exploration_random", self.exploration_random.get_value(globals.STEP))
-        globals.LOGGER.log_one("schedulers/exploration_policy", self.exploration_policy.get_value(globals.STEP))
+        if globals.LOGGER is not None:
+            globals.LOGGER.log_one("schedulers/exploration_BC", self.exploration_BC.get_value(globals.STEP))
+            globals.LOGGER.log_one("schedulers/exploration_random", self.exploration_random.get_value(globals.STEP))
+            globals.LOGGER.log_one("schedulers/exploration_policy", self.exploration_policy.get_value(globals.STEP))
 
         ### End Logging
 
