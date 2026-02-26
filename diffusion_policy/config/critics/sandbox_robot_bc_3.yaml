@@ -42,7 +42,7 @@ obs_keys_to_use:
   - object_pos
   - task_obs
 
-action_key: robot_joint_pos
+action_key: robot_joint_pos # required to be robot_joint_pos for co-training compat
 
 # which obs the sampler will load from the replay buffer
 obs_keys_to_load:

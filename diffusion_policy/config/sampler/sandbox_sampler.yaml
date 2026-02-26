@@ -1,6 +1,6 @@
 
 
-action_key: robot_joint_pos
+# action_key: robot_joint_pos # test to see if it's required
 
 # which obs the sampler will load from the replay buffer
 obs_keys_to_load:

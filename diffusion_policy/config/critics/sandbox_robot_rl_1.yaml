@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox rl 1: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic)"
+description: "sandbox rl 1: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution."
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
