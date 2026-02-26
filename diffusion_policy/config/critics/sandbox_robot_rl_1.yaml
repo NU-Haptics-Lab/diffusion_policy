@@ -38,7 +38,7 @@ obs_keys_to_use:
   - object_pos
   - task_obs
 
-action_key: robot_joint_pos
+action_key: robot_joint_action
 
 # which obs the sampler will load from the replay buffer
 obs_keys_to_load:
@@ -100,10 +100,14 @@ checkpoint:
 
 # common data
 shape_meta:
+  robot_joint_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
   # required for the model. Just sum up all action inputs
   action:
     shape:
-    - 30
+    - 30 # sum: [robot_joint_action]
     
   robot_joint_pos:
     shape:
