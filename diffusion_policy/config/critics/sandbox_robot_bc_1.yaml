@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox bc 1: train a bc policy for use in RL exploration / reward generation, no rollouts"
+description: "sandbox bc 1: train a bc policy for use in RL exploration / reward generation, no rollouts. Output are joint torques. No co-training."
 # global controls
 debug: false # 
 single_thread: ${debug}

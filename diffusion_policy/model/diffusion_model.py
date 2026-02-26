@@ -165,23 +165,42 @@ class DiffusionModel(BaseImagePolicy):
             # parameters passed to step
             **kwargs):
         super().__init__()
-        
-        # save from global config
-        self.action_rel_indices = globals.CONFIG.action_rel_indices #type:ignore
-        self.horizon = len(self.action_rel_indices)
+        self.action_shape = action_shape
+        self.obs_encoder_maker = obs_encoder_maker
+        self.obs_encoder_group_norm = obs_encoder_group_norm
+        self.diffusion_step_embed_dim = diffusion_step_embed_dim
+        self.down_dims = down_dims
+        self.kernel_size = kernel_size
+        self.n_groups = n_groups
+        self.cond_predict_scale = cond_predict_scale
+        self.eval_fixed_crop = eval_fixed_crop
         
         self.action_relative_to_state = action_relative_to_state
         self.use_tree = use_tree
         self.use_simple_model = use_simple_model
+        
+        self.noise_scheduler = noise_scheduler
+        self.n_obs_steps = n_obs_steps
+        self.obs_as_global_cond = obs_as_global_cond
+        self.kwargs = kwargs
+        self.num_mid_module_repeats = num_mid_module_repeats
+        
+        
+    def setup(self):
+        self.obs_encoder_maker.setup()
+        
+        # save from global config
+        self.action_rel_indices = globals.CONFIG.action_rel_indices #type:ignore
+        self.horizon = len(self.action_rel_indices)
 
         # parse shape_meta
-        assert len(action_shape) == 1
-        action_dim = action_shape[0]
+        assert len(self.action_shape) == 1
+        self.action_dim = self.action_shape[0]
             
         # get the obs encoder object
-        self.obs_encoder = obs_encoder_maker.get()
+        self.obs_encoder = self.obs_encoder_maker.get()
         
-        if obs_encoder_group_norm:
+        if self.obs_encoder_group_norm:
             # replace batch norm with group norm
             replace_submodules(
                 root_module=self.obs_encoder,
@@ -192,7 +211,7 @@ class DiffusionModel(BaseImagePolicy):
                     num_channels=x.num_features)
             )
         
-        if eval_fixed_crop:
+        if self.eval_fixed_crop:
             replace_submodules(
                 root_module=self.obs_encoder,
                 predicate=lambda x: isinstance(x, rmbn.CropRandomizer),
@@ -210,15 +229,15 @@ class DiffusionModel(BaseImagePolicy):
         #### trunk
         # create diffusion model. Get first/only element from list
         obs_feature_dim = self.obs_encoder.output_shape()[0]
-        input_dim = action_dim + obs_feature_dim
+        input_dim = self.action_dim + obs_feature_dim
         global_cond_dim = None
-        if obs_as_global_cond:
-            input_dim = action_dim
-            global_cond_dim = obs_feature_dim * n_obs_steps
+        if self.obs_as_global_cond:
+            input_dim = self.action_dim
+            global_cond_dim = obs_feature_dim * self.n_obs_steps
 
         if self.use_simple_model:
-            nb_inps = action_dim * self.horizon + obs_feature_dim + 1 # trajectory, obs, timestep
-            model = SimpleModel(nb_inps, action_dim * self.horizon)
+            nb_inps = self.action_dim * self.horizon + obs_feature_dim + 1 # trajectory, obs, timestep
+            model = SimpleModel(nb_inps, self.action_dim * self.horizon)
             pass
             
         else:
@@ -226,12 +245,12 @@ class DiffusionModel(BaseImagePolicy):
                 input_dim=input_dim,
                 local_cond_dim=None,
                 global_cond_dim=global_cond_dim,
-                diffusion_step_embed_dim=diffusion_step_embed_dim,
-                down_dims=down_dims,
-                kernel_size=kernel_size,
-                n_groups=n_groups,
-                cond_predict_scale=cond_predict_scale,
-                num_mid_module_repeats = num_mid_module_repeats,
+                diffusion_step_embed_dim=self.diffusion_step_embed_dim,
+                down_dims=self.down_dims,
+                kernel_size=self.kernel_size,
+                n_groups=self.n_groups,
+                cond_predict_scale=self.cond_predict_scale,
+                num_mid_module_repeats = self.num_mid_module_repeats,
             )
         #### end trunk
         
@@ -251,7 +270,7 @@ class DiffusionModel(BaseImagePolicy):
                 #             n_groups=n_groups,
                 #             cond_predict_scale=cond_predict_scale
                 #         )
-                leafs[key] = Leaf(action_dim, self.horizon)
+                leafs[key] = Leaf(self.action_dim, self.horizon)
                 
             ### end leafs
 
@@ -261,19 +280,14 @@ class DiffusionModel(BaseImagePolicy):
                             )
             
         self.model = model
-        self.noise_scheduler = noise_scheduler
         self.mask_generator = LowdimMaskGenerator(
-            action_dim=action_dim,
-            obs_dim=0 if obs_as_global_cond else obs_feature_dim,
-            max_n_obs_steps=n_obs_steps,
+            action_dim=self.action_dim,
+            obs_dim=0 if self.obs_as_global_cond else obs_feature_dim,
+            max_n_obs_steps=self.n_obs_steps,
             fix_obs_steps=True,
             action_visible=False
         )
         self.obs_feature_dim = obs_feature_dim
-        self.action_dim = action_dim
-        self.n_obs_steps = n_obs_steps
-        self.obs_as_global_cond = obs_as_global_cond
-        self.kwargs = kwargs
 
         print_nb_params(self.model, "Diffusion params")
         print_nb_params(self.obs_encoder, "Vision params")
@@ -369,7 +383,7 @@ class DiffusionModel(BaseImagePolicy):
             naction = nbatch['action']
             
         # done
-        return naction, naction_og, all_nactions
+        return naction, all_nactions
 
     def predict_action(self, # type:ignore
                        nobs_dict: Dict[str, torch.Tensor],

@@ -159,6 +159,9 @@ class Model(Base):
         
         # configure model
         self.model = model
+        
+    def setup(self):
+        self.model.setup()
 
         # device transfer of the model, since I own it
         device = torch.device(globals.CONFIG.device) #type:ignore because pylance can't do dynamic type checking
@@ -198,6 +201,7 @@ class ModelEmaOptim(Base):
         self.ema = ema
         self.optim = optim
         
+    def setup(self):
         # setup
         self.ema.setup(self.model.get_model())
         self.optim.setup(self.model.get_model())

@@ -104,6 +104,9 @@ def main(cfg: DictConfig):
         # # no rollouts
         # cfg.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore
         
+        # no compile policy
+        cfg.use_compiled_policy = False
+        
         torch.autograd.set_detect_anomaly(True) # type: ignore
         
     # load using a common local loader, put in a globals dict

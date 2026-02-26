@@ -87,7 +87,7 @@ class BCExplorationAlgorithm(nn.Module):
         # self.diffusion_bc_runner = DiffusionPolicyRunner()
         # self.diffusion_bc_runner = SandboxRobotBCPolicyRunner()
         if self.use_bc_explore:
-            self.diffusion_bc_runner = SandboxRobotImplicitBCPolicyRunner()
+            self.diffusion_bc_runner = SandboxRobotBCPolicyRunner()
         
             # save in our loaded ML runners
             LOADED_ML_RUNNERS['diffusion_policy_runner'] = self.diffusion_bc_runner
@@ -125,7 +125,7 @@ class BCExplorationAlgorithm(nn.Module):
         return self.policy.loss(nbatch)
     
     def get_future_actions(self, all_actions):
-        start = np.argmax(np.array(globals.CONFIG.action_rel_indices) >= 0)
+        start = np.argmax(np.array(globals.CONFIG.action_rel_indices) >= 0) #type:ignore
         
         future_actions = all_actions[:, start:]
         return future_actions
@@ -139,10 +139,8 @@ class BCExplorationAlgorithm(nn.Module):
         obs_dict = observation
         
         # do the inference
-        final_action_tensor = self.policy.inference(obs_dict)
-        
-        future_action_tensor = self.get_future_actions(final_action_tensor)
-        
+        future_action_tensor, final_action_tensor = self.policy.inference(obs_dict)
+                
         return future_action_tensor, final_action_tensor
     
     def get_torque_from_position_action(self, position_action, observation):
@@ -171,32 +169,41 @@ class BCExplorationAlgorithm(nn.Module):
         
         return torque_action
     
-    def get_diffusion_bc_action(self, observation):
+    def get_diffusion_bc_action_from_torque(self, observation):
+        """
+        assumes the BC policy outputs torque actions, so we don't have to do anything
+        """
+        future_torques, all_torques = self.diffusion_bc_runner.infer(observation)
+        
+        return future_torques, all_torques
+        
+    
+    def get_diffusion_bc_action_from_positions(self, observation):
         """
         get the action from the diffusion BC policy
         """
         # state = observation['robot_joint_pos']
         
         # actions_joint_positions = self.diffusion_bc_runner.infer_from_robot_state(state)
-        actions_joint_positions = self.diffusion_bc_runner.infer(observation)
+        future_joint_positions, actions_joint_positions = self.diffusion_bc_runner.infer(observation)
         
         # take the last action
         action_joint_positions = actions_joint_positions[-1]
         
-        #convert to torque
-        action = self.get_torque_from_position_action(action_joint_positions, observation)
+        # #convert to torque
+        # action = self.get_torque_from_position_action(action_joint_positions, observation)
         
-        # prep for output
-        out_action = th.zeros(NUM_ACTIONS)
+        # # prep for output
+        # out_action = th.zeros(NUM_ACTIONS)
         
-        length = min(action.shape[0], NUM_ACTIONS)
+        # length = min(action.shape[0], NUM_ACTIONS)
         
-        out_action[:length] = action[:length]
+        # out_action[:length] = action[:length]
         
-        final_action_tensor = out_action
+        # final_action_tensor = out_action
         
-        future_action_tensor = self.get_future_actions(final_action_tensor)
-        
+        # future_action_tensor = self.get_future_actions(final_action_tensor)
+        return None, None # must rethink this function, now that actions are trajectories
         return future_action_tensor, final_action_tensor
             
     # alias
@@ -227,7 +234,7 @@ class BCExplorationAlgorithm(nn.Module):
         
         # random action
         if choice == "random":
-            action = th.rand(size=(batch_size, horizon, NUM_ACTIONS), device=globals.CONFIG.device)
+            action = th.rand(size=(batch_size, horizon, NUM_ACTIONS), device=globals.CONFIG.device) #type:ignore
             
             future_actions = self.get_future_actions(action)
                 
@@ -239,7 +246,7 @@ class BCExplorationAlgorithm(nn.Module):
             # action = np.expand_dims(action, axis=0)
             
         elif choice == "BC":
-            future_actions, action = self.get_diffusion_bc_action(observation)
+            future_actions, action = self.get_diffusion_bc_action_from_torque(observation)
             
             # # add env dim, required for "is_vectorized_observation"
             # action = np.expand_dims(action, axis=0)
@@ -248,7 +255,7 @@ class BCExplorationAlgorithm(nn.Module):
             raise ValueError("Invalid exploration choice")
             
         assert(action.shape[0] == batch_size)
-        assert(action.shape[1] == horizon)
+        # assert(action.shape[1] == horizon) # varying horizons actually allowed
         assert(action.shape[2] == NUM_ACTIONS) # action dim
         
         return future_actions, action

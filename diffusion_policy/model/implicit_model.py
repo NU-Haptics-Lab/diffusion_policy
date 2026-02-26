@@ -6,6 +6,8 @@ implicit model means that the model takes (s, a) as its input and produces a sin
 These classes, however, are not responsible for defining the loss, nor what the output means. That should be done by a parent class.
 """
 
+import numpy as np
+
 import torch
 import torch as th
 import torch.nn.functional as F
@@ -129,15 +131,16 @@ class ImplicitPolicy(nn.Module):
 class ImplicitAlgorithm(BaseImagePolicy):
     def __init__(self,
             policy: ImplicitPolicy,
-            num_inference_steps = 8,
-            step_size = 1e-1,
+            use_compiled_policy = False,
+            use_only_for_inference = False,
     ):
         super().__init__()
         
-        self.num_inference_steps = num_inference_steps
-        self.step_size = step_size
+        self.use_compiled_policy = use_compiled_policy
+        self.use_only_for_inference = use_only_for_inference
 
         self.policy = policy
+        self.compiled_policy = None
         
         
     def setup(self):
@@ -156,8 +159,14 @@ class ImplicitAlgorithm(BaseImagePolicy):
         B = globals.CONFIG.batch_size # type: ignore
         
         # Initialize these once in your class __init__
-        
-        self.compiled_policy = torch.compile(self.policy, mode="reduce-overhead")
+        # if we're still training this policy, we MUST compile with gradient required. Use default mode for interleaving training and updated policy rollouts
+        if self.use_compiled_policy:
+            if self.use_only_for_inference:
+                # if only for inference, we can compile with grad disabled for faster inference speed
+                self.policy.requires_grad_(False)
+                self.compiled_policy = torch.compile(self.policy, mode="reduce-overhead")
+            else:
+                self.compiled_policy = torch.compile(self.policy, mode="default")
         
     def per_sample_backward(self, btrajectory, timestep, bglobal_cond):
         def fcn(trajectory, global_cond):
@@ -177,9 +186,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
     
     # alias
     def infer(self, nobs_dict: dict, action = None, task_id=None, noise_scheduler=None):
-        # return 3 things for backwards compat
-        action = self.inference(nobs_dict)
-        return action
+        return self.inference(nobs_dict)
     
     # @torch.no_grad() need grads for lbfgs
     def inference(self, nobs: dict, warm_start_trajectory = None):
@@ -214,42 +221,52 @@ class ImplicitAlgorithm(BaseImagePolicy):
         else:
             trajectory = warm_start_trajectory.clone().detach().to(device).to(dtype)
 
+        # for debugging
         original_trajectory = trajectory.clone().detach()
         
-        
-        self.trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
-        self.optimizer = torch.optim.LBFGS([self.trajectory], 
+        trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
+        optimizer = torch.optim.LBFGS([trajectory], 
                                         lr=1.0, # designed to work with unit step size
-                                        max_iter=5, 
+                                        max_iter=10, 
                                         history_size=3,
                                         tolerance_grad=1e-3, 
                                         tolerance_change=1e-4,
                                         line_search_fn=None, # faster than strong wolfe
                     )
         
-        self.trajectory.copy_(trajectory)
-
+        if self.compiled_policy is not None:
+            policy = self.compiled_policy
+        else:
+            policy = self.policy
+        
         def closure():
-            self.optimizer.zero_grad()
-            qval = self.compiled_policy(self.trajectory, timestep, global_cond=global_cond)
+            optimizer.zero_grad()
+            qval = policy(trajectory, timestep, global_cond=global_cond)
             loss = -qval.mean()
             loss.backward()
             return loss
-        
-        self.trajectory.requires_grad_(True)
-            
+                 
         # speed up .backward() by not calculating gradients for the policy parameters
         self.policy.requires_grad_(False)
         # just to make sure
         with torch.enable_grad():
             # only need to call step once    
-            self.optimizer.step(closure)
+            optimizer.step(closure)
         # restore grad for policy parameters
         self.policy.requires_grad_(True)
 
         self.policy.train()
-        return self.trajectory.detach().clone()
+        
+        traj = trajectory.detach().clone()
+        future_traj = self.get_future_actions(traj)
+        
+        return future_traj, traj
 
+    def get_future_actions(self, all_actions):
+        start = np.argmax(np.array(self.action_rel_indices) >= 0)
+        
+        future_actions = all_actions[:, start:]
+        return future_actions
         
     def make_noise(self, x, generator=None):
         """
@@ -276,8 +293,11 @@ class ImplicitAlgorithm(BaseImagePolicy):
         
         global_cond = nobs_features.reshape(batch_size, -1)
 
-        # predict
-        x = self.policy.forward(action, global_cond=global_cond)
+        # predict. Might as well use the compiled policy since I already need it for inference
+        if self.compiled_policy is not None:
+            x = self.compiled_policy(action, global_cond=global_cond)
+        else:
+            x = self.policy(action, global_cond=global_cond)
 
         return x
 
@@ -288,7 +308,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         gt_action = nbatch['action']
         
         # denoise
-        ntrajectory = self.predict_action(nobs)
+        future_traj, ntrajectory = self.predict_action(nobs)
         
         # extract the predicted action
         pred_action = ntrajectory
@@ -315,8 +335,6 @@ class ImplicitAlgorithm(BaseImagePolicy):
         
         other = ImplicitAlgorithm(
                         self.policy.copy(),
-                        self.num_inference_steps,
-                        self.step_size
         )
         other.setup()
         

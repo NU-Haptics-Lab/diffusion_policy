@@ -35,7 +35,7 @@ class Logging:
                 self.wandb_run = wandb.init(
                     dir = str(self.output_dir),
                     config = config,
-                    **wandb_cfg
+                    **self.wandb_cfg
                 )
 
             wandb.config.update(

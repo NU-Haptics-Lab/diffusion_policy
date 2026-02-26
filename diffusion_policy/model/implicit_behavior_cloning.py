@@ -71,15 +71,18 @@ from diffusion_policy.model.implicit_model import (
 class ImplicitBehaviorCloningAlgorithm(ImplicitAlgorithm):
     def __init__(self,
             policy: ImplicitPolicy,
-            num_inference_steps = 8,
-            step_size = 1e-1,
+            use_compiled_policy: bool = False,
+            use_only_for_inference: bool = False
     ):
-        super().__init__(policy, num_inference_steps, step_size)
+        super().__init__(policy, use_compiled_policy, use_only_for_inference)
         
-        self.num_inference_steps = num_inference_steps
-        self.step_size = step_size
 
         self.policy = policy
+        self.use_compiled_policy = use_compiled_policy
+        self.use_only_for_inference = use_only_for_inference
+        
+    def setup(self):
+        self.policy.setup()
         self.noise_scheduler = DDPMScheduler()
 
 
