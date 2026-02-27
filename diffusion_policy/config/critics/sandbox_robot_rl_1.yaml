@@ -4,9 +4,9 @@
 ###################################################
 description: "sandbox rl 1: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution."
 # global controls
-debug: false # 
-single_thread: false # nice for debugging
-use_compiled_policy: true # set false for debugging
+debug: true # 
+single_thread: true # nice for debugging
+use_compiled_policy: false # set false for debugging
 total_num_epochs: 3001
 batches_per_epoch: 100 # 100,000 baseline nb steps
 batch_size: 128
