@@ -1064,6 +1064,9 @@ class MageHandBatchLoader(BatchLoader):
     
 class SandboxRobotBCBatchLoader(BatchLoader):
     def get_static_nns(self):
+        """
+        pretty much all identity normalizers here.
+        """
         nns = {}
         obs = {}
         obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
@@ -1105,6 +1108,7 @@ class SandboxRobotBCBatchLoader(BatchLoader):
         
         # each observation
         for obs_key in obs_keys_to_load:
+            # only fit if obs_key is in the rb, otherwise keep default identity normalizer
             if obs_key in rb:
                 self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
                 
