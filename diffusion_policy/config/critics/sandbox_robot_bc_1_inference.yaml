@@ -80,6 +80,17 @@ action_rel_indices: [0, 1, 2, 3] # 0 is current idx, negative number is in the p
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 
+# backwards compatibility
+obect_name_to_some_hot_index:
+  block: 0
+  bin_with_divider: 1
+  cube_with_one_green_face: 2
+  rotating_puck: 3
+  ring1: 4
+  ring2: 5
+  ring3: 6
+  ring_toy_base: 7
+
 # common data
 shape_meta:
   robot_joint_action:
