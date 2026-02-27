@@ -317,6 +317,15 @@ common_dataset:
 
     # child
 
+# new entry, for sandbox_loss.SandboxLoss
+env_loss_params:
+  _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.SandboxLoss
+
+  use_easy_loss: true # BC position loss. Yes.
+  use_medium_loss: false # object based loss, no for now.
+  use_hard_loss: true # task loss, yes obv.
+
+
 # models node
 models:
   _target_: diffusion_policy.model.models.Models
@@ -324,7 +333,7 @@ models:
   models:
     critic:
       _target_: diffusion_policy.model.bc_exploration_algorithm.BCExplorationAlgorithm # responsible for exploration
-      use_bc_explore: true
+      use_bc_explore: false # the current B.C. policy kinda sucks, so don't use it. Instead, use the position B.C. policy for sandbox_loss. Also use the B.C. dataset for state loading.
 
       # children
       policy:
