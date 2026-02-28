@@ -34,6 +34,7 @@ tasks_to_use:
 obs_keys_to_use:
   - robot_joint_pos
   - robot_joint_vel
+  - robot_joint_prev_action
   - object_quat
   - object_pos
   - task_obs
@@ -101,6 +102,10 @@ shape_meta:
     shape:
     - 30 # max from sandbox_common.MaxParams
 
+  robot_joint_prev_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
   # required for the model. Just sum up all action inputs
   action:
     shape:
@@ -164,6 +169,7 @@ common_obs_encoder:
   lowdims:
     - robot_joint_pos
     - robot_joint_vel
+    - robot_joint_prev_action
     - object_quat
     - object_pos
     - task_obs
@@ -321,6 +327,13 @@ common_dataset:
     use_cap_rewards: yes
     reward_cap: 50.0 # just so the q-vals don't totally blow up
 
+###########################################################################
+###########################################################################
+###########################################################################
+# Drake Stuff, Randomization stuff, loss stuff
+###########################################################################
+###########################################################################
+###########################################################################
 # new entry, for sandbox_loss.SandboxLoss
 env_loss_params:
   _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.SandboxLoss
@@ -330,6 +343,10 @@ env_loss_params:
   use_hard_loss: true # task loss, yes obv.
 
   easy_loss_policy: "actor_critic_15"
+
+  penalty_options:
+    use_jerk_penalty: true
+    use_energy_penalty: true
 
 
   use_cap_rewards: yes
@@ -344,9 +361,18 @@ state_loader:
   keys_to_perturb:
     - robot_joint_pos
     - robot_joint_vel
+    - robot_joint_prev_action
     - object_quat
     - object_pos
 
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
 # models node
 models:
   _target_: diffusion_policy.model.models.Models
