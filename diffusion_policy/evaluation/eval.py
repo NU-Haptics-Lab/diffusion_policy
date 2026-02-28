@@ -202,6 +202,10 @@ class SimpleInference:
         assert(self.original_policy_noise_scheduler is not None)
         self.policy.noise_scheduler = self.original_policy_noise_scheduler
         
+        # back to numpy
+        action = action.numpy()
+        all_actions = all_actions.numpy()
+        
         assert(not np.isnan(all_actions).any())
         return action, all_actions
 
@@ -215,12 +219,13 @@ class Inference:
         self.policy = policy
         self.debug = debug
         self.analytics = analytics
+        self.task_id = task_id
         
     def setup(self):
         """
         must be called after all nodes are made
         """
-        self.task_id = torch.tensor([[task_id]], device=globals.CONFIG.device) # 2d #type:ignore
+        self.task_id = torch.tensor([[self.task_id]], device=globals.CONFIG.device) # 2d #type:ignore
         
         
         # save a handle
@@ -228,7 +233,7 @@ class Inference:
         
         
         # save n obs steps
-        self.n_obs_steps = globals.CONFIG.models.models.actor.model.model.n_obs_steps # type:ignore
+        self.n_obs_steps = globals.CONFIG.n_obs_steps # type:ignore
         
         # observation history
         self.image_history = deque(maxlen=self.n_obs_steps) # use deque instead of queue because it has maxlen
@@ -282,6 +287,10 @@ class Inference:
         # put the original back in for training
         self.policy.noise_scheduler = self.original_policy_noise_scheduler
         
+        # back to numpy
+        action = action.numpy()
+        all_actions = all_actions.numpy()
+        
         assert(not np.isnan(all_actions).any())
         return action, all_actions
     
@@ -327,10 +336,9 @@ class Inference:
             nobs_torch = self.norm_gpu_obs(obs_dict_np)
             
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            naction_gpu, naction_rel_gpu, all_nactions_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
+            naction_gpu, all_nactions_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
                         
             future_actions = self.unnorm_cpu_action(naction_gpu)
-            test = self.unnorm_cpu_action(naction_rel_gpu)
             all_actions = self.unnorm_cpu_action(all_nactions_gpu)
             
             if self.debug or self.analytics:

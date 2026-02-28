@@ -399,6 +399,16 @@ class BatchLoader:
         input_stats_dict = nn.get_input_stats()
         # print("Fitted nn: {}: min {} max {}".format(descriptor, input_stats_dict['min'], input_stats_dict['max']))
         
+        # outlier protection
+        min_val = np.array(input_stats_dict['min']).min()
+        max_val = np.array(input_stats_dict['max']).max()
+        
+        min_allowed = -1000.0
+        max_allowed = 1000.0
+        
+        if min_val < min_allowed or max_val > max_allowed:
+            raise ValueError("Fitted nn {} has min {} or max {} outside of allowed range [{}, {}]. Check your data for outliers.".format(descriptor, min_val, max_val, min_allowed, max_allowed))
+        
     def get_static_nns(self):
         obs = {}
         obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore

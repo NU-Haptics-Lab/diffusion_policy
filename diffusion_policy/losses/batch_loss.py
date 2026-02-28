@@ -32,11 +32,15 @@ class BatchLoss:
             eta: float = 0.0, # weight of the critic loss
             use_bc_loss = True,
             freqs = {}, # training frequencies, units: steps
+            loss_clip_value = 1.0,
+            remove_outlier_losses = False, # use carefully
         ):
         self.batch_loader = batch_loader
         self.eta = eta
         self.use_bc_loss = use_bc_loss
         self.freqs = freqs
+        self.loss_clip_value = loss_clip_value
+        self.remove_outlier_losses = remove_outlier_losses
         
     def setup(self):
         # save handles to nodes
@@ -136,6 +140,31 @@ class BatchLoss:
     
     def reset(self):
         self.batch_loader.reset()
+        
+    def clip_outliers(self, loss):
+        """
+        if a loss is insanely large, clip it so it doesn't dominate the mean loss
+        """
+        outlier_threshold = 100.0
+        outliers = torch.abs(loss) > outlier_threshold
+        
+        loss[outliers] = outlier_threshold * torch.sign(loss[outliers])
+        
+        return loss
+    
+    def remove_outliers(self, loss):
+        """
+        if a loss is insanely large, remove it from the batch.
+        
+        USE CAREFULLY
+        """
+        if self.remove_outlier_losses:
+            outlier_threshold = 100.0
+            non_outliers = torch.abs(loss) <= outlier_threshold
+            
+            loss = loss[non_outliers]
+        
+        return loss
     
 """ alias """
 class BC(BatchLoss):
@@ -852,17 +881,6 @@ class ResSAC(BatchLoss):
         return loss, action_mse_error
 
 class CriticOnlyBatchLoss(BatchLoss):
-    def __init__(self,
-            batch_loader: BatchLoader,
-            eta: float = 0.0, # weight of the critic loss
-            use_bc_loss = True,
-            freqs = {}, # training frequencies, units: steps
-        ):
-        self.batch_loader = batch_loader
-        self.eta = eta
-        self.use_bc_loss = use_bc_loss
-        self.freqs = freqs
-        
     def setup(self):
         # get the rb_id
         self.rb_id = self.batch_loader.rb_id
@@ -886,8 +904,13 @@ class CriticOnlyBatchLoss(BatchLoss):
         # get the DQL losses
         critic_loss = self.critic.loss(nbatch, self.rb_id)
         
+        # remove outlier losses... use carefully
+        critic_loss2 = self.remove_outliers(critic_loss)
+        
+        critic_loss3 = critic_loss2.mean()
+        
         losses = {
-            'critic': critic_loss
+            'critic': critic_loss3
         }
         
         # we're done

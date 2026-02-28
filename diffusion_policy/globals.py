@@ -231,7 +231,7 @@ def load_global_config(cfg: DictConfig, cfg_key):
     
 def load_global_config_from_path(cfg_path, cfg_key):
     cfg = OmegaConf.load(cfg_path)
-    load_global_config(cfg, cfg_key)
+    load_global_config(cfg, cfg_key) #type:ignore
     
 def load_global_config_from_path_and_save_to_globals_dict(cfg_path, cfg_key):    
     load_global_config_from_path(cfg_path, cfg_key)

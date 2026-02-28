@@ -69,6 +69,7 @@ def main(cfg: DictConfig):
     
     # whether we're debugging
     if cfg.debug:  # type: ignore
+        cfg.single_thread = True # type: ignore
         # no resuming
         cfg.resume = False # type:ignore
         
@@ -97,9 +98,9 @@ def main(cfg: DictConfig):
         #     cfg.step_freqs[key] = 1
         
         # testing rollouts
-        cfg.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
-        cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
-        cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
+        # cfg.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
+        # cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
+        # cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
         
         # # no rollouts
         # cfg.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore

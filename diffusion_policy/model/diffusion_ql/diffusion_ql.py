@@ -53,17 +53,26 @@ class DiffusionQL(nn.Module):
         self.use_tree = use_tree
         self.action_relative_to_state = action_relative_to_state
         self.use_denoise = use_denoise
+        self.discount = discount
+        self.tau = tau
+        self.max_q_backup = max_q_backup
+        self.lr = lr
+        self.lr_min = lr_min
+        self.lr_maxt = lr_maxt
 
         self.critic = critic
+        
+    def setup(self):
+        self.critic.setup()
         
         if self.use_target_network:
             self.critic_target = copy.deepcopy(self.critic)
             
         # set up the optimizer
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr, weight_decay=1.0e-06)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr, weight_decay=1.0e-06)
         
         # device transfer members, since I own them
-        device = torch.device(globals.CONFIG.device)
+        device = torch.device(globals.CONFIG.device) #type:ignore
         self.critic.to(device)
         
         if self.use_target_network:
@@ -78,11 +87,8 @@ class DiffusionQL(nn.Module):
         ema_model.to(device)
 
         if self.use_lr_decay:
-            self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=lr_maxt, eta_min=lr_min)
+            self.critic_lr_scheduler = CosineAnnealingLR(self.critic_optimizer, T_max=self.lr_maxt, eta_min=self.lr_min)
 
-        self.discount = discount
-        self.tau = tau
-        self.max_q_backup = max_q_backup
         
     def MakeOptions(self, task_id):
         options = {}
@@ -161,11 +167,11 @@ class DiffusionQL(nn.Module):
         target_q = (reward + not_done * self.discount * target_qm).detach()
 
         # compute the loss
-        critic_loss = F.mse_loss(current_q1, target_q)
+        critic_loss = F.mse_loss(current_q1, target_q, reduction="none")
         
         # if using double-q learning
         if self.use_double_q:
-            critic_loss = critic_loss + F.mse_loss(current_q2, target_q)
+            critic_loss = critic_loss + F.mse_loss(current_q2, target_q, reduction="none")
         
         # logging
         dd = {}
@@ -173,7 +179,8 @@ class DiffusionQL(nn.Module):
             dd["qval/" + self.get_mode_string() + " mode. " + options['leaf'] + ": avg q-value"] = current_q1.mean()
         else:
             dd["qval/" + self.get_mode_string() + ": avg q-value"] = current_q1.mean()
-        globals.LOGGER.log(dd)
+        if globals.LOGGER is not None:
+            globals.LOGGER.log(dd)
         
         if reward.mean() > 0.0:
             pass
@@ -340,7 +347,8 @@ class DiffusionQL(nn.Module):
             actor_loss = None
                 
         # logging
-        globals.LOGGER.log(dd)
+        if globals.LOGGER is not None:
+            globals.LOGGER.log(dd)
         
         return actor_loss, critic_loss
     

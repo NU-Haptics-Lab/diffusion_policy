@@ -113,6 +113,18 @@ shape_meta:
     - 10 # max from sandbox_common.MaxParams
 
 
+object_name_to_some_hot_index:
+  block: 0
+  bin_with_divider: 1
+  cube_with_one_green_face: 2
+  rotating_puck: 3
+  ring1: 4
+  ring2: 5
+  ring3: 6
+  ring_toy_base: 7
+  push_t_object: 8
+  push_t_outline: 9
+
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
   obs_keys_to_use: ${obs_keys_to_use}

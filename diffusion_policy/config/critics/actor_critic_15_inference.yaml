@@ -14,28 +14,24 @@ batch_size: 128
 val_every: 40
 
 ### Global Control Panel ###
-load:
-  # - critic
-  # - actor
-  - globals
 
 to_load:
   # - critic
-  # - actor
-  - globals
+  - actor
+  # - globals # DO NOT LOAD GLOBALS WHEN DOING INFERENCE
 
 # hack
-resume: true
+resume: true # must be true for inference
 resume_tag: step=0800983 
 output_dir: /media/dexnex_ssd/models/actor_critic_15
 
-tasks_to_use:
+tasks_to_use: []
   # - bnb_2cams
   # - bnb_1cam
   # - block_transfer
   # - sim_hitl_toby # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
   # - sim_hitl_not_toby # haptics values not consistent w.r.t. real life datasets. TODO: jMUST VALIDATE
-  - actor_critic_15 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
+  # - actor_critic_15 # haptics values not consistent w.r.t. real life datasets. TODO: MUST VALIDATE
   # - sim_hitl_failures # to train the critic
 
 # which obs the obs_encoder will use
@@ -80,6 +76,10 @@ num_inference_steps: 8
 
 clamp: true
 
+### forward compat
+action_key: robot_joint_pos
+n_obs_steps: 1
+
 ###################################################
 ###################################################
 ###################################################
@@ -88,24 +88,6 @@ clamp: true
 # global_checkpointer:
 #   _target_: diffusion_policy.common.checkpointer.GlobalCheckpointer
 
-
-checkpoint:
-  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
-  save_last_ckpt: true
-  save_last_snapshot: false
-
-  format_str: step={global_step:07d}.ckpt
-  k: 50 # nb checkpoints to keep
-  checkpoint_every: 100 # how often, in epochs
-  mode: max
-  monitor_key: epoch
-  use_current_directory: false # use ${output_dir} as the base
-
-  # required if resuming
-  resume: ${resume}
-  resume_tag: ${resume_tag}
-  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
-  output_dir: ${output_dir}
 
 # common data
 shape_meta:
@@ -128,30 +110,6 @@ shape_meta:
     shape:
     - 35 # gofa (6), wr (2), th (5), ff (4), mf (4), biotacs (5), th-pos (3), ff-pos (3), mf-pos (3)
 
-
-training:
-  max_train_steps: null
-  max_val_steps: null
-  sample_every: 2
-  seed: 42
-  tqdm_interval_sec: 1.0
-
-
-logging:
-  _target_: diffusion_policy.common.logging.Logging
-  use_wandb: true
-
-  wandb_cfg:
-    group: null
-    id: null
-    mode: online # don't change this
-    name: 2025.diffusion_ql
-    project: dexnex_diffusion
-    resume: true # wandb automatic resume
-    tags:
-    - diffusion_ql
-    - cotrain
-    - default
 
 common_obs_encoder:
   _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
@@ -176,8 +134,10 @@ common_obs_encoder:
 common_indices:
   _target_: diffusion_policy.common.sarsa_sampler.Indices
   rb_id: default
-  rb_offset: 0
+  rb_episode_start_idx: 0
   rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
   pad_before: 0
   pad_after: 0
   debug: ${debug}
@@ -191,28 +151,12 @@ replay_buffer_loader:
 
   # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
-    block_transfer: ${data_directory}bt.reward.zarr
-    bnb_1cam: ${data_directory}1cam.reward.zarr
-    bnb_2cams: ${data_directory}2cams.reward.zarr
-    sim_hitl_toby: ${data_directory}sim_hitl_toby.reward.zarr
-    sim_hitl_not_toby: ${data_directory}sim_hitl_not_toby.reward.zarr
-    sim_online_rl1: ${data_directory}sim_online_rl1.reward.zarr
-    actor_critic_15: ${data_directory}actor_critic_15.reward.zarr
-    sim_hitl_failures: ${data_directory}sim_hitl_failures.reward.zarr
     all: ${data_directory}actor_critic_15.reward.zarr # for compat
 
   modes:
-    block_transfer: r
-    bnb_1cam: r
-    bnb_2cams: r
-    sim_hitl_toby: r
-    sim_hitl_not_toby: r
-    sim_online_rl1: r
-    actor_critic_15: a
-    sim_hitl_failures: r
     all: r
 
-# to be used for norming / unnorming without loading
+# to be used during inference for norming / unnorming without loading. Requires reserved RB keyword, 'all'
 default_batch_loader:
   _target_: diffusion_policy.dataset.batch_loader.BatchLoader
   rb_id: "default" # forces a load
@@ -220,103 +164,10 @@ default_batch_loader:
   use_dataloader: false # must be false during inference
   strict: false # must be false for inference
 
-# NODE -- training entry point
-session_trainer:
-  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
-  nb_epochs: ${total_num_epochs} # testing
-  
-  # children
-  epoch_trainer:
-    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
-    nb_batches: ${batches_per_epoch}
-
-    # children
-    step_trainer: 
-      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
-      grad_norm: 1.0
-    
-      # weighted batch loss dict
-      w_batch_losses:
-        block_transfer: ${common_wbatch_loss}
-        bnb_1cam: ${common_wbatch_loss}
-        bnb_2cams: ${common_wbatch_loss}
-        sim_hitl_toby: ${common_wbatch_loss}
-        sim_hitl_not_toby: ${common_wbatch_loss}
-        sim_online_rl1: ${common_wbatch_loss}
-        actor_critic_15: ${common_wbatch_loss}
-        all: ${common_wbatch_loss}
-        sim_hitl_failures: ${common_wbatch_loss}
-
-    rollouts:
-      _target_: diffusion_policy.rollout.Rollout
-      freq: 1 # 250 # in steps
-      num_rollouts_per_trigger: 100
-      rb_id: actor_critic_15
-      use_online_rollout: true
-      rollout_num_actions: 8
-      use_critic_preferred_actions: false
-      use_critic_preferred_actions_early_exit: false
-      critic_preferred_actions_nb: 2
-      only_save_successful_episodes: true
-
-
-      evaluator:
-        _target_: evaluation.eval.Inference
-
-        policy: null
-        debug: ${debug}
-        analytics: false
-        task_id: sim_hitl_toby # could experiment with sim_hitl_toby for more stable actions (hopefully) -> wasn't more stable? (perhaps because sim_hitl_toby leaf doesn't have the same energy penalty as actor_critic_15?)
-
-  epoch_evaluator:
-    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
-    nb_batches: 4
-    val_every: ${val_every}
-
-    # weighted batch loss dict
-    w_batch_losses:
-      block_transfer: ${common_wbatch_loss}
-      bnb_1cam: ${common_wbatch_loss}
-      bnb_2cams: ${common_wbatch_loss}
-      sim_hitl_toby: ${common_wbatch_loss}
-      sim_hitl_not_toby: ${common_wbatch_loss}
-      sim_online_rl1: ${common_wbatch_loss}
-      actor_critic_15: ${common_wbatch_loss}
-      sim_hitl_failures: ${common_wbatch_loss}
-      all: ${common_wbatch_loss}
-
-
-
-common_wbatch_loss:
-  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
-  weight: 1.0
-
-  # children
-  batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.QVW
-    use_bc_loss: ${use_bc_loss}
-    freqs: ${step_freqs}
-    eta: 1.0
-
-    # children
-    # for normalizing
-    batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.BatchLoader
-      rb_id: default # forces a load
-      train_or_val: train
-
 dataloaders:
   _target_: diffusion_policy.dataset.train_and_val.DataLoaders
 
   d: 
-    block_transfer: ${common_dataset}
-    bnb_1cam: ${common_dataset}
-    bnb_2cams: ${common_dataset}
-    sim_hitl_toby: ${common_dataset}
-    sim_hitl_not_toby: ${common_dataset}
-    sim_online_rl1: ${common_dataset}
-    actor_critic_15: ${common_dataset}
-    sim_hitl_failures: ${common_dataset}
     all: ${common_dataset}
 
 common_dataset:
@@ -393,57 +244,26 @@ models:
 
 
     actor:
-      _target_: diffusion_policy.model.model.ModelEmaOptim
-
-      # # checkpointer
-      # checkpointer: ${common_checkpoint}
-
+      _target_: diffusion_policy.model.model.Model
       model:
-        _target_: diffusion_policy.model.model.Model
-        model:
-          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-          action_shape: ${shape_meta.action.shape}
-          noise_scheduler: ${common_noise_scheduler}
-          obs_encoder_maker: ${common_obs_encoder}
-          eval_fixed_crop: true
-          obs_as_global_cond: true
-          obs_encoder_group_norm: true
-          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
-          down_dims: # must be divisible by nb_groups (8)
-            - 128
-            - 192
-            - 256
-          diffusion_step_embed_dim: 32
+        _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+        action_shape: ${shape_meta.action.shape}
+        noise_scheduler: ${common_noise_scheduler}
+        obs_encoder_maker: ${common_obs_encoder}
+        eval_fixed_crop: true
+        obs_as_global_cond: true
+        obs_encoder_group_norm: true
+        embed_task_id: true
+        n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+        down_dims: # must be divisible by nb_groups (8)
+          - 128
+          - 192
+          - 256
+        diffusion_step_embed_dim: 32
 
-          action_relative_to_state: ${action_relative_to_state}
-          use_tree: false
-          use_simple_model: false
-
-      ema:
-        _target_: diffusion_policy.model.model.Ema
-        use_ema: true
-        ema_cfg:
-          inv_gamma: 1.0
-          max_value: 0.9999
-          min_value: 0.0
-          power: 0.75
-          update_after_step: 0
-
-      optim:
-        _target_: diffusion_policy.model.model.Optim
-
-        # https://huggingface.co/docs/transformers/en/main_classes/optimizer_schedules#transformers.get_cosine_schedule_with_warmup
-        lr_scheduler: cosine
-        lr_warmup_steps: 500
-        gradient_accumulate_every: 1
-        optimizer_target: torch.optim.AdamW
-        optimizer_cfg:
-          betas:
-            - 0.95
-            - 0.999
-          eps: 1.0e-08
-          lr: 5e-4 # 1e-4
-          weight_decay: 1.0e-06
+        action_relative_to_state: ${action_relative_to_state}
+        use_tree: false
+        use_simple_model: false
 
 
 common_noise_scheduler:
@@ -456,185 +276,3 @@ common_noise_scheduler:
   prediction_type: epsilon
      
 device: cuda:0
-
-override:
-  session_trainer:
-    epoch_trainer:
-      step_trainer: 
-        w_batch_losses:
-          block_transfer: 
-            weight: 0.1
-            batch_loss: 
-              batch_loader:
-                rb_id: block_transfer
-
-          bnb_1cam:
-            weight: 0.25
-            batch_loss:
-              batch_loader:
-                rb_id: bnb_1cam
-
-          bnb_2cams:
-            weight: 0.25
-            batch_loss: 
-              batch_loader:
-                rb_id: bnb_2cams
-
-          sim_hitl_toby:
-            weight: 1.0
-            batch_loss: 
-              batch_loader:
-                rb_id: sim_hitl_toby
-
-          sim_hitl_not_toby:
-            weight: 0.5
-            batch_loss: 
-              batch_loader:
-                rb_id: sim_hitl_not_toby
-
-          sim_online_rl1:
-            weight: 0.1
-            batch_loss: 
-              batch_loader:
-                rb_id: sim_online_rl1
-              use_bc_loss: ${use_bc_loss}
-
-          actor_critic_15:
-            weight: 1.0
-            batch_loss: 
-              batch_loader:
-                rb_id: actor_critic_15
-              use_bc_loss: ${use_bc_loss}
-
-          all:
-            weight: 0.0
-            batch_loss: 
-              batch_loader:
-                rb_id: all
-              use_bc_loss: ${use_bc_loss}
-
-          sim_hitl_failures:
-            weight: 0.1
-            batch_loss: 
-              batch_loader:
-                rb_id: sim_hitl_failures
-              use_bc_loss: ${use_bc_loss}
-    epoch_evaluator:
-      w_batch_losses:
-        block_transfer: 
-          weight: 0.1
-          batch_loss: 
-            batch_loader:
-              rb_id: block_transfer
-              train_or_val: val
-
-        bnb_1cam:
-          weight: 0.25
-          batch_loss:
-            batch_loader:
-              rb_id: bnb_1cam
-              train_or_val: val
-
-        bnb_2cams:
-          weight: 0.25
-          batch_loss: 
-            batch_loader:
-              rb_id: bnb_2cams
-              train_or_val: val
-
-        sim_hitl_toby:
-          weight: 1.0
-          batch_loss: 
-            batch_loader:
-              rb_id: sim_hitl_toby
-              train_or_val: val
-
-        sim_hitl_not_toby:
-          weight: 0.5
-          batch_loss: 
-            batch_loader:
-              rb_id: sim_hitl_not_toby
-              train_or_val: val
-
-        sim_online_rl1:
-          weight: 0.1
-          batch_loss: 
-            batch_loader:
-              rb_id: sim_online_rl1
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
-
-        actor_critic_15:
-          weight: 1.0
-          batch_loss: 
-            batch_loader:
-              rb_id: actor_critic_15
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
-
-        all:
-          weight: 0.0
-          batch_loss: 
-            batch_loader:
-              rb_id: all
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
-
-        sim_hitl_failures:
-          weight: 0.1
-          batch_loss: 
-            batch_loader:
-              rb_id: sim_hitl_failures
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
-
-  dataloaders:
-    d:
-      block_transfer:
-        sampler:
-          rb_id: block_transfer
-      bnb_1cam:
-        sampler:
-          rb_id: bnb_1cam
-      bnb_2cams:
-        sampler:
-          rb_id: bnb_2cams
-      sim_hitl_toby:
-        sampler:
-          rb_id: sim_hitl_toby
-      sim_hitl_not_toby:
-        sampler:
-          rb_id: sim_hitl_not_toby
-      sim_online_rl1:
-        sampler:
-          rb_id: sim_online_rl1
-      actor_critic_15:
-        sampler:
-          rb_id: actor_critic_15
-      sim_hitl_failures:
-        sampler:
-          rb_id: sim_hitl_failures
-      all:
-        sampler:
-          rb_id: all
-
-  models:
-    models:
-      critic:
-        noise_scheduler:
-          _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
-          # num_inference_steps set elsewhere
-        # critic:
-        #   critic:
-        #     qlmodel:
-        #       obs_encoder_maker:
-        #         lowdims:
-                  # add on actions to the input
-                  # action:
-                  #   shape: ${shape_meta.action.shape}
-
-      actor:
-        model:
-          model:
-            noise_scheduler:
-              variance_type: fixed_small # ah, I need this here because it only exists in the DDPM scheduler, so it's not common to DDIM & DDPM

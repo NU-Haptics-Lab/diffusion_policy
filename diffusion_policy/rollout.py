@@ -390,8 +390,9 @@ class Rollout:
     def prep_action_for_stepping(self, actions):
         # none protection
         if actions is not None:
-            actions = torch.squeeze(actions)
-            actions = actions.numpy()
+            actions = np.squeeze(actions)
+            assert(isinstance(actions, np.ndarray)) # should already be
+            # actions = actions.numpy()
         return actions
         
     def one_rollout(self):

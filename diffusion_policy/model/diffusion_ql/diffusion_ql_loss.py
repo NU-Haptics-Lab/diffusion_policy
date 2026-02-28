@@ -66,6 +66,9 @@ class CriticLoss(nn.Module):
         # set the noise scheduler time steps
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         
+    def setup(self):
+        self.critic.setup()
+        
         
     def Denoise(self, 
                 nobs_dict, 

@@ -221,6 +221,7 @@ class TopKCheckpointManager:
     
     def load_globals(self, payload):
         # hard-coded for now
+        # TODO: MOVE THIS TO THE GLOBALS LOADER
         globals.STEP = payload['step']
         globals.EPOCH = payload['epoch']
     

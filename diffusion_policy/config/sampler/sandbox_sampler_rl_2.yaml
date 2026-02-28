@@ -1,5 +1,7 @@
 
 
+description: compatible with sandbox2.zarr
+
 # action_key: robot_joint_pos # test to see if it's required
 
 # which obs the sampler will load from the replay buffer
@@ -14,6 +16,42 @@ obs_keys_to_load:
 
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6]
 obs_rel_indices: [0]
+
+
+# common data
+shape_meta:
+  robot_joint_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  # required for the model. Just sum up all action inputs
+  action:
+    shape:
+    - 30 # sum: [robot_joint_action]
+    
+  robot_joint_pos:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  robot_joint_vel:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  object_quat:
+    shape:
+    - 80 # max from sandbox_common.MaxParams
+
+  object_pos:
+    shape:
+    - 60 # max from sandbox_common.MaxParams
+
+  task_obs:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  loss_weights:
+    shape:
+    - 3 # loss weights, easy, med, hard
 
 
 common_indices:
@@ -35,7 +73,7 @@ replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
 
   rb_paths:
-    all: ${data_directory}sandbox1.zarr
+    all: ${data_directory}sandbox2.zarr
 
   modes:
     all: r

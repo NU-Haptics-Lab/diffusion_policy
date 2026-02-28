@@ -252,6 +252,8 @@ class Indices:
         We then use the indices to "fancy index" the r.b.
 
         indices - episode-relative indices. Meaning the only valid values are [0, len(episode)-1]
+        
+        ALL QUERIES TO THE R.B. SHOULD COME THROUGH THIS METHOD
         """
         rb_indices = self.get_rb_indices(train_indices)
 
@@ -269,6 +271,8 @@ class Indices:
         # index the sample
         # sequence = np.array(ig(input_arr))
         sequence = np.array(ls)
+        
+        # limit outliers? here? idk.
 
         # we're done
         return sequence
@@ -403,6 +407,8 @@ class EpisodeSampler:
             training_episode_start: int, # start of the training episode. This is >= rb_episode_start_idx
             training_episode_end: int, # end of the training episode. This is strictly <= rb_episode_end
             mask,
+            use_cap_rewards = False,
+            reward_cap = 50.0
             ):
         # self.tr_offset = tr_offset
         self.rb_id = rb_id
@@ -411,6 +417,8 @@ class EpisodeSampler:
         self.training_episode_start = training_episode_start
         self.training_episode_end = training_episode_end
         self.mask = mask
+        self.use_cap_rewards = use_cap_rewards
+        self.reward_cap = reward_cap
         
         # I don't like the mask anymore, so enforce all True's to effectively disable it
         assert(np.all(self.mask))
@@ -476,9 +484,8 @@ class EpisodeSampler:
     def get_reward(self, ep_idx):
         reward = self.get_key_sample("reward", ep_idx) # adds a dimension
         
-        # TESTING -- reduce the existence penalty so I don't have to regen the dataset
-        if False:
-            reward[ reward < 0.0] = 0.0
+        if self.use_cap_rewards:
+            reward = np.clip(reward, -self.reward_cap, self.reward_cap)
         
         # convert to np array
         reward = np.array(reward)
@@ -664,10 +671,14 @@ class DatasetSampler:
     """
     def __init__(self,
             rb_id: str,
-            ep_sampler_class: str = "diffusion_policy.common.sarsa_sampler.DatasetSampler.EpisodeSampler", # I don't love this design
+            ep_sampler_class: str = "diffusion_policy.common.sarsa_sampler.EpisodeSampler", # I don't love this design
+            use_cap_rewards = False,
+            reward_cap = 50.0
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
+        self.use_cap_rewards = use_cap_rewards
+        self.reward_cap = reward_cap
         
         # convert text to class object using hydra
         self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class)
@@ -778,7 +789,9 @@ class DatasetSampler:
                 rb_episode_end = rb_episode_end,
                 training_episode_start = training_episode_start,
                 training_episode_end = training_episode_end,
-                mask = mask
+                mask = mask,
+                use_cap_rewards = self.use_cap_rewards,
+                reward_cap = self.reward_cap
             )
 
             self.ep_samplers[rb_episode_end] = ep_sampler

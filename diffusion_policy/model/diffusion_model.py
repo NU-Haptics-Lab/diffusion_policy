@@ -162,6 +162,7 @@ class DiffusionModel(BaseImagePolicy):
             use_tree = False,
             use_simple_model = False,
             num_mid_module_repeats = 4,
+            embed_task_id = False,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -184,6 +185,8 @@ class DiffusionModel(BaseImagePolicy):
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
         self.num_mid_module_repeats = num_mid_module_repeats
+        
+        self.embed_task_id = embed_task_id
         
         
     def setup(self):
@@ -251,6 +254,7 @@ class DiffusionModel(BaseImagePolicy):
                 n_groups=self.n_groups,
                 cond_predict_scale=self.cond_predict_scale,
                 num_mid_module_repeats = self.num_mid_module_repeats,
+                embed_task_id = self.embed_task_id,
             )
         #### end trunk
         

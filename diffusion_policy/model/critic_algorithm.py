@@ -174,11 +174,11 @@ class CriticAlgorithm(nn.Module):
         target_q = (reward + not_done * self.discount * target_qm).detach()
 
         # compute the loss
-        critic_loss = F.mse_loss(current_q1, target_q)
+        critic_loss = F.mse_loss(current_q1, target_q, reduction="none")
         
         # if using double-q learning
         if self.use_double_q:
-            critic_loss = critic_loss + F.mse_loss(current_q2, target_q)
+            critic_loss = critic_loss + F.mse_loss(current_q2, target_q, reduction="none")
         
         # logging
         dd = {}
@@ -186,7 +186,7 @@ class CriticAlgorithm(nn.Module):
         globals.LOGGER.log(dd)
         
         if reward.mean() > 0.0:
-            pass
+            pass # debugging
         
         return critic_loss
 
@@ -224,17 +224,17 @@ class CriticAlgorithm(nn.Module):
         
         next_action should be used to compute the critic loss
         """
-        dd = {}
+        dd = {} 
                 
         # training the critic
         # calc loss for the critic, using (s, a, r, s') & a'
         critic_loss = self.LossCritic(nbatch_dict)
         
-        # critic logging
-        dd[self.get_mode_string() + ": critic_loss"] = critic_loss
+        # # critic logging
+        # dd[self.get_mode_string() + ": critic_loss"] = critic_loss
                 
-        # logging
-        globals.LOGGER.log(dd)
+        # # logging
+        # globals.LOGGER.log(dd)
         
         return critic_loss
     

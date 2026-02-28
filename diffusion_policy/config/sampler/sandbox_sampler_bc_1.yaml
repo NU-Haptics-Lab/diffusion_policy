@@ -1,0 +1,87 @@
+
+
+description: specific to bc-1 because of the shape meta and obs key to load
+
+# action_key: robot_joint_pos # test to see if it's required
+
+# which obs the sampler will load from the replay buffer
+obs_keys_to_load:
+  - robot_joint_pos
+  - robot_joint_vel
+  - object_quat
+  - object_pos
+  - object_linear_vel
+  - object_angular_vel
+  - task_obs
+
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6]
+obs_rel_indices: [0]
+
+
+# common data
+shape_meta:
+  robot_joint_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  # required for the model. Just sum up all action inputs
+  action:
+    shape:
+    - 30 # sum: [robot_joint_action]
+    
+  robot_joint_pos:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  robot_joint_vel:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  object_quat:
+    shape:
+    - 40 # max from sandbox_common.MaxParams
+
+  object_pos:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  task_obs:
+    shape:
+    - 10 # max from sandbox_common.MaxParams
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: false
+
+object_name_to_some_hot_index:
+  block: 0
+  bin_with_divider: 1
+  cube_with_one_green_face: 2
+  rotating_puck: 3
+  ring1: 4
+  ring2: 5
+  ring3: 6
+  ring_toy_base: 7
+  push_t_object: 8
+  push_t_outline: 9
+
+data_directory: /media/dexnex_ssd/data/sandbox/
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: ${data_directory}sandbox1.zarr
+
+  modes:
+    all: r
+

@@ -119,15 +119,15 @@ shape_meta:
 
   object_quat:
     shape:
-    - 40 # max from sandbox_common.MaxParams
+    - 80 # max from sandbox_common.MaxParams
 
   object_pos:
     shape:
-    - 30 # max from sandbox_common.MaxParams
+    - 60 # max from sandbox_common.MaxParams
 
   task_obs:
     shape:
-    - 10 # max from sandbox_common.MaxParams
+    - 30 # max from sandbox_common.MaxParams
 
 training:
   max_train_steps: null

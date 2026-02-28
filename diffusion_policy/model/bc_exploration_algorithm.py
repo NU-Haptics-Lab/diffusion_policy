@@ -194,7 +194,6 @@ class BCExplorationAlgorithm(nn.Module):
         
         # state = observation['robot_joint_pos']
         
-        # actions_joint_positions = self.diffusion_bc_runner.infer_from_robot_state(state)
         future_joint_positions, actions_joint_positions = self.diffusion_bc_runner.infer(observation)
         
         # take the last action

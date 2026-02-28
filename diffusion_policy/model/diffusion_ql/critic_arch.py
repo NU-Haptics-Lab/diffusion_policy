@@ -236,6 +236,9 @@ class QLModelSimple(QLModel):
         
         self.obs_encoder_maker = obs_encoder_maker
         self.hidden_dim = hidden_dim
+        
+    def setup(self):
+        self.obs_encoder_maker.setup()
 
         # get the robomimic obs-encoder
         self.obs_encoder: ObservationEncoder = self.obs_encoder_maker.get()
@@ -246,8 +249,8 @@ class QLModelSimple(QLModel):
         
         # no final activation, obviously
         self.dense = nn.Sequential(
-                QLDenser(dense_input, hidden_dim = hidden_dim),
-                nn.Linear(hidden_dim, 1) # critic must output a single q-value
+                QLDenser(dense_input, hidden_dim = self.hidden_dim),
+                nn.Linear(self.hidden_dim, 1) # critic must output a single q-value
             )
         
     def forward(self, state_dict, action, options: dict | None = None):
