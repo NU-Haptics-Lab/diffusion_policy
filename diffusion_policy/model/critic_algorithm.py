@@ -216,6 +216,7 @@ class CriticAlgorithm(nn.Module):
 
         return metric
         
+    #alias for LossCritic
     def loss(self, nbatch_dict):
         """
         next_action - grad-free denoised next observation using the actor
