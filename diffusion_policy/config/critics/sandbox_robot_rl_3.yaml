@@ -59,7 +59,7 @@ action_relative_to_state: false
 use_denoise: false
 ### End Global Control Panel ###
 
-clamp: false # clamp actions (and diffusion noise)
+clamp: true # clamp actions (and diffusion noise)
 
 
 # rollouts?

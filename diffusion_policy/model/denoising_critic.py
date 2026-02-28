@@ -166,7 +166,11 @@ class DenoisingCritic(CriticAlgorithm):
         # start with noising the reward. In this setup, target_qm should be w.r.t. noisy next action
         if True:
             # assumes that the reward is linearly [0, reward] w.r.t. alpha
-            noisy_reward = alpha * reward
+            # must squeeze 1 dimension out for proper broadcasting.
+            alpha2 = alpha.squeeze(1)
+            
+            assert(alpha2.shape == reward.shape)
+            noisy_reward = alpha2 * reward
 
             # compute the bellman equation, this is what we want our prediction to match
             target_q = (noisy_reward + not_done * self.discount * target_qm).detach()
