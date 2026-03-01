@@ -51,7 +51,7 @@ from diffusers.schedulers.scheduling_ddim import (
 
 import diffusion_policy.globals as globals
 
-from torch._functorch.apis import vmap, grad
+import torch._functorch.apis as functorch_apis
 
 from tqdm import (
     tqdm
@@ -134,21 +134,24 @@ class ImplicitAlgorithm(BaseImagePolicy):
             use_compiled_policy = False,
             use_only_for_inference = False,
             use_lbfgs_for_inference = True,
-            use_batch_adam_for_inference = False,
-            inference_lr = 1e-2,
-            inference_iterations = 50,
+            use_batch_gd_for_inference = False,
+            inference_step_size = 1e-2,
+            inference_iterations = 20,
     ):
         super().__init__()
         
         self.use_compiled_policy = use_compiled_policy
         self.use_only_for_inference = use_only_for_inference
         self.use_lbfgs_for_inference = use_lbfgs_for_inference
-        self.use_batch_adam_for_inference = use_batch_adam_for_inference
-        self.inference_lr = inference_lr
+        self.use_batch_gd_for_inference = use_batch_gd_for_inference
+        self.inference_step_size = inference_step_size
         self.inference_iterations = inference_iterations
 
         self.policy = policy
+        
+        # my members
         self.compiled_policy = None
+        self.compiled_vmap_grad_batch_traj_fcn = None
         
         
     def setup(self):
@@ -156,6 +159,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         
         self.noise_scheduler = DDPMScheduler()
 
+        self.vmap_grad_batch_traj_fcn = self.make_vmap_grad_batch_traj()
 
         # save from global config
         self.action_rel_indices = globals.CONFIG.action_rel_indices #type:ignore
@@ -173,21 +177,25 @@ class ImplicitAlgorithm(BaseImagePolicy):
             if self.use_only_for_inference:
                 # if only for inference, we can compile with grad disabled for faster inference speed
                 self.policy.requires_grad_(False)
-                self.compiled_policy = torch.compile(self.policy, mode="reduce-overhead")
+                self.compiled_policy = torch.compile(self.vectorized_batch_traj_grad, mode="reduce-overhead")
             else:
-                self.compiled_policy = torch.compile(self.policy, mode="default")
+                
+                
+                self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="default")
         
-    def per_sample_backward(self, btrajectory, timestep, bglobal_cond):
-        def fcn(trajectory, global_cond):
-            return self.policy(trajectory.unsqueeze(0), timestep, global_cond = global_cond.unsqueeze(0)).squeeze()
+    # def per_sample_backward(self, btrajectory, timestep, global_cond):
+    #     assert(global_cond.shape[0] == 1) #
         
-        # 2. Vectorize the gradient calculation across the batch dimension
-        # (0, 0) tells vmap to map over the 0th dimension of x and y
-        vmap_fcn = vmap(grad(fcn), in_dims=(0, 0))
-        per_sample_grads = vmap_fcn(btrajectory, bglobal_cond)
+    #     def fcn(trajectory, global_cond):
+    #         return self.policy(trajectory.unsqueeze(0), timestep, global_cond = global_cond).squeeze()
         
-        assert(per_sample_grads.shape == btrajectory.shape)
-        return per_sample_grads
+    #     # 2. Vectorize the gradient calculation across the batch dimension
+    #     # (0, 0) tells vmap to map over the 0th dimension of x and y
+    #     vmap_fcn = vmap(grad(fcn), in_dims=(0, 0))
+    #     per_sample_grads = vmap_fcn(btrajectory, bglobal_cond)
+        
+    #     assert(per_sample_grads.shape == btrajectory.shape)
+    #     return per_sample_grads
 
     # alias
     def predict_action(self, nobs): #type:ignore
@@ -267,59 +275,102 @@ class ImplicitAlgorithm(BaseImagePolicy):
         self.policy.train()
         
         traj = trajectory.detach().clone()
-        future_traj = self.get_future_actions(traj)
         
-        return future_traj, traj
+        return traj
     
-    def inference_batch_adam(self, nobs: dict, warm_start_trajectory = None):
+    def make_vmap_grad_batch_traj(self):
+        def single_trajectory_loss(traj, global_cond):
+            loss = -self.policy(traj.unsqueeze(0), 0.0, global_cond=global_cond).squeeze()
+            return loss
+
+        # 3. Vectorize the loss function over the batch dimension
+        vectorized_grad_fcn = torch.vmap(functorch_apis.grad(single_trajectory_loss), in_dims=(0, None))
+        
+        return vectorized_grad_fcn
+    
+    def inference_batch_gd(self, nobs: dict, warm_start_trajectory = None):
         """
         use a warm start batch of trajectories and use vmap to optimize each. return the highest scoring traj from the batch
         """
         if warm_start_trajectory is None:
             raise NotImplementedError("Must supply a warm start trajectory")
         
+        
+        self.policy.eval()
+        self.policy.requires_grad_(False)
+        To = 1
+        value = next(iter(nobs.values()))
+        B = value.shape[0] # batch
+        T = self.horizon # trajectory length
+        Da = self.policy.action_dim # action dimension
+        device = self.device
+        dtype = self.dtype
+        timestep = 0.0
+        
+        
+        if self.compiled_vmap_grad_batch_traj_fcn is not None:
+            get_grad_fcn = self.compiled_vmap_grad_batch_traj_fcn
+        else:
+            get_grad_fcn = self.vmap_grad_batch_traj_fcn
+
+        # reshape obs: B, T, ... to B*T ...
+        this_nobs = dict_apply(nobs, 
+            lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+
+        # get encoded obs, no grad to save time. Same global cond for all trajectories in the batch
+        with torch.no_grad():
+            nobs_features = self.policy.forward_obs_encoder(this_nobs)
+            global_cond = nobs_features.reshape(B, -1)
+            
+            initial_scores = self.policy(warm_start_trajectory, timestep, global_cond=global_cond).squeeze()
+            
+        # just one sample
+        assert(global_cond.shape[0] == 1)
+        
+        
         # Shape: (batch_size, traj_length, state_dim)
         trajectories = warm_start_trajectory.clone().detach().requires_grad_(True)
         batch_size = trajectories.shape[0]
         
         # 1. Define the optimization parameters
-        lr = self.inference_lr
+        step_size = self.inference_step_size
         iterations = self.inference_iterations
     
-        # 2. Define the score function for a SINGLE trajectory
-        def single_trajectory_loss(traj, global_cond):
-            loss = - self.policy(traj.unsqueeze(0), 0.0, global_cond=global_cond.unsqueeze(0)).squeeze()
-            return loss
-
-        # 3. Vectorize the loss function over the batch dimension
-        vectorized_loss = torch.vmap(single_trajectory_loss, in_dims=(0, 0))
-
         # 4. Optimization Loop (Stateless approach compatible with vmap)
-        for _ in range(iterations):
-            # Compute scores for all trajectories in parallel
-            losses = vectorized_loss(trajectories)
-            losses.backward()
-            
-            # Manually update trajectories (mimicking a stateless optimizer)
-            with torch.no_grad():
-                # Apply update
-                trajectories -= lr * trajectories.grad
-                # Zero gradients for next iteration
-                trajectories.grad.zero_()
+        with torch.enable_grad():
+            for _ in range(iterations):
+                # Compute scores for all trajectories in parallel
+                grads = get_grad_fcn(trajectories, global_cond)
+                
+                # Manually update trajectories (mimicking a stateless optimizer)
+                with torch.no_grad():
+                    # Apply update
+                    trajectories -= step_size * grads
 
         # 5. Find the highest scoring trajectory
         with torch.no_grad():
-            final_scores = vectorized_loss(trajectories)
+            final_scores = self.policy(trajectories, 0.0, global_cond=global_cond).squeeze()
             best_idx = torch.argmax(final_scores)
-            best_traj = trajectories[best_idx].clone()
+            
+            # slice so we keep the batch dimension
+            best_traj = trajectories[best_idx:best_idx+1].clone()
 
-        return best_traj
+        self.policy.requires_grad_(True)
+        self.policy.train()
+        
+        
+        return best_traj.detach().clone()
     
     def inference(self, nobs: dict):
         if self.use_lbfgs_for_inference:
-            return self.inference_lbfgs(nobs)
+            traj = self.inference_lbfgs(nobs)
         else:
-            return self.inference_batch_adam(nobs)
+            traj = self.inference_batch_gd(nobs)
+        
+        
+        future_traj = self.get_future_actions(traj)
+        
+        return future_traj, traj
 
 
     def get_future_actions(self, all_actions):
@@ -404,20 +455,19 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
     """
     very similar, just load a warm start batch of trajectories from the BC dataset
     """
-    def inference_batch_adam(self, nobs: dict, warm_start_trajectory=None):
-        # get a batch of random trajectories from a RB
-        batch_size = 64
+    def inference_batch_gd(self, nobs: dict, warm_start_trajectory=None):
+        """
+        need to use a batch loader to deal with norming correctly
+        """
+        batch_loader = globals.DEFAULT_BATCH_LOADER #type:ignore
+        
+        # reset it
+        batch_loader.reset()
+        
+        # get a batch
+        batch = batch_loader.get_batch()
+        
+        actions = batch['action']
 
-        # get a handle to the dataloader
-        dataloaders = globals.DATALOADERS
 
-        # get a handle to the sampler
-        traindandval = dataloaders["all"]
-        sampler = traindandval.sampler
-
-        # rand indices
-        indices = np.random.choice(len(sampler), size=batch_size, replace=False)
-
-        actions = torch.hstack([torch.tensor(sampler.get_sample(i)["action"]) for i in indices])
-
-        return super().inference_batch_adam(nobs, warm_start_trajectory=actions)
+        return super().inference_batch_gd(nobs, warm_start_trajectory=actions)

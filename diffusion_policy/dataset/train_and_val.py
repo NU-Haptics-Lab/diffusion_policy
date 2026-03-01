@@ -134,6 +134,9 @@ class TrainAndVal:
         if self.rb_id in tasks_to_use:
             self.init()
             
+        # init the sampler regardless?
+        # self.sampler.InitAll()
+            
     # def compute_weights(self, dataset: DexNexDataset):
     #     """
     #     Use critic to compute weights 
@@ -270,6 +273,7 @@ class TrainAndVal:
         nb_episodes = globals.REPLAY_BUFFER_LOADER[self.rb_id].n_episodes # type:ignore
         
         if nb_episodes == 0:
+            print("No episodes in replay buffer, did you forget to seed the online RL replay buffer? Aka copy/paste a good starting RB and rename it to: {}".format(self.rb_id))
             raise
 
         # TODO: rewrite to use datapoints instead of episodes...
@@ -295,11 +299,12 @@ class TrainAndVal:
 
         # init the original sampler with the entire dataset (useful for stats for normalizers)
         all = np.logical_or(val_mask, train_mask)
-        self.sampler.Init(all)
+        self.sampler.InitAll()
         
         # make the datasets
         self.train_dataset = DexNexDataset(self.train_sampler)
         self.val_dataset = DexNexDataset(self.val_sampler)
+        self.all_dataset = DexNexDataset(self.sampler)
         
         # make the train & val config
         train_cfg = copy.deepcopy(self.options.common) # type: ignore
@@ -310,9 +315,11 @@ class TrainAndVal:
         # make the train & val dataloader
         self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
         self.val_dataloader = self.make_dataloader(self.val_dataset, val_cfg)
+        self.all_dataloader = self.make_dataloader(self.all_dataset, train_cfg)
         
         # dict access
         self.dd = {}
+        self.dd["all"] = self.all_dataloader
         self.dd["train"] = self.train_dataloader
         self.dd["val"] = self.val_dataloader
         

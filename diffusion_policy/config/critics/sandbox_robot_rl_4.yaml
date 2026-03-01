@@ -6,7 +6,7 @@ description: "sandbox rl 4: running the Drake sandbox RL env. implicit actor pol
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
-use_compiled_policy: false # set false for debugging
+use_compiled_policy: true # set false for debugging
 total_num_epochs: 3001
 batches_per_epoch: 100 # 100,000 baseline nb steps
 batch_size: 64
@@ -21,20 +21,20 @@ to_load:
 resume: true
 
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox_rl_3
+run_tag: sandbox_rl_4
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/sandbox_rl_3
+output_dir: /media/dexnex_ssd/models/sandbox_rl_4
 
 tasks_to_use:
-  # - all # currently, 'all' is a special keyword used in the batch_loader, and is required
+  - all # currently, 'all' is a special keyword used in the batch_loader, and is required
   - rl_replay_buffer # should be the same as what rollouts are saved to
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
   - robot_joint_pos
   - robot_joint_vel
-  - robot_joint_prev_action
+  # - robot_joint_prev_action
   - object_quat
   - object_pos
   - task_obs
@@ -65,7 +65,7 @@ clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 400
+rollout_frequency: 200
 rollout_warmup_nb_steps: 100
 
 
@@ -169,7 +169,7 @@ common_obs_encoder:
   lowdims:
     - robot_joint_pos
     - robot_joint_vel
-    - robot_joint_prev_action
+    # - robot_joint_prev_action
     - object_quat
     - object_pos
     - task_obs
@@ -204,9 +204,9 @@ replay_buffer_loader:
 # to be used for norming / unnorming without loading
 default_batch_loader:
   _target_: diffusion_policy.dataset.batch_loader.SandboxRobotRLBatchLoader
-  rb_id: "default" # forces a load
-  train_or_val: eval # unnecessary during inference
-  use_dataloader: false # must be false during inference
+  rb_id: all # the name of the rb that'll be used for fitting, alon
+  train_or_val: all # secret option 
+  use_dataloader: true # must be false during inference
   strict: false # must be false for inference
 
 # NODE -- training entry point
@@ -345,8 +345,10 @@ env_loss_params:
   easy_loss_policy: "actor_critic_15"
 
   penalty_options:
+    _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.PenaltyOptions
     use_jerk_penalty: true
-    use_energy_penalty: true
+    use_energy_penalty: true # TODO
+    jerk_weight: 0.001 # calibrated empirically
 
 
   use_cap_rewards: yes
@@ -361,7 +363,7 @@ state_loader:
   keys_to_perturb:
     - robot_joint_pos
     - robot_joint_vel
-    - robot_joint_prev_action
+    # - robot_joint_prev_action
     - object_quat
     - object_pos
 
@@ -401,7 +403,11 @@ models:
           use_double_q: ${..use_double_q}
 
           qlmodel:
-            _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithm # the actual critic alg
+            _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithmInferenceFromBCDataset # the actual critic alg
+            use_lbfgs_for_inference: false
+            use_batch_gd_for_inference: true
+            inference_step_size: 1.0
+            inference_iterations: 10
 
             use_compiled_policy: ${use_compiled_policy}
 

@@ -107,7 +107,8 @@ def main(cfg: DictConfig):
         # cfg.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore
         
         # no compile policy
-        cfg.use_compiled_policy = False
+        if False:
+            cfg.use_compiled_policy = False
         
         torch.autograd.set_detect_anomaly(True) # type: ignore
         
