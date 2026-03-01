@@ -325,9 +325,16 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # 1. Define the optimization parameters
         step_size = self.inference_step_size
         iterations = self.inference_iterations
+        
+        #################
+        # add noise if desired. initial noise. still added even if iterations == 0
+        if self.use_add_inference_noise:
+            trajectories += self.inference_noise * self.make_noise(trajectories)
+        #################
     
         # 4. Optimization Loop (Stateless approach compatible with vmap)
         with torch.enable_grad():
+                        
             for _ in range(iterations):
                 # Compute scores for all trajectories in parallel
                 grads = get_grad_fcn(trajectories, global_cond)
@@ -447,6 +454,13 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return other
     
 class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
+    def __init__(self,
+                 path,
+                 *args,
+                 **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.path = path
     """
     very similar, just load a warm start batch of trajectories from the BC dataset
     """
@@ -461,7 +475,7 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         """
         load a config which lets use batch-load onto GPU
         """
-        path = "/home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_4.yaml"
+        path = self.path # "/home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_4.yaml"
         
         globals.load_global_config_from_path_and_save_to_globals_dict(path, "gpu_action_loader")
         

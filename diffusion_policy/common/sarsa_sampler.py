@@ -520,6 +520,9 @@ class EpisodeSampler:
         # self.calc_jerks()
 
     def get_id(self, i):
+        """
+        the rb index
+        """
         assert(i >= 0)
         assert(i < len(self))
 

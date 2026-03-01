@@ -2,11 +2,11 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox rl 4: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now."
+description: "sandbox rl 5: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation"
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
-use_compiled_policy: true # set false for debugging
+use_compiled_policy: false # set false for debugging or if nb iterations == 0
 total_num_epochs: 3001
 batches_per_epoch: 100 # 100,000 baseline nb steps
 batch_size: 64
@@ -21,10 +21,10 @@ to_load:
 resume: true
 
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox_rl_4
+run_tag: sandbox_rl_6
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/sandbox_rl_4
+output_dir: /media/dexnex_ssd/models/sandbox_rl_6
 
 tasks_to_use:
   - all # currently, 'all' is a special keyword used in the batch_loader, and is required
@@ -65,7 +65,7 @@ clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 200
+rollout_frequency: 40 # should be on a schedule, or as a fcn of the avg ep timeout
 rollout_warmup_nb_steps: 100
 
 
@@ -194,7 +194,7 @@ replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
 
   rb_paths:
-    all: ${data_directory}sandbox2.zarr # 'all' required and used for default batch loading & normalizer fitting
+    all: ${data_directory}sandbox3.zarr # 'all' required and used for default batch loading & normalizer fitting
     rl_replay_buffer: ${data_directory}online_rl_replay_buffer.zarr
 
   modes:
@@ -338,7 +338,7 @@ common_dataset:
 env_loss_params:
   _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.SandboxLoss
 
-  use_easy_loss: true # BC position loss. Yes.
+  use_easy_loss: false # BC position loss. Yes.
   use_medium_loss: false # object based loss, no for now.
   use_hard_loss: true # task loss, yes obv.
 
@@ -356,9 +356,10 @@ env_loss_params:
 
 # new entry, for sandbox.classes.StateLoader
 state_loader:
-  config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_rl_2.yaml
+  config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_rl_5.yaml
   use_dataset_state_initialization: true
   use_state_perturbations: true
+  use_reverse_curriculum_generation: true
 
   keys_to_perturb:
     - robot_joint_pos
@@ -408,8 +409,10 @@ models:
             use_batch_gd_for_inference: true
             use_add_inference_noise: true
             inference_step_size: 0.1
-            inference_iterations: 10
-            inference_noise: 0.01 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
+            inference_iterations: 0
+            inference_noise: 0.001 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
+
+            path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_5.yaml
 
             use_compiled_policy: ${use_compiled_policy}
 
@@ -446,7 +449,7 @@ override:
       step_trainer: 
         w_batch_losses:
           all:
-            weight: 1.0
+            weight: 0.1
             batch_loss: 
               batch_loader:
                 rb_id: all
@@ -461,7 +464,7 @@ override:
       w_batch_losses:
 
         all:
-          weight: 1.0
+          weight: 0.1
           batch_loss: 
             batch_loader:
               rb_id: all

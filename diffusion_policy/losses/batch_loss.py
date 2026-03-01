@@ -913,6 +913,9 @@ class CriticOnlyBatchLoss(BatchLoss):
             'critic': critic_loss3
         }
         
+        if globals.LOGGER is not None:
+            globals.LOGGER.log_one("losses/" + self.rb_id + ": critic_loss", critic_loss3)
+        
         # we're done
         return losses
     

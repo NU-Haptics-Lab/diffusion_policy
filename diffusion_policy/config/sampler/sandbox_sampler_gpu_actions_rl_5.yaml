@@ -1,0 +1,99 @@
+
+
+description: compatible with sandbox3.zarr
+
+action_key: robot_joint_action # test to see if it's required
+
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6]
+
+batch_size: 1024
+
+tasks_to_use: # required for dataloader
+  - all
+  - action # required so a dataloader ref is saved
+
+device: cuda:0 # required for GPUIndices
+
+obs_keys_to_load: {} # required for EpisodeSampler
+
+clamp: False # required for DataArray
+
+# common data
+shape_meta:
+  robot_joint_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  # required for the model. Just sum up all action inputs
+  action:
+    shape:
+    - 30 # sum: [robot_joint_action]
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.GPUIndices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: false
+  use_load_to_gpu: true
+  my_keys:
+    - ${action_key}
+
+
+data_directory: /media/dexnex_ssd/data/sandbox/
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: ${data_directory}sandbox3.zarr
+
+  modes:
+    all: r
+
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d: 
+    action: 
+      _target_: diffusion_policy.dataset.action_dataset.ActionDataset
+      seed: 42
+      val_ratio: 0.02
+      max_train_episodes: null
+      use_weighted_dataloader: false
+
+      options:
+        common:
+          batch_size: ${batch_size}
+          timeout: 0 # 0 means no timeout
+        train:
+          num_workers: 0 # must be 0 for GPU
+          persistent_workers: false
+          pin_memory: false
+          shuffle: true # can't use with use_weighted_dataloader
+        val:
+          num_workers: 0 # must be 0 for GPU 
+          persistent_workers: false
+          pin_memory: false
+          shuffle: true # can't use with use_weighted_dataloader
+
+      # child
+      sampler:
+        _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+        rb_id: all
+
+        ep_sampler_class: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotActionOnlyEpisodeSampler
+
+
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.SandboxRobotRLBatchLoader
+  rb_id: action # actually the dataloader key
+  train_or_val: all # secret option 
+  use_dataloader: true # must be false during inference
+  strict: false # must be false for inference

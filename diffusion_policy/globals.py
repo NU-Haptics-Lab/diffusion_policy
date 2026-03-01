@@ -35,7 +35,7 @@ CURRENT_CONFIG_KEY = ""
 """
 Global config access
 """
-CONFIG: DictConfig | None # backwards compat
+CONFIG: DictConfig | None = None # backwards compat
 
 """
 Contains replay buffers for each dataset specified
@@ -59,7 +59,7 @@ EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoc
 STEP = 1 # start on 1 so that rollouts won't trigger immediately
 
 """ Logger """
-LOGGER: Logging | None
+LOGGER: Logging | None = None
 
 """ Checkpointer """
 CHECKPOINTER: TopKCheckpointManager | None
