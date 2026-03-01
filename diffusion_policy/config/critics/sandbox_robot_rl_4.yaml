@@ -382,7 +382,7 @@ models:
   models:
     critic:
       _target_: diffusion_policy.model.bc_exploration_algorithm.BCExplorationAlgorithm # responsible for exploration
-      use_bc_explore: false # the current B.C. policy kinda sucks, so don't use it. Instead, use the position B.C. policy for sandbox_loss. Also use the B.C. dataset for state loading.
+      use_bc_explore: false # the current B.C. policy kinda sucks, so don't use it. Instead, use the position B.C. policy for sandbox_loss. Also use the B.C. dataset for state loading. Lastly, BC explore not really needed if you're using inference-batch-gd-from-BC-dataset because then it does a similar thing. Can control exploration by changing the inference_step_size, inference_iterations, and inference_step_noise parameters
 
       # children
       policy:
@@ -406,8 +406,10 @@ models:
             _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithmInferenceFromBCDataset # the actual critic alg
             use_lbfgs_for_inference: false
             use_batch_gd_for_inference: true
-            inference_step_size: 1.0
+            use_add_inference_noise: false
+            inference_step_size: 0.1
             inference_iterations: 10
+            inference_noise: 0.0
 
             use_compiled_policy: ${use_compiled_policy}
 

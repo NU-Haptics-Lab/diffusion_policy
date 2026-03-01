@@ -135,8 +135,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
             use_only_for_inference = False,
             use_lbfgs_for_inference = True,
             use_batch_gd_for_inference = False,
+            use_add_inference_noise = False,
             inference_step_size = 1e-2,
             inference_iterations = 20,
+            inference_noise = 0.01,
     ):
         super().__init__()
         
@@ -144,8 +146,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
         self.use_only_for_inference = use_only_for_inference
         self.use_lbfgs_for_inference = use_lbfgs_for_inference
         self.use_batch_gd_for_inference = use_batch_gd_for_inference
+        self.use_add_inference_noise = use_add_inference_noise
         self.inference_step_size = inference_step_size
         self.inference_iterations = inference_iterations
+        self.inference_noise = inference_noise
 
         self.policy = policy
         
@@ -182,20 +186,6 @@ class ImplicitAlgorithm(BaseImagePolicy):
                 
                 
                 self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="default")
-        
-    # def per_sample_backward(self, btrajectory, timestep, global_cond):
-    #     assert(global_cond.shape[0] == 1) #
-        
-    #     def fcn(trajectory, global_cond):
-    #         return self.policy(trajectory.unsqueeze(0), timestep, global_cond = global_cond).squeeze()
-        
-    #     # 2. Vectorize the gradient calculation across the batch dimension
-    #     # (0, 0) tells vmap to map over the 0th dimension of x and y
-    #     vmap_fcn = vmap(grad(fcn), in_dims=(0, 0))
-    #     per_sample_grads = vmap_fcn(btrajectory, bglobal_cond)
-        
-    #     assert(per_sample_grads.shape == btrajectory.shape)
-    #     return per_sample_grads
 
     # alias
     def predict_action(self, nobs): #type:ignore
@@ -346,6 +336,11 @@ class ImplicitAlgorithm(BaseImagePolicy):
                 with torch.no_grad():
                     # Apply update
                     trajectories -= step_size * grads
+                    
+                    # add noise if desired
+                    if self.use_add_inference_noise:
+                        trajectories += self.inference_noise * self.make_noise(trajectories)
+                    
 
         # 5. Find the highest scoring trajectory
         with torch.no_grad():
@@ -455,19 +450,35 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
     """
     very similar, just load a warm start batch of trajectories from the BC dataset
     """
+    def setup(self):
+        super().setup()
+    
+        ### using GPU actions
+        if True:
+            self.load_gpu_actions()
+            
+    def load_gpu_actions(self):
+        """
+        load a config which lets use batch-load onto GPU
+        """
+        path = "/home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_4.yaml"
+        
+        globals.load_global_config_from_path_and_save_to_globals_dict(path, "gpu_action_loader")
+        
+    def get_gpu_actions_batch(self):
+        with globals.use_config("gpu_action_loader"):
+            batch_loader = globals.DEFAULT_BATCH_LOADER #type:ignore
+            batch_loader.reset()
+            batch = batch_loader.get_batch()
+            actions = batch['action']
+            return actions
+        
     def inference_batch_gd(self, nobs: dict, warm_start_trajectory=None):
         """
         need to use a batch loader to deal with norming correctly
         """
-        batch_loader = globals.DEFAULT_BATCH_LOADER #type:ignore
-        
-        # reset it
-        batch_loader.reset()
-        
-        # get a batch
-        batch = batch_loader.get_batch()
-        
-        actions = batch['action']
+        if True:
+            actions = self.get_gpu_actions_batch()
 
 
         return super().inference_batch_gd(nobs, warm_start_trajectory=actions)

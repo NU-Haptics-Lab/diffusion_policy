@@ -13,6 +13,7 @@ import copy
 from omegaconf import OmegaConf, open_dict
 from operator import itemgetter
 
+import torch as th
 
 
 
@@ -125,6 +126,9 @@ class Indices:
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
         self.indices = []
         self.mask = None
+        
+    def setup(self):
+        pass
         
     def create_indices(self, mask):
         """
@@ -390,7 +394,63 @@ def downsample_mask(mask, max_n, seed=0):
     return train_mask
 
 
-    
+class GPUIndices(Indices):
+    """
+    same as indices, but has the option to load the required keys onto GPU
+    """
+    def __init__(self,
+                 use_load_to_gpu=False,
+                 my_keys = [],
+                 *args,
+                 **kwargs
+                 ):
+        super().__init__(*args, **kwargs)
+        self.use_load_to_gpu = use_load_to_gpu
+        self.my_keys = my_keys
+        
+        # my members
+        self.data_gpu = {}
+        
+    def setup(self):
+        self.load_onto_gpu()
+        
+    def load_onto_gpu(self):
+        if self.use_load_to_gpu:
+            # load required keys onto GPU
+            for key in self.my_keys:
+                assert(self.replay_buffer is not None)
+                assert(globals.CONFIG is not None)
+                # get the data
+                data = self.replay_buffer[key]
+                
+                data = np.array(data)
+                
+                # torch it & gpu it
+                data_th = th.from_numpy(data).to(globals.CONFIG.device, dtype=th.float32)
+                
+                # save it
+                self.data_gpu[key] = data_th
+                
+    # override
+    def get_sequence_by_train_indices_and_key(self, train_indices, key):
+        """
+        use the GPU data instead of the RB data
+        """
+        if not self.use_load_to_gpu:
+            return super().get_sequence_by_train_indices_and_key(train_indices, key)
+        
+        # get my required rb-indices
+        rb_indices = self.get_rb_indices(train_indices)
+
+        # get the data from GPU
+        data_th = self.data_gpu[key]
+        
+        # get the sequence
+        sequence_th = data_th[rb_indices]
+
+        # we're done
+        return sequence_th
+        
 
 
 
@@ -408,7 +468,7 @@ class EpisodeSampler:
             training_episode_end: int, # end of the training episode. This is strictly <= rb_episode_end
             mask,
             use_cap_rewards = False,
-            reward_cap = 50.0
+            reward_cap = 50.0,
             ):
         # self.tr_offset = tr_offset
         self.rb_id = rb_id
@@ -420,13 +480,15 @@ class EpisodeSampler:
         self.use_cap_rewards = use_cap_rewards
         self.reward_cap = reward_cap
         
+    def setup(self):
+        
         # I don't like the mask anymore, so enforce all True's to effectively disable it
         assert(np.all(self.mask))
         
         # assertions
-        assert(training_episode_start >= rb_episode_start_idx)
-        assert(training_episode_end <= rb_episode_end)
-        assert(training_episode_start < training_episode_end)
+        assert(self.training_episode_start >= self.rb_episode_start_idx)
+        assert(self.training_episode_end <= self.rb_episode_end)
+        assert(self.training_episode_start < self.training_episode_end)
         
         # my members
         self.qvals: np.ndarray = None # type:ignore
@@ -444,6 +506,7 @@ class EpisodeSampler:
 
         # make using the config for this dataset. Could move this to the constructor?
         self.indices: Indices = hydra.utils.instantiate(indices_cfg)
+        self.indices.setup()
 
         # make the training indices
         self.indices.create_indices(self.mask)
@@ -673,7 +736,7 @@ class DatasetSampler:
             rb_id: str,
             ep_sampler_class: str = "diffusion_policy.common.sarsa_sampler.EpisodeSampler", # I don't love this design
             use_cap_rewards = False,
-            reward_cap = 50.0
+            reward_cap = 50.0,
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
@@ -791,8 +854,9 @@ class DatasetSampler:
                 training_episode_end = training_episode_end,
                 mask = mask,
                 use_cap_rewards = self.use_cap_rewards,
-                reward_cap = self.reward_cap
+                reward_cap = self.reward_cap,
             )
+            ep_sampler.setup()
 
             self.ep_samplers[rb_episode_end] = ep_sampler
             

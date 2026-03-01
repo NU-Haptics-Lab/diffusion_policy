@@ -77,3 +77,20 @@ class SandboxRobotRLEpisodeSampler(EpisodeSampler):
 
 
         return sample
+    
+class SandboxRobotActionOnlyEpisodeSampler(SandboxRobotRLEpisodeSampler):
+    
+    def get_sample(self, ep_idx):
+        """
+        for RL, we need obs, obs_next, action, action_next, reward, and not_done. (s, a, r) will be in the R.B., not_done is computed based on the episode length.
+        """
+        assert(ep_idx >= 0)
+        # assert(ep_idx <= len(self)-2) # must be -2 since we get the next obs & action
+        assert(ep_idx <= len(self)-1) # allow ep_idx to be == len(self)-1. In that case, obs_next will be a repeat of obs
+        
+        sample = {}
+        
+        sample["action"] = self.get_action_sample(ep_idx)
+        
+
+        return sample
