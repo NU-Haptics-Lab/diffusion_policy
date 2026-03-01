@@ -84,9 +84,10 @@ class DenoisingCritic(CriticAlgorithm):
     
     def linear_interp(self, x1, x2, alpha):
         """
-        alpha = 1 means y = x1
+        alpha = 0 means y = x1
+        alpha = 1 means y = x2
         """
-        y = alpha * x1 + (1.0 - alpha) * x2
+        y = (1.0 - alpha) * x1 + alpha * x2
         return y
         
     def make_noise(self, x, generator=None):
@@ -121,6 +122,8 @@ class DenoisingCritic(CriticAlgorithm):
                 return critic_loss
             
         #### noise the trajectory
+        # alpha: 0.0 means all noise, alpha: 1.0 means true value
+        
         # draw alpha, only once
         alpha = self.make_alphas(action)
 
@@ -128,14 +131,14 @@ class DenoisingCritic(CriticAlgorithm):
         noise = self.make_noise(action)
 
         # corrupt a_gt. Simple linear interp for now, can always switch to a more clever noise scheduler (like DDPM) later
-        action = self.linear_interp(action, noise, alpha)
+        action = self.linear_interp(noise, action, alpha)
 
         # and now the next action, same alpha
         # draw noise
         noise = self.make_noise(next_action)
 
         # corrupt a_gt. Simple linear interp for now, can always switch to a more clever noise scheduler (like DDPM) later
-        next_action = self.linear_interp(next_action, noise, alpha)
+        next_action = self.linear_interp(noise, next_action, alpha)
         ####
 
 
@@ -165,12 +168,15 @@ class DenoisingCritic(CriticAlgorithm):
         """
         # start with noising the reward. In this setup, target_qm should be w.r.t. noisy next action
         if True:
-            # assumes that the reward is linearly [0, reward] w.r.t. alpha
+            # assumes that the reward is linearly [0, reward] w.r.t. alpha NOPE. won't work with negative reward values! hack fix for now.
             # must squeeze 1 dimension out for proper broadcasting.
             alpha2 = alpha.squeeze(1)
             
             assert(alpha2.shape == reward.shape)
-            noisy_reward = alpha2 * reward
+            worse_reward = reward - torch.abs(reward) - 1.0
+            
+            # linearly interp w.r.t. alpha2 0 -> worse_reward, 1.0 -> reward
+            noisy_reward = self.linear_interp(worse_reward, reward, alpha2)
 
             # compute the bellman equation, this is what we want our prediction to match
             target_q = (noisy_reward + not_done * self.discount * target_qm).detach()

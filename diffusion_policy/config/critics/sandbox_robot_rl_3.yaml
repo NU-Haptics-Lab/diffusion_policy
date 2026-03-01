@@ -7,7 +7,7 @@ description: "sandbox rl 3: running the Drake sandbox RL env. implicit actor pol
 debug: false # 
 single_thread: false # nice for debugging
 use_compiled_policy: false # set false for debugging
-total_num_epochs: 3001
+total_num_epochs: 1001
 batches_per_epoch: 100 # 100,000 baseline nb steps
 batch_size: 64
 val_every: 20
@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
 run_tag: sandbox_rl_3
@@ -34,7 +34,7 @@ tasks_to_use:
 obs_keys_to_use:
   - robot_joint_pos
   - robot_joint_vel
-  - robot_joint_prev_action
+  # - robot_joint_prev_action
   - object_quat
   - object_pos
   - task_obs
@@ -169,7 +169,7 @@ common_obs_encoder:
   lowdims:
     - robot_joint_pos
     - robot_joint_vel
-    - robot_joint_prev_action
+    # - robot_joint_prev_action
     - object_quat
     - object_pos
     - task_obs
@@ -346,6 +346,7 @@ env_loss_params:
 
   penalty_options:
     use_jerk_penalty: true
+    jerk_weight: 0.001 # calibrated empirically
     use_energy_penalty: true
 
 
@@ -361,7 +362,7 @@ state_loader:
   keys_to_perturb:
     - robot_joint_pos
     - robot_joint_vel
-    - robot_joint_prev_action
+    # - robot_joint_prev_action
     - object_quat
     - object_pos
 
