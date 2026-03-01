@@ -1,0 +1,477 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "sandbox rl 4: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now."
+# global controls
+debug: false # 
+single_thread: false # nice for debugging
+use_compiled_policy: false # set false for debugging
+total_num_epochs: 3001
+batches_per_epoch: 100 # 100,000 baseline nb steps
+batch_size: 64
+val_every: 20
+
+### Global Control Panel ###
+to_load:
+  - critic # TODO: update the checkpoint loader to account for the different things to load
+  - globals
+
+# hack
+resume: true
+
+# should be the same as this file's name (sans .yaml)
+run_tag: sandbox_rl_3
+
+resume_tag: latest
+output_dir: /media/dexnex_ssd/models/sandbox_rl_3
+
+tasks_to_use:
+  # - all # currently, 'all' is a special keyword used in the batch_loader, and is required
+  - rl_replay_buffer # should be the same as what rollouts are saved to
+
+# which obs the obs_encoder will use
+obs_keys_to_use:
+  - robot_joint_pos
+  - robot_joint_vel
+  - robot_joint_prev_action
+  - object_quat
+  - object_pos
+  - task_obs
+  - loss_weights
+
+action_key: robot_joint_action
+
+# which obs the sampler will load from the replay buffer
+obs_keys_to_load: ${obs_keys_to_use}
+
+models_to_train:
+  - critic
+
+models_to_eval:
+  - critic
+
+# higher value means less frequent updates
+step_freqs:
+  critic: 1
+
+use_bc_loss: false
+action_relative_to_state: false
+use_denoise: false
+### End Global Control Panel ###
+
+clamp: false # clamp actions (and diffusion noise)
+
+
+# rollouts?
+use_online_rollout: true
+rollout_frequency: 400
+rollout_warmup_nb_steps: 100
+
+
+num_inference_steps: 8 # compat
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
+obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
+gradient_accumulate_every: 1 # may move this to ModelandEma later
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 50 # nb checkpoints to keep
+  checkpoint_every: 50 # how often, in epochs
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false # use ${output_dir} as the base
+
+  # required if resuming
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
+  output_dir: ${output_dir}
+
+# common data
+shape_meta:
+  robot_joint_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  robot_joint_prev_action:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  # required for the model. Just sum up all action inputs
+  action:
+    shape:
+    - 30 # sum: [robot_joint_action]
+    
+  robot_joint_pos:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  robot_joint_vel:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  object_quat:
+    shape:
+    - 80 # max from sandbox_common.MaxParams
+
+  object_pos:
+    shape:
+    - 60 # max from sandbox_common.MaxParams
+
+  task_obs:
+    shape:
+    - 30 # max from sandbox_common.MaxParams
+
+  loss_weights:
+    shape:
+    - 3 # loss weights, easy, med, hard
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online # don't change this
+    name: 2025.diffusion_ql
+    project: dexnex_diffusion
+    resume: true # wandb automatic resume
+    tags:
+    - diffusion_ql
+    - cotrain
+    - default
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    - robot_joint_pos
+    - robot_joint_vel
+    - robot_joint_prev_action
+    - object_quat
+    - object_pos
+    - task_obs
+    - loss_weights
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: ${debug}
+
+
+data_directory: /media/dexnex_ssd/data/sandbox/
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: ${data_directory}sandbox2.zarr # 'all' required and used for default batch loading & normalizer fitting
+    rl_replay_buffer: ${data_directory}online_rl_replay_buffer.zarr
+
+  modes:
+    all: r
+    rl_replay_buffer: a
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.SandboxRobotRLBatchLoader
+  rb_id: "default" # forces a load
+  train_or_val: eval # unnecessary during inference
+  use_dataloader: false # must be false during inference
+  strict: false # must be false for inference
+
+# NODE -- training entry point
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs} # testing
+  
+  # children
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    # children
+    step_trainer: 
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+    
+      # weighted batch loss dict
+      w_batch_losses:
+        all: ${common_wbatch_loss}
+        rl_replay_buffer: ${common_wbatch_loss}
+
+    # alias: rollout:
+    rollouts:
+      _target_: projects.sandbox.sandbox_rollout.SandboxRollout
+      freq: ${rollout_frequency} # in steps
+      warmup_nb_steps: ${rollout_warmup_nb_steps}
+      rb_id: rl_replay_buffer
+      num_rollouts_per_trigger: 1
+      use_online_rollout: ${use_online_rollout}
+      rollout_num_actions: 8
+      use_critic_preferred_actions: false
+      use_critic_preferred_actions_early_exit: false
+      critic_preferred_actions_nb: 2
+      use_filter_successful_and_failed_episodes: false
+      only_save_successful_episodes: false
+      save_rollouts: true # required for RL to work properly
+
+      use_energy_limited_actions: false
+      which_model_to_use_for_inference: critic
+      use_ema_model: false
+
+      env_maker:
+        _target_: projects.sandbox.sandbox_rollout.SandboxRLRolloutEnv
+
+      evaluator:
+        _target_: diffusion_policy.evaluation.eval.SimpleInference
+
+        policy: null
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    # weighted batch loss dict
+    w_batch_losses:
+      all: ${common_wbatch_loss}
+      rl_replay_buffer: ${common_wbatch_loss}
+
+
+
+common_wbatch_loss:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  # children
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.CriticOnlyBatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+    remove_outlier_losses: true # instead of removing them from the data-set. Outliers could be due to Drake instability, or episode restarting or w/e
+
+    # children
+    # for normalizing
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.SandboxRobotRLBatchLoader
+      rb_id: default # forces a load
+      train_or_val: train
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d: 
+    all: ${common_dataset}
+    rl_replay_buffer: ${common_dataset}
+
+common_dataset:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null
+  use_weighted_dataloader: false
+
+  options:
+    common:
+      batch_size: ${batch_size}
+      timeout: 0 # 0 means no timeout
+    train:
+      num_workers: 4 # remember, this is PER dataloader, so plan appropriately for the number of datasets you're loading
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true # can't use with use_weighted_dataloader
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true # can't use with use_weighted_dataloader
+
+  # child
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: default
+
+    ep_sampler_class: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotRLEpisodeSampler
+
+    use_cap_rewards: yes
+    reward_cap: 50.0 # just so the q-vals don't totally blow up
+
+###########################################################################
+###########################################################################
+###########################################################################
+# Drake Stuff, Randomization stuff, loss stuff
+###########################################################################
+###########################################################################
+###########################################################################
+# new entry, for sandbox_loss.SandboxLoss
+env_loss_params:
+  _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.SandboxLoss
+
+  use_easy_loss: true # BC position loss. Yes.
+  use_medium_loss: false # object based loss, no for now.
+  use_hard_loss: true # task loss, yes obv.
+
+  easy_loss_policy: "actor_critic_15"
+
+  penalty_options:
+    use_jerk_penalty: true
+    use_energy_penalty: true
+
+
+  use_cap_rewards: yes
+  reward_cap: 50.0 # just so the q-vals don't totally blow up
+
+# new entry, for sandbox.classes.StateLoader
+state_loader:
+  config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_rl_2.yaml
+  use_dataset_state_initialization: true
+  use_state_perturbations: true
+
+  keys_to_perturb:
+    - robot_joint_pos
+    - robot_joint_vel
+    - robot_joint_prev_action
+    - object_quat
+    - object_pos
+
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+###########################################################################
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    critic:
+      _target_: diffusion_policy.model.bc_exploration_algorithm.BCExplorationAlgorithm # responsible for exploration
+      use_bc_explore: false # the current B.C. policy kinda sucks, so don't use it. Instead, use the position B.C. policy for sandbox_loss. Also use the B.C. dataset for state loading.
+
+      # children
+      policy:
+        _target_: diffusion_policy.model.critic_algorithm.CriticAlgorithm # responsible for calculating loss and training a critic
+        discount: 0.975 # unstable when tested w/ 0.9, 0.99 ... taking a while to converge (while low-freq oscillations) when discount 0.75
+        lr: 1e-4
+        tau: 0.01 # 0.01 -> after 200 steps ~= 87% new values
+        use_target_network: true
+        use_double_q: true
+
+        # lr decay
+        use_lr_decay: true
+        lr_maxt: 200000
+        lr_min: 1.0e-6
+
+        critic:
+          _target_: diffusion_policy.model.diffusion_ql.critic_arch.DoubleCritic # double critic feature
+          use_double_q: ${..use_double_q}
+
+          qlmodel:
+            _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithm # the actual critic alg
+
+            use_compiled_policy: ${use_compiled_policy}
+
+            policy:
+              _target_: diffusion_policy.model.implicit_model.ImplicitPolicy # the actual critic NN architecture
+
+              action_shape: ${shape_meta.action.shape}
+              obs_encoder_maker: ${common_obs_encoder}
+              n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+              down_dims: # must be divisible by nb_groups (8)
+                - 128
+                - 256
+                - 512
+              num_mid_module_repeats: 2
+
+
+
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true # apparently you want this true when prediction_type is sample
+  num_train_timesteps: 100
+  prediction_type: epsilon # epsilon or sample
+     
+device: cuda:0
+
+override:
+  session_trainer:
+    epoch_trainer:
+      step_trainer: 
+        w_batch_losses:
+          all:
+            weight: 1.0
+            batch_loss: 
+              batch_loader:
+                rb_id: all
+              use_bc_loss: ${use_bc_loss}
+          rl_replay_buffer:
+            weight: 1.0
+            batch_loss: 
+              batch_loader:
+                rb_id: rl_replay_buffer
+              use_bc_loss: ${use_bc_loss}
+    epoch_evaluator:
+      w_batch_losses:
+
+        all:
+          weight: 1.0
+          batch_loss: 
+            batch_loader:
+              rb_id: all
+              train_or_val: val
+            use_bc_loss: ${use_bc_loss}
+        rl_replay_buffer:
+          weight: 1.0
+          batch_loss: 
+            batch_loader:
+              rb_id: rl_replay_buffer
+              train_or_val: val
+            use_bc_loss: ${use_bc_loss}
+
+  dataloaders:
+    d:
+      all:
+        sampler:
+          rb_id: all
+      rl_replay_buffer:
+        sampler:
+          rb_id: rl_replay_buffer

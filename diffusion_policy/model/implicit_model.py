@@ -133,11 +133,19 @@ class ImplicitAlgorithm(BaseImagePolicy):
             policy: ImplicitPolicy,
             use_compiled_policy = False,
             use_only_for_inference = False,
+            use_lbfgs_for_inference = True,
+            use_batch_adam_for_inference = False,
+            inference_lr = 1e-2,
+            inference_iterations = 50,
     ):
         super().__init__()
         
         self.use_compiled_policy = use_compiled_policy
         self.use_only_for_inference = use_only_for_inference
+        self.use_lbfgs_for_inference = use_lbfgs_for_inference
+        self.use_batch_adam_for_inference = use_batch_adam_for_inference
+        self.inference_lr = inference_lr
+        self.inference_iterations = inference_iterations
 
         self.policy = policy
         self.compiled_policy = None
@@ -190,7 +198,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return self.inference(nobs_dict)
     
     # @torch.no_grad() need grads for lbfgs
-    def inference(self, nobs: dict, warm_start_trajectory = None):
+    def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
         """
@@ -262,6 +270,57 @@ class ImplicitAlgorithm(BaseImagePolicy):
         future_traj = self.get_future_actions(traj)
         
         return future_traj, traj
+    
+    def inference_batch_adam(self, nobs: dict, warm_start_trajectory = None):
+        """
+        use a warm start batch of trajectories and use vmap to optimize each. return the highest scoring traj from the batch
+        """
+        if warm_start_trajectory is None:
+            raise NotImplementedError("Must supply a warm start trajectory")
+        
+        # Shape: (batch_size, traj_length, state_dim)
+        trajectories = warm_start_trajectory.clone().detach().requires_grad_(True)
+        batch_size = trajectories.shape[0]
+        
+        # 1. Define the optimization parameters
+        lr = self.inference_lr
+        iterations = self.inference_iterations
+    
+        # 2. Define the score function for a SINGLE trajectory
+        def single_trajectory_loss(traj, global_cond):
+            loss = - self.policy(traj.unsqueeze(0), 0.0, global_cond=global_cond.unsqueeze(0)).squeeze()
+            return loss
+
+        # 3. Vectorize the loss function over the batch dimension
+        vectorized_loss = torch.vmap(single_trajectory_loss, in_dims=(0, 0))
+
+        # 4. Optimization Loop (Stateless approach compatible with vmap)
+        for _ in range(iterations):
+            # Compute scores for all trajectories in parallel
+            losses = vectorized_loss(trajectories)
+            losses.backward()
+            
+            # Manually update trajectories (mimicking a stateless optimizer)
+            with torch.no_grad():
+                # Apply update
+                trajectories -= lr * trajectories.grad
+                # Zero gradients for next iteration
+                trajectories.grad.zero_()
+
+        # 5. Find the highest scoring trajectory
+        with torch.no_grad():
+            final_scores = vectorized_loss(trajectories)
+            best_idx = torch.argmax(final_scores)
+            best_traj = trajectories[best_idx].clone()
+
+        return best_traj
+    
+    def inference(self, nobs: dict):
+        if self.use_lbfgs_for_inference:
+            return self.inference_lbfgs(nobs)
+        else:
+            return self.inference_batch_adam(nobs)
+
 
     def get_future_actions(self, all_actions):
         start = np.argmax(np.array(self.action_rel_indices) >= 0)
@@ -340,3 +399,25 @@ class ImplicitAlgorithm(BaseImagePolicy):
         other.setup()
         
         return other
+    
+class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
+    """
+    very similar, just load a warm start batch of trajectories from the BC dataset
+    """
+    def inference_batch_adam(self, nobs: dict, warm_start_trajectory=None):
+        # get a batch of random trajectories from a RB
+        batch_size = 64
+
+        # get a handle to the dataloader
+        dataloaders = globals.DATALOADERS
+
+        # get a handle to the sampler
+        traindandval = dataloaders["all"]
+        sampler = traindandval.sampler
+
+        # rand indices
+        indices = np.random.choice(len(sampler), size=batch_size, replace=False)
+
+        actions = torch.hstack([torch.tensor(sampler.get_sample(i)["action"]) for i in indices])
+
+        return super().inference_batch_adam(nobs, warm_start_trajectory=actions)
