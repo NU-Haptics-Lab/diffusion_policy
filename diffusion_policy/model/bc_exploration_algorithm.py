@@ -69,12 +69,14 @@ class BCExplorationAlgorithm(nn.Module):
     """
     def __init__(self, 
                  policy,
-                 exploration_rate_random = 0.4,
+                 exploration_rate_random = 0.0,
                  exploration_rate_policy = 0.4,
                  use_bc_explore = True,
                  ):
         super().__init__()
         self.policy = policy
+        self.exploration_rate_random = exploration_rate_random
+        self.exploration_rate_policy = exploration_rate_policy
         self.use_bc_explore = use_bc_explore
         
     def setup(self):
@@ -94,7 +96,7 @@ class BCExplorationAlgorithm(nn.Module):
         
         # my exploration schedulers
         self.exploration_policy = SimpleConstantScheduler(value = 1.0)
-        self.exploration_random = SimpleExponentialScheduler(initial_value = 0.05, decay_rate=0.99995)
+        self.exploration_random = SimpleExponentialScheduler(initial_value = self.exploration_rate_random, decay_rate=0.99995)
         self.exploration_BC = SimpleExponentialScheduler(initial_value = 4.0, decay_rate = 0.99995)
         
         if self.use_bc_explore:
