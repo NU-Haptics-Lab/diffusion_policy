@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox rl 5: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation"
+description: "sandbox rl 6: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation"
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
@@ -426,7 +426,7 @@ models:
                 - 128
                 - 256
                 - 512
-              num_mid_module_repeats: 2
+              num_mid_module_repeats: 6
 
 
 

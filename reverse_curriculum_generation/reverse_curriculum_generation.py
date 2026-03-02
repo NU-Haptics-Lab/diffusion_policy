@@ -21,18 +21,39 @@ import avatar_drake_sim.sims.sandbox.sandbox_common as commons
 
 # my globals, kind of like a singleton
 DIFFICULTY_SCALE = 0.0 # 0.0 to 1.0
+SUCCESS_RATE = 0.0
+NB_ATTEMPTS = 0
 
-def update_difficulty_scale(outcome):
-    global DIFFICULTY_SCALE
+# def update_difficulty_scale(outcome):
+#     global DIFFICULTY_SCALE
 
-    delta = 0.005 # 0.5%
+#     delta = 0.005 # 0.5%
     
-    # simple update rule: if outcome is success, increase difficulty, if failure, decrease difficulty
-    if outcome:
+#     # simple update rule: if outcome is success, increase difficulty, if failure, decrease difficulty
+#     if outcome:
+#         DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
+#     else:
+#         DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
+
+#     # save to commons as well
+#     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
+    
+def update_difficulty_scale2(outcome):
+    """
+    update the success rate and increase difficulty if s.r. >50%, decrease if s.r. <50%
+    """
+    global SUCCESS_RATE, NB_ATTEMPTS, DIFFICULTY_SCALE
+    
+    delta = 0.005 # 0.5%
+
+    NB_ATTEMPTS += 1
+    SUCCESS_RATE += (outcome - SUCCESS_RATE) / NB_ATTEMPTS
+
+    if SUCCESS_RATE > 0.5:
         DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
     else:
         DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
-
+        
     # save to commons as well
     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
 
@@ -142,7 +163,7 @@ class ReverseCurriculumGeneration:
         #     self.current_node.update(outcome)
 
         # update global
-        update_difficulty_scale(outcome)
+        update_difficulty_scale2(outcome)
 
         # log the difficulty scale
         if globals.LOGGER is not None:
