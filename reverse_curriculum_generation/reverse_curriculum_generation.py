@@ -19,7 +19,22 @@ from diffusion_policy.common.sarsa_sampler import (
 
 import avatar_drake_sim.sims.sandbox.sandbox_common as commons
 
+# my globals, kind of like a singleton
+DIFFICULTY_SCALE = 0.0 # 0.0 to 1.0
 
+def update_difficulty_scale(outcome):
+    global DIFFICULTY_SCALE
+
+    delta = 0.005 # 0.5%
+    
+    # simple update rule: if outcome is success, increase difficulty, if failure, decrease difficulty
+    if outcome:
+        DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
+    else:
+        DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
+
+    # save to commons as well
+    commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
 
 class Node:
     """
@@ -31,54 +46,75 @@ class Node:
         self.ep = ep
         
         # my members
-        self.avg_success_rate = 0.0
-        self.nb_attempts = 0
+        # self.avg_success_rate = 0.0
+        # self.nb_attempts = 0
         self.ep_len = len(self.ep)
         
-        self.reset()
+        # self.reset()
         
-    def clip_ep_idx(self):
-        self.current_ep_idx = np.clip(self.current_ep_idx, 0, self.ep_len-1)
+    # def clip_ep_idx(self):
+    #     self.current_ep_idx = np.clip(self.current_ep_idx, 0, self.ep_len-1)
         
-    def reset(self):
-        self.current_ep_idx = self.ep_len-1
+    # def reset(self):
+    #     self.current_ep_idx = self.ep_len-1
         
-    def update_ep_idx(self):
-        """
-        if s.r. is >50%, make the node harder. If s.r. <50%, make the node easier
-        """
-        if self.avg_success_rate > 0.5:
-            self.current_ep_idx -= 1
-        else:
-            self.current_ep_idx += 1
+    # def update_ep_idx(self):
+    #     """
+    #     if s.r. is >50%, make the node harder. If s.r. <50%, make the node easier
+    #     """
+    #     if self.avg_success_rate > 0.5:
+    #         self.current_ep_idx -= 1
+    #     else:
+    #         self.current_ep_idx += 1
             
-        self.clip_ep_idx()
+    #     self.clip_ep_idx()
         
-    def update(self, outcome):
-        """
-        update my avg success rate using the moving average fcn
-        """
-        # update nb attempts
-        self.nb_attempts += 1
+    # def update(self, outcome):
+    #     """
+    #     update my avg success rate using the moving average fcn
+    #     """
+    #     # update nb attempts
+    #     self.nb_attempts += 1
         
-        # avg function
-        self.avg_success_rate += outcome / self.nb_attempts
+    #     # avg function
+    #     self.avg_success_rate += outcome / self.nb_attempts
         
-        self.update_ep_idx()
+    #     self.update_ep_idx()
         
-    def get_current_timeout(self):
-        steps_to_end = len(self.ep) - self.current_ep_idx
+    # def get_current_timeout(self):
+    #     steps_to_end = len(self.ep) - self.current_ep_idx
         
-        # give the policy 3x this many steps.
-        timeout = steps_to_end * 3 * commons.LEARNING_RATE_DT
+    #     # give the policy 3x this many steps.
+    #     timeout = steps_to_end * 3 * commons.LEARNING_RATE_DT
         
-        return timeout
+    #     return timeout
         
-    def get_current_rb_idx(self):
-        return self.ep.get_id(self.current_ep_idx)
+    # def get_current_rb_idx(self):
+    #     return self.ep.get_id(self.current_ep_idx)
     
-    def get_current_state_dict(self):
-        return self.ep.get_obs_sample(self.current_ep_idx)
+    # def get_current_state_dict(self):
+    #     return self.ep.get_obs_sample(self.current_ep_idx)
+    
+    def get_difficulty_scaled_state_dict(self):
+        """
+        from the continuous global difficulty scale
+        """
+        # convert difficulty scale to an ep idx
+        ep_idx_floor = np.floor((1.0 - DIFFICULTY_SCALE) * (self.ep_len - 1))
+        ep_idx_ceil = np.ceil((1.0 - DIFFICULTY_SCALE) * (self.ep_len - 1))
+
+        sample_floor = self.ep.get_obs_sample(int(ep_idx_floor))
+        sample_ceil = self.ep.get_obs_sample(int(ep_idx_ceil))
+
+        # interpolate between the two samples
+        if ep_idx_floor == ep_idx_ceil:
+            return sample_floor
+        else:
+            alpha = (1.0 - DIFFICULTY_SCALE) * (self.ep_len - 1) - ep_idx_floor
+            sample = {}
+            for key in sample_floor:
+                sample[key] = (1 - alpha) * sample_floor[key] + alpha * sample_ceil[key]
+            return sample
         
     
 class ReverseCurriculumGeneration:
@@ -101,16 +137,23 @@ class ReverseCurriculumGeneration:
         
     def update(self, outcome):
         # update it
-        # WON"T WORK WITH VECTOR ENVS
-        if self.current_node is not None:
-            self.current_node.update(outcome)
+        # # WON"T WORK WITH VECTOR ENVS
+        # if self.current_node is not None:
+        #     self.current_node.update(outcome)
+
+        # update global
+        update_difficulty_scale(outcome)
+
+        # log the difficulty scale
+        if globals.LOGGER is not None:
+            globals.LOGGER.log_one("difficulty_scale", DIFFICULTY_SCALE)
     
-    def get_current_timeout(self):
-        if self.current_node is not None:
-            return self.current_node.get_current_timeout()
-        else:
-            # default timeout
-            return commons.MAX_EPISODE_TIME
+    # def get_current_timeout(self):
+    #     if self.current_node is not None:
+    #         return self.current_node.get_current_timeout()
+    #     else:
+    #         # default timeout
+    #         return commons.MAX_EPISODE_TIME
     
     # def get_a_sample_idx(self):
     #     """
@@ -136,7 +179,7 @@ class ReverseCurriculumGeneration:
         self.current_node = node
         
         # get the state dict for that rb idx
-        state_dict = node.get_current_state_dict()
+        state_dict = node.get_difficulty_scaled_state_dict()
         
         # we're done
         return state_dict

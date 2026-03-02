@@ -340,7 +340,7 @@ env_loss_params:
 
   use_easy_loss: false # BC position loss. Yes.
   use_medium_loss: false # object based loss, no for now.
-  use_hard_loss: true # task loss, yes obv.
+  use_hard_loss: true # task loss done elsewhere now
 
   easy_loss_policy: "actor_critic_15"
 
@@ -407,10 +407,10 @@ models:
             _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithmInferenceFromBCDataset # the actual critic alg
             use_lbfgs_for_inference: false
             use_batch_gd_for_inference: true
-            use_add_inference_noise: true
+            use_add_inference_noise: false
             inference_step_size: 0.1
-            inference_iterations: 0
-            inference_noise: 0.001 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
+            inference_iterations: 1
+            inference_noise: 0.00 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
 
             path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_5.yaml
 
