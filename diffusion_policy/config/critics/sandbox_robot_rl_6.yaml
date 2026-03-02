@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
 run_tag: sandbox_rl_6
@@ -66,7 +66,7 @@ clamp: false # clamp actions (and diffusion noise)
 # rollouts?
 use_online_rollout: true
 rollout_frequency: 40 # should be on a schedule, or as a fcn of the avg ep timeout
-rollout_warmup_nb_steps: 100
+rollout_warmup_nb_steps: 0
 
 
 num_inference_steps: 8 # compat
@@ -449,7 +449,7 @@ override:
       step_trainer: 
         w_batch_losses:
           all:
-            weight: 0.1
+            weight: 0.0
             batch_loss: 
               batch_loader:
                 rb_id: all
@@ -464,7 +464,7 @@ override:
       w_batch_losses:
 
         all:
-          weight: 0.1
+          weight: 0.0
           batch_loss: 
             batch_loader:
               rb_id: all
