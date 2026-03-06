@@ -139,3 +139,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+diffusion_policy/config/critics/sandbox_robot_rl_9.yaml
+profile_output.txt
+profile_output.lprof
+profile_output_*.txt

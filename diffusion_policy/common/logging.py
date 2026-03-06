@@ -63,7 +63,7 @@ class Logging:
             if self.wandb_run is not None:
                 self.wandb_run.log(
                     data,
-                    step=globals.STEP
+                    # step=globals.STEP
                 )
             
     def log_one(self, label, datapoint):

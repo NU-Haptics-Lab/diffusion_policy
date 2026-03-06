@@ -57,6 +57,8 @@ from tqdm import (
     tqdm
 )
 
+from line_profiler import profile
+
 class ImplicitPolicy(nn.Module):
     def __init__(self,
             action_shape: list,
@@ -181,9 +183,12 @@ class ImplicitAlgorithm(BaseImagePolicy):
             if self.use_only_for_inference:
                 # if only for inference, we can compile with grad disabled for faster inference speed
                 self.policy.requires_grad_(False)
-                self.compiled_policy = torch.compile(self.vectorized_batch_traj_grad, mode="reduce-overhead")
-            else:
                 
+                self.compiled_policy = torch.compile(self.policy, mode="reduce-overhead")
+                
+                self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="reduce-overhead")
+            else:
+                self.compiled_policy = torch.compile(self.policy, mode="default")
                 
                 self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="default")
 
@@ -278,6 +283,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         
         return vectorized_grad_fcn
     
+    # @profile
     def inference_batch_gd(self, nobs: dict, warm_start_trajectory = None):
         """
         use a warm start batch of trajectories and use vmap to optimize each. return the highest scoring traj from the batch
@@ -296,11 +302,17 @@ class ImplicitAlgorithm(BaseImagePolicy):
         dtype = self.dtype
         timestep = 0.0
         
-        
+        # get the grad fcn
         if self.compiled_vmap_grad_batch_traj_fcn is not None:
             get_grad_fcn = self.compiled_vmap_grad_batch_traj_fcn
         else:
             get_grad_fcn = self.vmap_grad_batch_traj_fcn
+
+        # get the policy fcn
+        if self.compiled_policy is not None:
+            policy = self.compiled_policy
+        else:
+            policy = self.policy
 
         # reshape obs: B, T, ... to B*T ...
         this_nobs = dict_apply(nobs, 
@@ -308,10 +320,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
 
         # get encoded obs, no grad to save time. Same global cond for all trajectories in the batch
         with torch.no_grad():
-            nobs_features = self.policy.forward_obs_encoder(this_nobs)
+            nobs_features = policy.forward_obs_encoder(this_nobs) # type:ignore
             global_cond = nobs_features.reshape(B, -1)
             
-            initial_scores = self.policy(warm_start_trajectory, timestep, global_cond=global_cond).squeeze()
+            initial_scores = policy(warm_start_trajectory, timestep, global_cond=global_cond).squeeze()
             
         # just one sample
         assert(global_cond.shape[0] == 1)
@@ -376,7 +388,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
 
         # 5. Find the highest scoring trajectory
         with torch.no_grad():
-            final_scores = self.policy(trajectories, 0.0, global_cond=global_cond).squeeze()
+            final_scores = policy(trajectories, 0.0, global_cond=global_cond).squeeze()
             best_idx = torch.argmax(final_scores)
             
             # slice so we keep the batch dimension

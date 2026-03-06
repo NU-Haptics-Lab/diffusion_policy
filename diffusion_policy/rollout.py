@@ -24,6 +24,10 @@ import torch
 import yaml
 from omegaconf import OmegaConf
 
+from avatar_drake_sim.sims.sandbox.classes.simple_scheduling import (
+    SimpleLinearScheduler,
+)
+
 
 class RolloutEnv:
     def __init__(self) -> None:
@@ -72,6 +76,7 @@ class Rollout:
                  which_model_to_use_for_inference = "actor",
                  use_ema_model = True,
                  use_filter_successful_and_failed_episodes = True,
+                 use_freq_schedule = False,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -91,6 +96,7 @@ class Rollout:
         self.which_model_to_use_for_inference = which_model_to_use_for_inference
         self.use_ema_model = use_ema_model
         self.use_filter_successful_and_failed_episodes = use_filter_successful_and_failed_episodes
+        self.use_freq_schedule = use_freq_schedule
         
 
         # refs
@@ -126,6 +132,10 @@ class Rollout:
                 critic: CriticLoss = globals.MODELS["critic"] #type:ignore
                 self.critic = critic.get_model(want_target_network=True)
                 self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
+                
+        if self.use_freq_schedule:
+            # xa, ya, xb, yb
+            self.freq_scheduler = SimpleLinearScheduler(0.0, 10.0, 10000.0, 100.0)
 
     def run_rollouts(self):
         self.run()
@@ -133,8 +143,14 @@ class Rollout:
         """
         Run one portion of rollout
         """
+        if self.use_freq_schedule:
+            freq = int(self.freq_scheduler.get_value(globals.STEP))
+            globals.log_one_if_exists("rollout/freq", freq)
+        else:
+            freq = self.freq
+        
         # if our number is called
-        if self.use_online_rollout and utils.StepFreqTrigger(self.freq) and globals.STEP > self.warmup_nb_steps:
+        if self.use_online_rollout and utils.StepFreqTrigger(freq) and globals.STEP > self.warmup_nb_steps:
             
             # inits
             successes = 0.0

@@ -67,7 +67,7 @@ clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 10 # should be on a schedule?, or as a fcn of the avg ep timeout? maybe a fcn of the current dataset size
+rollout_frequency: 20 # should be on a schedule?, or as a fcn of the avg ep timeout? maybe a fcn of the current dataset size
 rollout_warmup_nb_steps: 0
 
 
@@ -346,11 +346,15 @@ env_loss_params:
     use_energy_penalty: true
     use_joint_limits_weight: true
     use_contacts_penalty: true
+    use_divide_by_nb_active_penalties: true
 
-    jerk_weight: 0.001 # calibrated empirically
-    energy_weight: 0.1 # half calibrated
-    joint_limits_weight: 1.0
-    contacts_weight: 0.1 # half calibrated
+    # calibrated using the penalties logs. I basically normalized it to [0, 1] over a episode, so it's in the same ballpark as the task reward
+    jerk_weight: 0.001 
+    energy_weight: 0.01
+    joint_limits_weight: 0.1
+    contacts_weight: 0.1
+
+
 
 
   use_cap_rewards: yes

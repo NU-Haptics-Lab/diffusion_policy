@@ -291,3 +291,7 @@ def save_current_config_to_globals(cfg_key):
     
     GLOBALS_DICT[cfg_key] = globals_struct
     CURRENT_CONFIG_KEY = cfg_key
+    
+def log_one_if_exists(label, datapoint):
+    if LOGGER is not None:
+        LOGGER.log_one(label, datapoint)
