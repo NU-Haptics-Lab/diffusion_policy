@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox rl 6: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation"
+description: "sandbox rl 8: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation. added more penalties (energy, limits, contacts). adding previous robot joint action"
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
@@ -20,11 +20,13 @@ to_load:
 # hack
 resume: true
 
+doing_bc: false
+
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox_rl_6
+run_tag: sandbox_rl_8
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/sandbox_rl_6
+output_dir: /media/dexnex_ssd/models/sandbox_rl_8
 
 tasks_to_use:
   # - all # currently, 'all' is a special keyword used in the batch_loader, and is required
@@ -34,7 +36,7 @@ tasks_to_use:
 obs_keys_to_use:
   - robot_joint_pos
   - robot_joint_vel
-  # - robot_joint_prev_action
+  - robot_joint_prev_action # how am i normalizing this?
   - object_quat
   - object_pos
   - task_obs
@@ -65,7 +67,7 @@ clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 50 # should be on a schedule?, or as a fcn of the avg ep timeout? maybe a fcn of the current dataset size
+rollout_frequency: 10 # should be on a schedule?, or as a fcn of the avg ep timeout? maybe a fcn of the current dataset size
 rollout_warmup_nb_steps: 0
 
 
@@ -169,7 +171,7 @@ common_obs_encoder:
   lowdims:
     - robot_joint_pos
     - robot_joint_vel
-    # - robot_joint_prev_action
+    - robot_joint_prev_action
     - object_quat
     - object_pos
     - task_obs
@@ -341,8 +343,14 @@ env_loss_params:
   penalty_options:
     _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.PenaltyOptions
     use_jerk_penalty: true
-    use_energy_penalty: true # TODO
+    use_energy_penalty: true
+    use_joint_limits_weight: true
+    use_contacts_penalty: true
+
     jerk_weight: 0.001 # calibrated empirically
+    energy_weight: 0.1 # half calibrated
+    joint_limits_weight: 1.0
+    contacts_weight: 0.1 # half calibrated
 
 
   use_cap_rewards: yes
@@ -358,7 +366,7 @@ state_loader:
   keys_to_perturb:
     - robot_joint_pos
     - robot_joint_vel
-    # - robot_joint_prev_action
+    - robot_joint_prev_action
     - object_quat
     - object_pos
 

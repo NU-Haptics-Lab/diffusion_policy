@@ -331,9 +331,18 @@ class TrainAndVal:
         # get nb episodes
         nb_episodes = globals.REPLAY_BUFFER_LOADER[self.rb_id].n_episodes # type:ignore
         
-        if nb_episodes == 0:
+        doing_bc = True
+        if globals.CONFIG is not None:
+            if "doing_bc" in globals.CONFIG:
+                doing_bc = globals.CONFIG.doing_bc # type: ignore
+        
+        if nb_episodes == 0 and doing_bc:
             print("No episodes in replay buffer, did you forget to seed the online RL replay buffer? Aka copy/paste a good starting RB and rename it to: {}".format(self.rb_id))
             raise
+        
+        elif nb_episodes == 0 and not doing_bc:
+            print("No episodes in replay buffer, but we're not doing BC. Be sure to set the training warmup so that rollouts are collected before training")
+            return
         
         # no val?
         if not self.use_val_set:

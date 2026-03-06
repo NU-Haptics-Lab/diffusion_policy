@@ -325,6 +325,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         step_size = self.inference_step_size
         iterations = self.inference_iterations
         
+        
         #################
         # add noise if desired. initial noise. still added even if iterations == 0
         if self.use_add_inference_noise:
@@ -360,6 +361,18 @@ class ImplicitAlgorithm(BaseImagePolicy):
             trajectories = trajectories[~outlier]
             
             nb_outliers = outlier.sum()
+            
+        #############
+        # smallest torque mags?
+        if True:
+            percent = 0.25
+            traj_mags = torch.norm(trajectories, dim=2).mean(dim=1) # mean mag across time, for each traj in the batch
+            sorted_indices = torch.argsort(traj_mags)
+            
+            keep_indices = sorted_indices[:int(percent * len(sorted_indices))]
+            
+            trajectories = trajectories[keep_indices]
+        ############
 
         # 5. Find the highest scoring trajectory
         with torch.no_grad():

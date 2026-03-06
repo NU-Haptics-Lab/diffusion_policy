@@ -56,6 +56,15 @@ def update_difficulty_scale2(outcome):
         
     # save to commons as well
     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
+    
+def update_difficulty_scale3(outcome):
+    """
+    just use a low pass filter
+    """
+    global DIFFICULTY_SCALE
+    alpha = 0.01 # smoothing factor
+    
+    DIFFICULTY_SCALE = alpha * outcome + (1 - alpha) * DIFFICULTY_SCALE
 
 class Node:
     """
@@ -163,7 +172,7 @@ class ReverseCurriculumGeneration:
         #     self.current_node.update(outcome)
 
         # update global
-        update_difficulty_scale2(outcome)
+        update_difficulty_scale3(outcome)
 
         # log the difficulty scale
         if globals.LOGGER is not None:
