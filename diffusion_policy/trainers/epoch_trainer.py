@@ -45,6 +45,10 @@ class EpochValidator(Epoch):
         """
         validate for one epoch.
         """
+        # check for no length
+        if self.nb_batches == 0 or len(self.w_batch_losses) == 0:
+            return
+        
         if EveryEpoch(self.val_every):
             # switch to eval mode
             self.models.eval()

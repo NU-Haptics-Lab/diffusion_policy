@@ -107,6 +107,7 @@ class Indices:
         pad_before : int=0, 
         pad_after : int=0,
         debug : bool=True,
+        use_zero_padding : bool=True, # if False, will use fill-back / fill-forward instead of zero padding. Should be False for position control, True for vel or torque control
         ):
         
         # assertions
@@ -122,8 +123,9 @@ class Indices:
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.debug = debug
+        self.use_zero_padding = use_zero_padding
 
-        self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]
+        self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] #type:ignore
         self.indices = []
         self.mask = None
         
@@ -139,7 +141,7 @@ class Indices:
         """
         # make mapping from mask_indice to non-mask-indice
         self.mask = mask
-        self.mask_indices = np.where(self.mask)[0]
+        # self.mask_indices = np.where(self.mask)[0]
         
         # set up start index
         start_idx = self.training_episode_start
@@ -155,7 +157,8 @@ class Indices:
         
         # ep length
         # self.ep_length = episode_length # SHOULDN"T be used
-        self.mask_length = len(self.mask_indices)
+        # self.mask_length = len(self.mask_indices)
+        self.mask_length = len(self.mask)
         
         # # max future action
         # max_future_action = np.array(globals.CONFIG.action_rel_indices).max()
@@ -164,26 +167,26 @@ class Indices:
         self.train_indices = range(-self.pad_before, self.mask_length + self.pad_after)
         pass
         
-    def get_mask_indices(self):
-        """
-        should ONLY be accessed by get_ep_idx_from_train_idx
-        """
-        return self.mask_indices
+    # def get_mask_indices(self):
+    #     """
+    #     should ONLY be accessed by get_ep_idx_from_train_idx
+    #     """
+    #     return self.mask_indices
     
     def get_len_of_training_indices(self):
         return len(self.train_indices)
     
-    def get_ep_idx_from_train_idx(self, train_idx):
-        # must pass through the mask to get non-mask index
+    # def get_ep_idx_from_train_idx(self, train_idx):
+    #     # must pass through the mask to get non-mask index
         
-        # I don't like the mask anymore, so stop using it
-        if False:
-            nonmask_idx = self.get_mask_indices()[train_idx]
+    #     # I don't like the mask anymore, so stop using it
+    #     if False:
+    #         nonmask_idx = self.get_mask_indices()[train_idx]
             
-        else:
-            nonmask_idx = train_idx
+    #     else:
+    #         nonmask_idx = train_idx
             
-        return nonmask_idx
+    #     return nonmask_idx
 
     def __len__(self):
         """
@@ -209,18 +212,18 @@ class Indices:
         # ensure it's numpy
         ti2 = np.array(train_indices).copy()
 
-        # I don't like this approach anymore
-        if False:
-            # fill-back any indices less than zero
-            mask = ti2 < 0
-            ti2[mask] = 0
+        # # I don't like this approach anymore. No masks.
+        # if False:
+        #     # fill-back any indices less than zero
+        #     mask = ti2 < 0
+        #     ti2[mask] = 0
 
-            # fill-forward any indices greater than mask length, minus one
-            mask = ti2 > self.get_len_of_training_indices() - 1
-            ti2[mask] = self.get_len_of_training_indices() - 1
+        #     # fill-forward any indices greater than mask length, minus one
+        #     mask = ti2 > self.get_len_of_training_indices() - 1
+        #     ti2[mask] = self.get_len_of_training_indices() - 1
         
         # get ep indices
-        train_ep_indices = self.get_ep_idx_from_train_idx(ti2)
+        train_ep_indices = ti2 # self.get_ep_idx_from_train_idx(ti2)
 
         # add on rb ep offset to make the indices rb-relative
         rb_indices = train_ep_indices + self.training_episode_start
@@ -277,6 +280,13 @@ class Indices:
         sequence = np.array(ls)
         
         # limit outliers? here? idk.
+        
+        # whether to use zero padding
+        if self.use_zero_padding:
+            # if the index is out of bounds of the episode, then zero it out
+            train_indices = np.array(train_indices)
+            mask = (train_indices < 0) | (train_indices > len(self) - 1)
+            sequence[mask] = 0.0
 
         # we're done
         return sequence
@@ -447,6 +457,13 @@ class GPUIndices(Indices):
         
         # get the sequence
         sequence_th = data_th[rb_indices]
+        
+        # whether to use zero padding
+        if self.use_zero_padding:
+            # if the index is out of bounds of the episode, then zero it out
+            train_indices = th.tensor(train_indices, device=sequence_th.device)
+            mask = (train_indices < 0) | (train_indices > len(self) - 1)
+            sequence_th[mask] = 0.0
 
         # we're done
         return sequence_th
@@ -737,17 +754,18 @@ class DatasetSampler:
     """
     def __init__(self,
             rb_id: str,
-            ep_sampler_class: str = "diffusion_policy.common.sarsa_sampler.EpisodeSampler", # I don't love this design
+            ep_sampler_class_str: str = "diffusion_policy.common.sarsa_sampler.EpisodeSampler", # I don't love this design
             use_cap_rewards = False,
             reward_cap = 50.0,
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
+        self.ep_sampler_class_str = ep_sampler_class_str
         self.use_cap_rewards = use_cap_rewards
         self.reward_cap = reward_cap
         
         # convert text to class object using hydra
-        self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class)
+        self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class_str)
         
     def setup(self):
         """
@@ -761,7 +779,7 @@ class DatasetSampler:
         self.ep_samplers: dict[int, EpisodeSampler] = {}
         self.my_indices = []
         self.qvals = None
-        self.inlier_mask = None
+        # self.inlier_mask = None
         
     def get_ep_list(self):
         return self.ep_samplers.values()
@@ -819,8 +837,8 @@ class DatasetSampler:
         # training episode ends. Copy from the ep sampler classes so we can use the efficient binary-search np.searchsorted method when converting from training index to episode
         self.tr_ep_offsets = []
 
-        # make the inlier mask
-        self.make_inliers()
+        # # make the inlier mask
+        # self.make_inliers()
         
         # compute / recompute episodes
         self.make_episodes()
@@ -830,20 +848,67 @@ class DatasetSampler:
         if False:
             self.print_dataset_stats()
             
+        self.print_nb_successes()
+            
     def InitAll(self):
         n_eps = len(self.replay_buffer.episode_ends) #type:ignore
         
         ep_mask = np.ones(n_eps, dtype=bool)
         
         self.Init(ep_mask)
+        
+    def reinit_all(self):
+        """
+        just iterate over the new eps
+        """
+        old_total_nb_eps = len(self.get_ep_list())
+        new_total_nb_eps = len(self.replay_buffer.episode_ends)
+        nb_new_eps = new_total_nb_eps - old_total_nb_eps
+        
+        # must add trues to ep_mask
+        new_mask = np.ones(nb_new_eps, dtype=np.bool_)
+        assert(self.ep_mask is not None)
+        self.ep_mask = np.concatenate([self.ep_mask, new_mask])
+        
+        # new indices
+        my_new_indices = []
+        
+        # loop vars
+        rb_offset = self.replay_buffer.episode_ends[old_total_nb_eps-1]
+        tr_ep_offset = len(self) # this is the total number of training datapoints in the old eps
+        
+        for i in range(old_total_nb_eps, new_total_nb_eps):
+            rb_episode_end = self.replay_buffer.episode_ends[i]   
+
+            # if skip a.k.a. episode mask
+            if self.ep_mask is None or self.ep_mask[i]:
+                # make the episode (or retrieve it)
+                ep_sampler = self.make_episode(rb_episode_end, rb_offset, tr_ep_offset)
+
+                if ep_sampler is not None:
+                    # add the length of the training episode
+                    tr_ep_offset += len(ep_sampler)
+                    
+                    # save the indices
+                    my_new_indices = np.concatenate([my_new_indices, ep_sampler.get_all_rb_indices()])
+
+            # set rb offset to the old rb_episode_end
+            rb_offset = rb_episode_end
+            
+        # convert to np
+        my_new_indices = np.array(my_new_indices, dtype=int)
+        
+        # append to my indices
+        self.my_indices = np.concatenate([self.my_indices, my_new_indices])
             
     def make_episode(self, rb_episode_end, rb_offset, tr_ep_offset):
-        assert(self.inlier_mask is not None)
+        # assert(self.inlier_mask is not None)
         
         training_episode_start = rb_offset
         training_episode_end = rb_episode_end
         
-        mask = self.inlier_mask[training_episode_start:training_episode_end]
+        # mask = self.inlier_mask[training_episode_start:training_episode_end]
+        mask = np.ones(training_episode_end - training_episode_start, dtype=bool)
         
         
         # already made
@@ -880,7 +945,7 @@ class DatasetSampler:
         tr_ep_offset = 0
         
         my_indices = np.array([])
-        assert(self.inlier_mask is not None)
+        # assert(self.inlier_mask is not None)
 
         # one episode sampler per episode
         for idx, rb_episode_end in tqdm(enumerate(self.replay_buffer.episode_ends)): #type:ignore
@@ -987,75 +1052,137 @@ class DatasetSampler:
         
         return l3
     
-    def compute_stats(self, nb_std_devs = 3.5):
-        # compute ds
-        assert(self.replay_buffer is not None)
-        s = self.replay_buffer['state']
-        a = self.replay_buffer['action']
+    # def compute_stats(self, nb_std_devs = 3.5):
+    #     # compute ds
+    #     assert(self.replay_buffer is not None)
+    #     s = self.replay_buffer['state']
+    #     a = self.replay_buffer['action']
         
-        nb_datapts = s.shape[0]
-        nb_actions = a.shape[1]
+    #     nb_datapts = s.shape[0]
+    #     nb_actions = a.shape[1]
         
-        s2 = s[:, 0:nb_actions]
+    #     s2 = s[:, 0:nb_actions]
         
-        ds = np.abs(s2-a)
+    #     ds = np.abs(s2-a)
         
-        inlier_mask = np.ones((nb_datapts), dtype=np.bool_)
+    #     inlier_mask = np.ones((nb_datapts), dtype=np.bool_)
         
-        for idx in range(nb_actions):
-            ds2 = ds[:, idx]
+    #     for idx in range(nb_actions):
+    #         ds2 = ds[:, idx]
         
-            zscore = np.abs(scipy.stats.zscore(ds2))
-            inliers = zscore < nb_std_devs
+    #         zscore = np.abs(scipy.stats.zscore(ds2))
+    #         inliers = zscore < nb_std_devs
             
-            # only keep inliers
-            inlier_mask &= inliers
+    #         # only keep inliers
+    #         inlier_mask &= inliers
             
-        # inlier-mask is now only the inliers for EVERY output action
-        self.inlier_mask = inlier_mask
+    #     # inlier-mask is now only the inliers for EVERY output action
+    #     self.inlier_mask = inlier_mask
         
-        print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))
+    #     print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))
         
-    def calc_ds(self, inlier_mask):
-        rb = self.replay_buffer
-        rbs = np.array(rb['state'])
-        rba = np.array(rb['action'])
-        s = rbs[inlier_mask][:, 0:21]
-        a = rba[inlier_mask]
+    # def calc_ds(self, inlier_mask):
+    #     rb = self.replay_buffer
+    #     rbs = np.array(rb['state'])
+    #     rba = np.array(rb['action'])
+    #     s = rbs[inlier_mask][:, 0:21]
+    #     a = rba[inlier_mask]
         
-        ds = np.abs(s - a) #type:ignore
-        ds2 = ds.sum(axis=1)
+    #     ds = np.abs(s - a) #type:ignore
+    #     ds2 = ds.sum(axis=1)
         
-        return ds2
+    #     return ds2
         
-    def make_inliers(self):
-        """
-        from data analysis, I've noticed that the largest jumps in joint state happen at the end of an episode ... so skip those ... I think there's a bug in my dataset generation script that's causing this.
+    # def make_inliers(self):
+    #     """
+    #     from data analysis, I've noticed that the largest jumps in joint state happen at the end of an episode ... so skip those ... I think there's a bug in my dataset generation script that's causing this.
         
-        KEEP IN MIND: we train off trajectories ... not individual samples ... meaning that you can't simply cherrypick good/bad actions. You can only remove samples at the beginning / end of an episode.
+    #     KEEP IN MIND: we train off trajectories ... not individual samples ... meaning that you can't simply cherrypick good/bad actions. You can only remove samples at the beginning / end of an episode.
         
-        ANOTHER THING: ... Must turn this off if using q-learning, because then it won't see the reward (which is usually given on the final sample of an episode)
-        """
-        assert(self.replay_buffer is not None)
+    #     ANOTHER THING: ... Must turn this off if using q-learning, because then it won't see the reward (which is usually given on the final sample of an episode)
+    #     """
+    #     assert(self.replay_buffer is not None)
         
-        lenrb = len(self.replay_buffer) #type:ignore
+    #     lenrb = len(self.replay_buffer) #type:ignore
         
-        inlier_mask = np.ones((lenrb), dtype=np.bool_)
+    #     inlier_mask = np.ones((lenrb), dtype=np.bool_)
         
-        self.inlier_mask = inlier_mask
-        return
+    #     self.inlier_mask = inlier_mask
+    #     return
         
-        ends = np.array(self.replay_buffer.episode_ends)
-        import matplotlib.pyplot as plt
+    #     ends = np.array(self.replay_buffer.episode_ends)
+    #     import matplotlib.pyplot as plt
 
-        # init ds
-        ds_before = self.calc_ds(inlier_mask)
+    #     # init ds
+    #     ds_before = self.calc_ds(inlier_mask)
         
-        inlier_mask[ends - 1] = False
+    #     inlier_mask[ends - 1] = False
         
-        ds_after = self.calc_ds(inlier_mask)
+    #     ds_after = self.calc_ds(inlier_mask)
             
-        # inlier-mask is now only the inliers for EVERY output action
-        self.inlier_mask = inlier_mask
+    #     # inlier-mask is now only the inliers for EVERY output action
+    #     self.inlier_mask = inlier_mask
         
-        print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))
+    #     print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))
+        
+    def get_sample_mask(self, ratio, seed=None):
+        """
+        use full dataset.
+        
+        """
+        rng = np.random.default_rng(seed=seed)
+        
+        nb_datapts = len(self)
+        
+        if ratio >= 1.0:
+            return np.ones((nb_datapts), dtype=bool)
+        
+        elif ratio <= 0.0:
+            return np.zeros((nb_datapts), dtype=bool)
+        
+        else:
+            nb = int(nb_datapts * ratio)
+            choices = rng.choice(nb_datapts, size=nb, replace=False)
+            
+            mask = np.zeros((nb_datapts), dtype=bool)
+            mask[choices] = True
+        
+            return mask
+        
+    def copy(self):
+        """
+        make a copy
+        """
+        copy = DatasetSampler(
+            rb_id = self.rb_id,
+            ep_sampler_class_str = self.ep_sampler_class_str,
+            use_cap_rewards = self.use_cap_rewards,
+            reward_cap = self.reward_cap,
+        )
+        copy.setup()
+        
+        return copy
+    
+    def get_nb_successes(self):
+        successes = 0
+        count = 0
+        for ep in self.get_ep_list():
+            # only count if reward is in the RB
+            try:
+                r = ep.get_all_key('reward')
+            except:
+                continue
+            
+            total_r = r.sum()
+            
+            # successful?
+            if total_r > 0.0:
+                successes += 1
+            count += 1
+            
+        return successes, count
+    
+    def print_nb_successes(self):
+        successes, count = self.get_nb_successes()
+                
+        print("{}: nb successes: {}/{}".format(self.rb_id, successes, count))

@@ -75,7 +75,7 @@ class TransformerForDiffusion(ModuleAttrMixin):
             else:
                 self.encoder = nn.Sequential(
                     nn.Linear(n_emb, 4 * n_emb),
-                    nn.LeakyReLU(0.1),
+                    nn.Mish(),
                     nn.Linear(4 * n_emb, n_emb)
                 )
             # decoder

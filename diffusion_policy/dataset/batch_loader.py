@@ -359,7 +359,8 @@ class BatchLoader:
                  rb_id: str,
                  train_or_val: str,
                  use_dataloader: bool = True,
-                 strict: bool = True
+                 strict: bool = True,
+                 
             ):
         self.rb_id = rb_id
         self.train_or_val = train_or_val
@@ -368,12 +369,14 @@ class BatchLoader:
         
         self.dataloaders = None #type:ignore
         
+        self.is_setup = False
+        
     def setup(self):
         
-        # only continue if we're being trained off of or special rb_id of default
-        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
-        if (self.rb_id not in tasks_to_use) and not self.rb_id == "default":
-            return
+        # # only continue if we're being trained off of or special rb_id of default
+        # tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+        # if (self.rb_id not in tasks_to_use) and not self.rb_id == "default":
+        #     return
         
         # if we actually want to use a data-loader. might not when we're doing inference but still need the task-ids
         if self.use_dataloader and not self.rb_id == "default":
@@ -391,6 +394,8 @@ class BatchLoader:
         
         # reset
         self.reset()
+        
+        self.is_setup = True
     
     def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = ""):
         nn.fit(data, mode='limits')

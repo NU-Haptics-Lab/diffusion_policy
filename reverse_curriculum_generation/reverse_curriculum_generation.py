@@ -47,7 +47,7 @@ def update_difficulty_scale2(outcome):
     delta = 0.005 # 0.5%
 
     NB_ATTEMPTS += 1
-    SUCCESS_RATE += (outcome - SUCCESS_RATE) / NB_ATTEMPTS
+    SUCCESS_RATE += (outcome - SUCCESS_RATE) / NB_ATTEMPTS # could use the last x attempts instead of all attempts
 
     if SUCCESS_RATE > 0.5:
         DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)

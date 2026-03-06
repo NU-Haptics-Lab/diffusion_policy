@@ -104,7 +104,7 @@ class ObsEncoderMaker():
         for key in self.obs_keys_to_use:
             assert(key in self.rgbs or key in self.lowdims)
         
-        self.obs_encoder = ObservationEncoder(feature_activation=torch.nn.ReLU)
+        self.obs_encoder = ObservationEncoder(feature_activation=torch.nn.Mish)
 
         # rgb image inputs
         for key, val in self.rgbs.items():

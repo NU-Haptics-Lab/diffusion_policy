@@ -160,11 +160,20 @@ class BatchLoss:
         """
         if self.remove_outlier_losses:
             outlier_threshold = 100.0
-            non_outliers = torch.abs(loss) <= outlier_threshold
+            inliers = torch.abs(loss) <= outlier_threshold
             
-            loss = loss[non_outliers]
-        
+            loss_inliers = loss[inliers]
+            
+            # check for final length
+            if loss_inliers.shape[0] == 0:
+                print("CAUTION: all losses were deemed outliers. Returning the original loss.")
+                
+                return loss
+            else:
+                return loss_inliers
+            
         return loss
+            
     
 """ alias """
 class BC(BatchLoss):

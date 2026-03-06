@@ -301,7 +301,7 @@ common_dataset:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
-    ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSampler
+    ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSampler
 
     # child
 
@@ -454,19 +454,19 @@ override:
     d:
       block_transfer:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: block_transfer
       bnb_1cam:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: bnb_1cam
       bnb_2cams:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: bnb_2cams
       sim_hitl_toby:
         sampler:
-          ep_sampler_class: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
+          ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_bc_sampler.SandboxRobotBCEpisodeSamplerBackwardsCompat
           rb_id: sim_hitl_toby
 
       all:

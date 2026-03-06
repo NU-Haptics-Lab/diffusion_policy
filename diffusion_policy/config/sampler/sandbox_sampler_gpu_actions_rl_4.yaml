@@ -88,7 +88,7 @@ dataloaders:
         _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
         rb_id: all
 
-        ep_sampler_class: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotActionOnlyEpisodeSampler
+        ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotActionOnlyEpisodeSampler
 
 
 default_batch_loader:

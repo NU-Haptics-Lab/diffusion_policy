@@ -177,6 +177,10 @@ class StepTrainer:
             if key not in self.models_to_train:
                 continue
             
+            # nan protection
+            if torch.isnan(loss):
+                raise ValueError(f"Loss for {key} is NaN. Check the BatchLoss method.")
+            
             model = globals.MODELS[key]
             
             # back propagation

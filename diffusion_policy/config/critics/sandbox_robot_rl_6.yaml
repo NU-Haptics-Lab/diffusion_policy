@@ -6,10 +6,10 @@ description: "sandbox rl 6: running the Drake sandbox RL env. implicit actor pol
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
-use_compiled_policy: false # set false for debugging or if nb iterations == 0
-total_num_epochs: 3001
+use_compiled_policy: true # set false for debugging or if nb iterations == 0
+total_num_epochs: 10001
 batches_per_epoch: 100 # 100,000 baseline nb steps
-batch_size: 64
+batch_size: 128
 val_every: 20
 
 ### Global Control Panel ###
@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
 run_tag: sandbox_rl_6
@@ -27,7 +27,7 @@ resume_tag: latest
 output_dir: /media/dexnex_ssd/models/sandbox_rl_6
 
 tasks_to_use:
-  - all # currently, 'all' is a special keyword used in the batch_loader, and is required
+  # - all # currently, 'all' is a special keyword used in the batch_loader, and is required
   - rl_replay_buffer # should be the same as what rollouts are saved to
 
 # which obs the obs_encoder will use
@@ -65,7 +65,7 @@ clamp: false # clamp actions (and diffusion noise)
 
 # rollouts?
 use_online_rollout: true
-rollout_frequency: 40 # should be on a schedule, or as a fcn of the avg ep timeout
+rollout_frequency: 100 # should be on a schedule?, or as a fcn of the avg ep timeout? maybe a fcn of the current dataset size
 rollout_warmup_nb_steps: 0
 
 
@@ -175,6 +175,7 @@ common_obs_encoder:
     - task_obs
     - loss_weights
 
+# used in sarsa_sampler.EpisodeSampler.setup directly
 common_indices:
   _target_: diffusion_policy.common.sarsa_sampler.Indices
   rb_id: default
@@ -185,6 +186,7 @@ common_indices:
   pad_before: 0
   pad_after: 0
   debug: ${debug}
+  use_zero_padding: true # should be true if the action is torque or vel, should be false if the action is position. Think about action_rel_indices and obs_rel_indices. Will work without any extra code so long as obs_rel_indices is [0]. Otherwise, will have to specify per key
 
 
 data_directory: /media/dexnex_ssd/data/sandbox/
@@ -226,7 +228,6 @@ session_trainer:
     
       # weighted batch loss dict
       w_batch_losses:
-        all: ${common_wbatch_loss}
         rl_replay_buffer: ${common_wbatch_loss}
 
     # alias: rollout:
@@ -257,15 +258,12 @@ session_trainer:
 
         policy: null
 
+  # empty validator, backwards compat
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
-    nb_batches: 4
-    val_every: ${val_every}
-
-    # weighted batch loss dict
-    w_batch_losses:
-      all: ${common_wbatch_loss}
-      rl_replay_buffer: ${common_wbatch_loss}
+    nb_batches: 0
+    val_every: 0
+    w_batch_losses: {}
 
 
 
@@ -298,23 +296,19 @@ dataloaders:
 common_dataset:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
   seed: 42
-  val_ratio: 0.02
-  max_train_episodes: null
-  use_weighted_dataloader: false
+  val_ratio: 0.0 # unnecessary for RL
+  max_train_episodes: null # backwards compat
+  use_weighted_dataloader: false # want false for a fast dataset reindexing
+  use_val_set: false # no val for RL
 
   options:
     common:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 4 # remember, this is PER dataloader, so plan appropriately for the number of datasets you're loading
+      num_workers: 8 # remember, this is PER dataloader, so plan appropriately for the number of datasets you're loading
       persistent_workers: true
       pin_memory: true
-      shuffle: true # can't use with use_weighted_dataloader
-    val:
-      num_workers: 0
-      persistent_workers: false
-      pin_memory: false
       shuffle: true # can't use with use_weighted_dataloader
 
   # child
@@ -322,7 +316,7 @@ common_dataset:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
-    ep_sampler_class: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotRLEpisodeSampler
+    ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotRLEpisodeSampler
 
     use_cap_rewards: yes
     reward_cap: 50.0 # just so the q-vals don't totally blow up
@@ -358,7 +352,7 @@ env_loss_params:
 state_loader:
   config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_rl_5.yaml
   use_dataset_state_initialization: true
-  use_state_perturbations: true
+  use_state_perturbations: true # they're all zeros right now, jsyk
   use_reverse_curriculum_generation: true
 
   keys_to_perturb:
@@ -408,8 +402,8 @@ models:
             use_lbfgs_for_inference: false
             use_batch_gd_for_inference: true
             use_add_inference_noise: false
-            inference_step_size: 0.1
-            inference_iterations: 1
+            inference_step_size: 0.05 # reference: traj mean is ~0.008, std is ~0.5, min/max 1.0. grads mean is ~0.015, std: ~0.1, min/max ~1.5
+            inference_iterations: 20
             inference_noise: 0.00 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
 
             path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_5.yaml
@@ -448,35 +442,12 @@ override:
     epoch_trainer:
       step_trainer: 
         w_batch_losses:
-          all:
-            weight: 0.0
-            batch_loss: 
-              batch_loader:
-                rb_id: all
-              use_bc_loss: ${use_bc_loss}
           rl_replay_buffer:
             weight: 1.0
             batch_loss: 
               batch_loader:
                 rb_id: rl_replay_buffer
               use_bc_loss: ${use_bc_loss}
-    epoch_evaluator:
-      w_batch_losses:
-
-        all:
-          weight: 0.0
-          batch_loss: 
-            batch_loader:
-              rb_id: all
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
-        rl_replay_buffer:
-          weight: 1.0
-          batch_loss: 
-            batch_loader:
-              rb_id: rl_replay_buffer
-              train_or_val: val
-            use_bc_loss: ${use_bc_loss}
 
   dataloaders:
     d:

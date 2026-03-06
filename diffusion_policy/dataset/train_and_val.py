@@ -33,6 +33,10 @@ class DexNexDataset(BaseImageDataset):
         ):
         assert(isinstance(sampler, sarsa_sampler.DatasetSampler))
         self.sampler = sampler
+        
+    def reinit_all(self):
+        # nothing to do
+        pass
     
     def _fix_obs(self, obs):
         """
@@ -114,6 +118,7 @@ class TrainAndVal:
             max_train_episodes=None,
             whether_to_use = True,
             use_weighted_dataloader = False,
+            use_val_set = True, # if false, train_sampler == sampler, will save time during RL
             ):
         assert(isinstance(sampler, sarsa_sampler.DatasetSampler))
         
@@ -125,17 +130,23 @@ class TrainAndVal:
         self.max_train_episodes = max_train_episodes
         self.whether_to_use = whether_to_use
         self.use_weighted_dataloader = use_weighted_dataloader
+        self.use_val_set = use_val_set
+        
+        self.is_setup = False
         
     def setup(self):
         self.sampler.setup()
 
         # only init if we're being trained off of
-        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
-        if self.rb_id in tasks_to_use:
-            self.init()
+        # tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+        # if self.rb_id in tasks_to_use:
+        
+        self.init()
             
         # init the sampler regardless?
         # self.sampler.InitAll()
+        
+        self.is_setup = True
             
     # def compute_weights(self, dataset: DexNexDataset):
     #     """
@@ -264,6 +275,54 @@ class TrainAndVal:
         
         return dataloader
             
+    def init_no_val(self):
+        """ 
+        same as init, but condensed for readability
+        """
+        # init the sampler
+        self.sampler.InitAll()
+        
+        # save a ref, make the dexnex dataset
+        self.train_sampler = self.sampler
+        self.train_dataset = DexNexDataset(self.train_sampler)
+        
+        # train config
+        train_cfg = copy.deepcopy(self.options.common) # type: ignore
+        OmegaConf.unsafe_merge(train_cfg, self.options.train) # type: ignore
+        
+        # torch dataloader
+        self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
+        
+        # dict access
+        self.dd = {}
+        self.dd["all"] = self.train_dataloader
+        self.dd["train"] = self.train_dataloader
+        self.dd["val"] = None
+        
+        print(self.rb_id + ": len train dataset (nb batches): {}".format(len(self.train_dataloader)))
+        
+    def reinit_no_val(self):
+        """
+        able to just add new episodes since train == all. Saved time.
+        """
+        self.sampler.reinit_all()
+        
+        self.train_dataset.reinit_all()
+        
+        # train config
+        train_cfg = copy.deepcopy(self.options.common) # type: ignore
+        OmegaConf.unsafe_merge(train_cfg, self.options.train) # type: ignore
+        
+        # torch dataloader
+        self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
+        
+        # dict access
+        self.dd = {}
+        self.dd["all"] = self.train_dataloader
+        self.dd["train"] = self.train_dataloader
+        self.dd["val"] = None
+        
+        print("New length of train_dataloader: {} batches".format(len(self.train_dataloader)))
         
     def init(self):
         if not self.whether_to_use:
@@ -275,31 +334,30 @@ class TrainAndVal:
         if nb_episodes == 0:
             print("No episodes in replay buffer, did you forget to seed the online RL replay buffer? Aka copy/paste a good starting RB and rename it to: {}".format(self.rb_id))
             raise
+        
+        # no val?
+        if not self.use_val_set:
+            self.init_no_val()
+            return
+        
+        # first, init the all sampler
+        self.sampler.InitAll()
 
-        # TODO: rewrite to use datapoints instead of episodes...
-        val_mask = sarsa_sampler.get_val_mask(
-            n_episodes=nb_episodes, 
-            val_ratio=self.val_ratio,
-            seed=self.seed)
+        # get the val mask
+        val_mask = self.sampler.get_sample_mask(
+            ratio = self.val_ratio,
+            seed = self.seed)
+        
+        # get the train mask
         train_mask = ~val_mask
 
-        # downsamples if max_train_episodes is not None
-        train_mask = sarsa_sampler.downsample_mask(
-            mask=train_mask, 
-            max_n=self.max_train_episodes, 
-            seed=self.seed)
-
         # make train sampler with train mask
-        self.train_sampler = copy.deepcopy(self.sampler)
+        self.train_sampler = self.sampler.copy()
         self.train_sampler.Init(train_mask)
 
         # make an exact copy
         self.val_sampler = copy.deepcopy(self.sampler)
         self.val_sampler.Init(val_mask)
-
-        # init the original sampler with the entire dataset (useful for stats for normalizers)
-        all = np.logical_or(val_mask, train_mask)
-        self.sampler.InitAll()
         
         # make the datasets
         self.train_dataset = DexNexDataset(self.train_sampler)
@@ -313,23 +371,38 @@ class TrainAndVal:
         OmegaConf.unsafe_merge(val_cfg, self.options.val) # type: ignore
         
         # make the train & val dataloader
-        self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
-        self.val_dataloader = self.make_dataloader(self.val_dataset, val_cfg)
         self.all_dataloader = self.make_dataloader(self.all_dataset, train_cfg)
+        self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
+        
+        if len(self.val_dataset) > 0:
+            self.val_dataloader = self.make_dataloader(self.val_dataset, val_cfg)
         
         # dict access
         self.dd = {}
         self.dd["all"] = self.all_dataloader
         self.dd["train"] = self.train_dataloader
-        self.dd["val"] = self.val_dataloader
+        
+        if len(self.val_dataset) > 0:
+            self.dd["val"] = self.val_dataloader
+        else:
+            self.dd["val"] = None
         
         print(self.rb_id + ": len train dataset (nb batches): {}".format(len(self.train_dataloader)))
         
+    # def reinit(self):
+    #     # only init if we're being trained off of
+    #     tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
+    #     if self.rb_id in tasks_to_use:
+    #         self.init()
+    
     def reinit(self):
-        # only init if we're being trained off of
-        tasks_to_use = globals.CONFIG.tasks_to_use #type:ignore
-        if self.rb_id in tasks_to_use:
+        """
+        if we're not using a val set, then train == all, so we can just add new episodes to save a lot of re-indexing time. If not, we have to do a full init because the training/val masks will not be valid
+        """
+        if self.use_val_set:
             self.init()
+        else:
+            self.reinit_no_val()
         
         
     def __getitem__(self, key):

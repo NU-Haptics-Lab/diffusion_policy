@@ -43,23 +43,23 @@ class QLDenser(nn.Module):
         self.model = nn.Sequential(
                     # nn.BatchNorm1d(input_dim), # start with a norm layer because my actor doesn't use a final activation ... this assumes single-modal statistics which is probably a bad assumption to make. Will test it for now.
                     nn.Linear(input_dim, hidden_dim),
-                    nn.LeakyReLU(0.1),
+                    nn.Mish(),
                     
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.LeakyReLU(0.1),
+                    nn.Mish(),
                     
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.LeakyReLU(0.1),
+                    nn.Mish(),
                     
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.LeakyReLU(0.1),
+                    nn.Mish(),
                     
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.BatchNorm1d(hidden_dim),
-                    nn.LeakyReLU(0.1),
+                    nn.Mish(),
                     )
         
     def forward(self, inputs):

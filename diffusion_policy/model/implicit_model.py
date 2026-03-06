@@ -285,7 +285,6 @@ class ImplicitAlgorithm(BaseImagePolicy):
         if warm_start_trajectory is None:
             raise NotImplementedError("Must supply a warm start trajectory")
         
-        
         self.policy.eval()
         self.policy.requires_grad_(False)
         To = 1
@@ -341,6 +340,12 @@ class ImplicitAlgorithm(BaseImagePolicy):
                 
                 # Manually update trajectories (mimicking a stateless optimizer)
                 with torch.no_grad():
+                    # clip the grad, max length 1.0?
+                    if True:
+                        bnorm = torch.norm(grads, dim=(1,2))
+                        must_clip = bnorm > 1.0
+                        grads[must_clip] /= bnorm[must_clip].unsqueeze(-1).unsqueeze(-1)
+                    
                     # Apply update
                     trajectories -= step_size * grads
                     
@@ -348,6 +353,13 @@ class ImplicitAlgorithm(BaseImagePolicy):
                     if self.use_add_inference_noise:
                         trajectories += self.inference_noise * self.make_noise(trajectories)
                     
+        # remove outliers?
+        if True:
+            threshold = 10.0 # normalized action value
+            outlier = torch.any(torch.abs(trajectories) > threshold, dim=(1,2))
+            trajectories = trajectories[~outlier]
+            
+            nb_outliers = outlier.sum()
 
         # 5. Find the highest scoring trajectory
         with torch.no_grad():

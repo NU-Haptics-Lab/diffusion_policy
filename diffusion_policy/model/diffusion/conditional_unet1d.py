@@ -37,7 +37,7 @@ class ConditionalResidualBlock1D(nn.Module):
         # TODO: put hidden layer count in config
         self.cond_encoder = nn.Sequential(
             nn.Linear(cond_dim, cond_dim),
-            nn.LeakyReLU(0.1),
+            nn.Mish(), # (0.1),
             nn.Linear(cond_dim, cond_channels),
             Rearrange('batch t -> batch t 1'),
         )
@@ -97,7 +97,7 @@ class ConditionalUnet1D(nn.Module):
         diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(dsed),
             nn.Linear(dsed, dsed * 4),
-            nn.LeakyReLU(0.1),
+            nn.Mish(),
             nn.Linear(dsed * 4, dsed),
         )
         cond_dim = dsed # timestamp embedder
@@ -186,7 +186,7 @@ class ConditionalUnet1D(nn.Module):
             self.task_id_encoder = nn.Sequential(
                 SinusoidalPosEmb(dsed),
                 nn.Linear(dsed, dsed * 4),
-                nn.LeakyReLU(0.1),
+                nn.Mish(),
                 nn.Linear(dsed * 4, dsed),
             )
 

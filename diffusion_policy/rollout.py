@@ -617,9 +617,15 @@ class Rollout:
                 
             self.save_episode_to_rb(episode, rb)
             
-            # must re-index the sampler
+            # must re-index the sampler. reindex.
             sampler: TrainAndVal = globals.DATALOADERS[rb_id]
-            sampler.init() # lazy init
+            sampler.reinit() # lazy reinit
+            successes, count = sampler.sampler.get_nb_successes()
+            sr = successes / count if count > 0 else 0.0
+            
+            # log
+            if globals.LOGGER is not None:
+                globals.LOGGER.log_one("rollout/dataset_success_rate", sr)
             
             # all dataloader iterators are now invalid, so each Batchloader class must now reset
             globals.SESSION_TRAINER.reset()

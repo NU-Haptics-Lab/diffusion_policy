@@ -319,7 +319,7 @@ common_dataset:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
-    ep_sampler_class: diffusion_policy.samplers.object_manipulator_sampler.ManipAnythingEpisodeSampler
+    ep_sampler_class_str: diffusion_policy.samplers.object_manipulator_sampler.ManipAnythingEpisodeSampler
 
     # child
 

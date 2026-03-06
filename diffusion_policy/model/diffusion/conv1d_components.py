@@ -22,7 +22,7 @@ class Upsample1d(nn.Module):
 
 class Conv1dBlock(nn.Module):
     '''
-        Conv1d --> GroupNorm --> LeakyReLU
+        Conv1d --> GroupNorm --> Mish
     '''
 
     def __init__(self, inp_channels, out_channels, kernel_size, n_groups=8):
@@ -33,7 +33,7 @@ class Conv1dBlock(nn.Module):
             # Rearrange('batch channels horizon -> batch channels 1 horizon'),
             nn.GroupNorm(n_groups, out_channels),
             # Rearrange('batch channels 1 horizon -> batch channels horizon'),
-            nn.LeakyReLU(0.1),
+            nn.Mish(),
         )
 
     def forward(self, x):
