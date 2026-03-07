@@ -243,7 +243,8 @@ class ImplicitAlgorithm(BaseImagePolicy):
                                         history_size=3,
                                         tolerance_grad=1e-3, 
                                         tolerance_change=1e-4,
-                                        line_search_fn=None, # faster than strong wolfe
+                                        line_search_fn="strong_wolfe",
+                                        # line_search_fn=None, # faster than strong wolfe
                     )
         
         if self.compiled_policy is not None:
@@ -255,6 +256,11 @@ class ImplicitAlgorithm(BaseImagePolicy):
             optimizer.zero_grad()
             qval = policy(trajectory, timestep, global_cond=global_cond)
             loss = -qval.mean()
+            
+            # add on a L2 regularization term to prevent massive actions
+            traj_norm_sq = trajectory.square().mean()
+            loss = loss + 0.001 * traj_norm_sq
+                
             loss.backward()
             return loss
                  

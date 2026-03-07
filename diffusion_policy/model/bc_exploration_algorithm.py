@@ -70,7 +70,7 @@ class BCExplorationAlgorithm(nn.Module):
     def __init__(self, 
                  policy,
                  exploration_rate_random = 0.0,
-                 exploration_rate_policy = 0.4,
+                 exploration_rate_policy = 1.0,
                  use_bc_explore = True,
                  ):
         super().__init__()
@@ -95,7 +95,7 @@ class BCExplorationAlgorithm(nn.Module):
             LOADED_ML_RUNNERS['diffusion_policy_runner'] = self.diffusion_bc_runner
         
         # my exploration schedulers
-        self.exploration_policy = SimpleConstantScheduler(value = 1.0)
+        self.exploration_policy = SimpleConstantScheduler(value = self.exploration_rate_policy)
         self.exploration_random = SimpleExponentialScheduler(initial_value = self.exploration_rate_random, decay_rate=0.99995)
         self.exploration_BC = SimpleExponentialScheduler(initial_value = 4.0, decay_rate = 0.99995)
         

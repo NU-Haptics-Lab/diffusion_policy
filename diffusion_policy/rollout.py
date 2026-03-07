@@ -135,7 +135,7 @@ class Rollout:
                 
         if self.use_freq_schedule:
             # xa, ya, xb, yb
-            self.freq_scheduler = SimpleLinearScheduler(0.0, 10.0, 10000.0, 100.0)
+            self.freq_scheduler = SimpleLinearScheduler(0.0, 5.0, 25000.0, 100.0)
 
     def run_rollouts(self):
         self.run()

@@ -102,6 +102,7 @@ def main(cfg: DictConfig):
             cfg.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
             cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
             cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
+            cfg.session_trainer.epoch_trainer.rollouts.use_freq_schedule = False
         
         # # no rollouts
         # cfg.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore
