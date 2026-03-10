@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "sandbox_rl_11: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation. added more penalties (energy, limits, contacts). adding previous robot joint action. back to inference sgfds. bootstrapping from pretraining data."
+description: "sandbox_rl_12: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation. added more penalties (energy, limits, contacts). adding previous robot joint action. back to inference sgfds. Turned off all gym penalties, using lbfgs penalties to enforce them. IMO makes a lot of sense because they're well defined and dense. Another advantage: can be changed without retraining"
 # global controls
 debug: false # 
 single_thread: false # nice for debugging
@@ -23,10 +23,10 @@ resume: true
 doing_bc: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: sandbox_rl_11
+run_tag: sandbox_rl_12
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/sandbox_rl_11
+output_dir: /media/dexnex_ssd/models/sandbox_rl_12
 
 tasks_to_use:
   # - all # currently, 'all' is a special keyword used in the batch_loader, and is required
@@ -68,7 +68,7 @@ clamp: false # clamp actions (and diffusion noise)
 # rollouts?
 use_online_rollout: true
 rollout_frequency: 100 # should be on a schedule?, or as a fcn of the avg ep timeout? maybe a fcn of the current dataset size
-rollout_warmup_nb_steps: 500
+rollout_warmup_nb_steps: 0
 
 
 num_inference_steps: 8 # compat
@@ -76,7 +76,7 @@ num_inference_steps: 8 # compat
 ###################################################
 ###################################################
 ###################################################
-action_rel_indices: [0] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future ALWAYS WANT -1 IN THE REL INDICES so we can enforce action continuity
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 
@@ -251,7 +251,7 @@ session_trainer:
       use_energy_limited_actions: false
       which_model_to_use_for_inference: critic
       use_ema_model: false
-      use_freq_schedule: false
+      use_freq_schedule: true
 
       env_maker:
         _target_: projects.sandbox.sandbox_rollout.SandboxRLRolloutEnv
@@ -426,7 +426,7 @@ models:
             inference_iterations: 0 # the larger this number, the slower inference is, also the worse performance tends to be. 40 -> really bad.
             inference_noise: 0.00 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
 
-            path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_11.yaml
+            path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_12.yaml
 
             use_compiled_policy: ${use_compiled_policy}
 
@@ -441,6 +441,18 @@ models:
                 - 256
                 - 512
               num_mid_module_repeats: 6
+
+            lbfgs_options:
+              _target_: diffusion_policy.model.implicit_model.LBFGSOptions
+
+              use_l2_reg: true
+              use_jerk_penalty: true
+              use_add_noise: true
+
+              l2_reg_weight: 1.0
+              jerk_weight: 0.002
+              noise_mag: 0.001
+
 
 
 

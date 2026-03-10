@@ -565,16 +565,28 @@ class EpisodeSampler:
         return not_done
     
     def get_reward(self, ep_idx):
-        reward = self.get_key_sample("reward", ep_idx) # adds a dimension
+        indices = self.get_ep_relative_action_indices(ep_idx)
+        
+        reward = self.get_key_sample("reward", indices) # adds a dimension
+        
+        total_reward = reward.sum()
+        
+        # divide by length of trajectory so rewards are still ~[-1, 1]
+        if True:
+            H = len(indices)
+            total_reward /= H
         
         if self.use_cap_rewards:
-            reward = np.clip(reward, -self.reward_cap, self.reward_cap)
+            total_reward = np.clip(total_reward, -self.reward_cap, self.reward_cap)
         
         # convert to np array
-        reward = np.array(reward)
-        return reward
+        total_reward = np.array(total_reward)
+        
+        # add batch dim
+        total_reward = np.expand_dims(total_reward, axis=0)
+        
+        return total_reward
 
-        return ep_indices
 
     # def get_history(self, key, idx):
     #     """
@@ -624,12 +636,17 @@ class EpisodeSampler:
             
         return data
     
+    def get_ep_relative_action_indices(self, ep_idx):
+        # make indices which are episode-relative
+        indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
+        
+        return indices
+    
     def get_action_sample(self, ep_idx):
         """
         For an action, we want a sequence from ep_idx - n_obs_steps to ep_idx + horizon.
         """
-        # make indices which are episode-relative
-        indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx # type:ignore
+        indices = self.get_ep_relative_action_indices(ep_idx)
 
         # get the sample
         sample = self.indices.get_sequence_by_train_indices_and_key(indices, "action")

@@ -406,7 +406,8 @@ class Rollout:
     def prep_action_for_stepping(self, actions):
         # none protection
         if actions is not None:
-            actions = np.squeeze(actions)
+            # remove batch dim
+            actions = actions[0]
             assert(isinstance(actions, np.ndarray)) # should already be
             # actions = actions.numpy()
         return actions

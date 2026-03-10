@@ -59,6 +59,30 @@ from tqdm import (
 
 from line_profiler import profile
 
+import avatar_drake_sim.sims.sandbox.sandbox_common as commons
+
+class LBFGSOptions:
+    def __init__(self,
+                 use_l2_reg = True,
+                 use_jerk_penalty = True,
+                 l2_reg_weight = 1.0,
+                 jerk_weight = 1.0,
+                 divide_by_nb_of_penalties = True,
+                 use_add_noise = False,
+                 noise_mag = 0.01, # remember, it's normalized
+                 ):
+        self.use_l2_reg = use_l2_reg
+        self.use_jerk_penalty = use_jerk_penalty
+        self.l2_reg_weight = l2_reg_weight
+        self.jerk_weight = jerk_weight
+        self.divide_by_nb_of_penalties = divide_by_nb_of_penalties
+        self.use_add_noise = use_add_noise
+        self.noise_mag = noise_mag
+        
+    def get_nb_penalties(self):
+        return self.use_jerk_penalty + self.use_l2_reg
+        
+
 class ImplicitPolicy(nn.Module):
     def __init__(self,
             action_shape: list,
@@ -141,6 +165,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
             inference_step_size = 1e-2,
             inference_iterations = 20,
             inference_noise = 0.01,
+            lbfgs_options = LBFGSOptions(),
     ):
         super().__init__()
         
@@ -152,6 +177,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         self.inference_step_size = inference_step_size
         self.inference_iterations = inference_iterations
         self.inference_noise = inference_noise
+        self.lbfgs_options = lbfgs_options
 
         self.policy = policy
         
@@ -186,11 +212,13 @@ class ImplicitAlgorithm(BaseImagePolicy):
                 
                 self.compiled_policy = torch.compile(self.policy, mode="reduce-overhead")
                 
-                self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="reduce-overhead")
+                if self.use_batch_gd_for_inference:
+                    self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="reduce-overhead")
             else:
                 self.compiled_policy = torch.compile(self.policy, mode="default")
                 
-                self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="default")
+                if self.use_batch_gd_for_inference:
+                    self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="default")
 
     # alias
     def predict_action(self, nobs): #type:ignore
@@ -236,15 +264,17 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # for debugging
         original_trajectory = trajectory.clone().detach()
         
-        trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
+        
+        # trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
+        trajectory.requires_grad_(True)
         optimizer = torch.optim.LBFGS([trajectory], 
                                         lr=1.0, # designed to work with unit step size
-                                        max_iter=10, 
-                                        history_size=3,
+                                        max_iter=20, 
+                                        # history_size=3,
                                         tolerance_grad=1e-3, 
                                         tolerance_change=1e-4,
-                                        line_search_fn="strong_wolfe",
-                                        # line_search_fn=None, # faster than strong wolfe
+                                        # line_search_fn="strong_wolfe",
+                                        line_search_fn=None, # faster than strong wolfe
                     )
         
         if self.compiled_policy is not None:
@@ -252,15 +282,53 @@ class ImplicitAlgorithm(BaseImagePolicy):
         else:
             policy = self.policy
         
+        # initial scores for debugging
+        initial_scores = policy(original_trajectory, timestep, global_cond=global_cond).squeeze()
+        
+        # get past action indices for boundary condition enforcement
+        past_actions = np.where(np.array(self.action_rel_indices) < 0)[0]
+        
+        
         def closure():
-            optimizer.zero_grad()
-            qval = policy(trajectory, timestep, global_cond=global_cond)
-            loss = -qval.mean()
+            # nonlocals
+            nonlocal trajectory
             
+            optimizer.zero_grad()
+            
+            with torch.no_grad():
+                # noise? starting to look more similar to the core DDIM function
+                if self.lbfgs_options.use_add_noise:
+                    trajectory += self.lbfgs_options.noise_mag * self.make_noise(trajectory)
+                    
+                # enforce past actions
+                trajectory[:, past_actions, :] = original_trajectory[:, past_actions, :]
+            
+            
+            qval = policy(trajectory, timestep, global_cond=global_cond)
+            
+            penalties = 0.0
             # add on a L2 regularization term to prevent massive actions
-            traj_norm_sq = trajectory.square().mean()
-            loss = loss + 0.001 * traj_norm_sq
+            if self.lbfgs_options.use_l2_reg:
+                traj_norm_sq = trajectory.square().mean(dim=(1, 2))
+                penalties = penalties + self.lbfgs_options.l2_reg_weight * traj_norm_sq
                 
+            # jerk penalty
+            # ... issue: nactions are normalized? Maybe doesn't matter...
+            if self.lbfgs_options.use_jerk_penalty and self.horizon >= 3:
+                # simple finite differences
+                # ASSUMES ACTIONS ARE TORQUES/ACCELERATIONS
+                a_diff = th.diff(trajectory, dim=1) # shape (B, T-1, Da)
+                jerk = a_diff / commons.LEARNING_RATE_DT
+                jerk_penalty = jerk.square().mean(dim=(1,2))
+                penalties = penalties + self.lbfgs_options.jerk_weight * jerk_penalty
+            
+            if self.lbfgs_options.divide_by_nb_of_penalties:
+                nb_penalties = self.lbfgs_options.get_nb_penalties()
+                if nb_penalties > 0:
+                    penalties = penalties / nb_penalties
+                
+            loss = -qval + penalties
+            loss = loss.sum()
             loss.backward()
             return loss
                  
@@ -276,8 +344,27 @@ class ImplicitAlgorithm(BaseImagePolicy):
         self.policy.train()
         
         traj = trajectory.detach().clone()
+
+        # 5. Find the highest scoring trajectory
+        if traj.shape[0] > 0:
+            with torch.no_grad():
+                final_scores = policy(traj, 0.0, global_cond=global_cond).squeeze()
+                best_idx = torch.argmax(final_scores)
+                
+                # slice so we keep the batch dimension
+                best_traj = traj[best_idx:best_idx+1].clone()
+                
+        else:
+            best_traj = traj
+            
+        # final optional noise
+        with torch.no_grad():
+            # noise? starting to look more similar to the core DDIM function
+            if self.lbfgs_options.use_add_noise:
+                best_traj += self.lbfgs_options.noise_mag * self.make_noise(best_traj)
         
-        return traj
+        
+        return best_traj
     
     def make_vmap_grad_batch_traj(self):
         def single_trajectory_loss(traj, global_cond):
@@ -343,6 +430,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
         step_size = self.inference_step_size
         iterations = self.inference_iterations
         
+        # get past action indices for boundary condition enforcement
+        past_actions = np.where(np.array(self.action_rel_indices) < 0)[0]
+        original_trajectories = trajectories.clone().detach()
+        
         
         #################
         # add noise if desired. initial noise. still added even if iterations == 0
@@ -371,6 +462,12 @@ class ImplicitAlgorithm(BaseImagePolicy):
                     # add noise if desired
                     if self.use_add_inference_noise:
                         trajectories += self.inference_noise * self.make_noise(trajectories)
+                        
+                    
+                    # enforce past actions
+                    trajectories[:, past_actions, :] = original_trajectories[:, past_actions, :]
+                    
+                    
                     
         # remove outliers?
         if True:
@@ -522,6 +619,14 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         
         globals.load_global_config_from_path_and_save_to_globals_dict(path, "gpu_action_loader")
         
+        with globals.use_config("gpu_action_loader"):
+            self.my_action_rel_indices = globals.CONFIG.action_rel_indices # type: ignore
+            
+        self.train_action_rel_indices = self.action_rel_indices
+        
+        if self.my_action_rel_indices != self.train_action_rel_indices:
+            print(f"Warning: my_action_rel_indices {self.my_action_rel_indices} is different from train_action_rel_indices {self.train_action_rel_indices}.")
+        
     def get_gpu_actions_batch(self):
         with globals.use_config("gpu_action_loader"):
             batch_loader = globals.DEFAULT_BATCH_LOADER #type:ignore
@@ -539,3 +644,12 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
 
 
         return super().inference_batch_gd(nobs, warm_start_trajectory=actions)
+    
+    def inference_lbfgs(self, nobs: dict, warm_start_trajectory=None):
+        """
+        need to use a batch loader to deal with norming correctly
+        """
+        if True:
+            actions = self.get_gpu_actions_batch()
+            
+        return super().inference_lbfgs(nobs, warm_start_trajectory=actions)

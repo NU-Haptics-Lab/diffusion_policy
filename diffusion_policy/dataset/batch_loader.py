@@ -414,6 +414,7 @@ class BatchLoader:
         if min_val < min_allowed or max_val > max_allowed:
             raise ValueError("Fitted nn {} has min {} or max {} outside of allowed range [{}, {}]. Check your data for outliers.".format(descriptor, min_val, max_val, min_allowed, max_allowed))
         
+        
     def get_static_nns(self):
         obs = {}
         obs_keys_to_load = globals.CONFIG.obs_keys_to_load # type: ignore
@@ -1101,9 +1102,22 @@ class SandboxRobotBCBatchLoader(BatchLoader):
         nb = globals.CONFIG.shape_meta[act_key].shape # type: ignore
         
         # required keyword
-        nns["action"] = get_identity_normalizer_from_stat(
-            {'min': np.zeros(nb, dtype=np.float32)}
-            )
+        # nns["action"] = get_identity_normalizer_from_stat(
+        #     {'min': np.zeros(nb, dtype=np.float32)}
+        #     )
+        # custom for torque
+        max_torques = 5.0 * np.ones(nb, dtype=np.float32)
+        max_torques[0:6] = np.array([
+            50.0,
+            40.0,
+            30.0,
+            20.0,
+            10.0,
+            10.0,
+        ])
+        nns["action"] = get_range_normalizer_from_stat(
+            {'min': -max_torques, 'max': max_torques}
+        )
         
         # final assembly
         nns = nns | {
@@ -1128,8 +1142,8 @@ class SandboxRobotBCBatchLoader(BatchLoader):
                 self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
                 
         # for the action
-        act_key = globals.CONFIG.action_key # type: ignore
-        self.fit_nn(rb[act_key], nns['action'], act_key)
+        # act_key = globals.CONFIG.action_key # type: ignore
+        # self.fit_nn(rb[act_key], nns['action'], act_key)
         
         return nns
     

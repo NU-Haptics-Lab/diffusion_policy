@@ -428,6 +428,8 @@ class EpisodeSampler:
         return not_done
     
     def get_reward(self, ep_idx):
+        # must rewrite to be like sarsa_sampler, get the reward for the entire trajectory
+        raise 
         reward = self.get_key_sample("reward", ep_idx)
         
         # convert to np array, must add a dimension

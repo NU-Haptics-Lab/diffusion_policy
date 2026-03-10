@@ -20,7 +20,7 @@ Used for critics and the like.
 
 
 
-
+import numpy as np
 from typing import Union
 import logging
 import torch
@@ -33,6 +33,8 @@ from diffusion_policy.model.diffusion.conv1d_components import (
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalResidualBlock1D
+
+import diffusion_policy.globals as globals
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +106,10 @@ class ConditionalSlashnet1D(nn.Module):
             ]))
             
         # final dense layers
-        horizon = 8 # should come from the config...
-        nb_input_features = all_dims[-1] * (horizon / 2**2)
+        horizon = len(globals.CONFIG.action_rel_indices) # type: ignore
+        factor = horizon / 2**2
+        factor = np.ceil(factor)
+        nb_input_features = all_dims[-1] * (factor)
         nb_input_features = int(nb_input_features)
         self.final_layers = nn.Sequential(
             nn.Linear(nb_input_features, 1),
