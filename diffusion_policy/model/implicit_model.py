@@ -70,6 +70,8 @@ class LBFGSOptions:
                  divide_by_nb_of_penalties = True,
                  use_add_noise = False,
                  noise_mag = 0.01, # remember, it's normalized
+                 use_policy = True, # set False for debugging
+                 policy_weight = 1.0,
                  ):
         self.use_l2_reg = use_l2_reg
         self.use_jerk_penalty = use_jerk_penalty
@@ -78,6 +80,8 @@ class LBFGSOptions:
         self.divide_by_nb_of_penalties = divide_by_nb_of_penalties
         self.use_add_noise = use_add_noise
         self.noise_mag = noise_mag
+        self.use_policy = use_policy
+        self.policy_weight = policy_weight
         
     def get_nb_penalties(self):
         return self.use_jerk_penalty + self.use_l2_reg
@@ -242,6 +246,9 @@ class ImplicitAlgorithm(BaseImagePolicy):
         device = self.device
         dtype = self.dtype
         timestep = 0.0
+        
+        # previous action
+        naction_prev = nobs['robot_joint_prev_action']
 
         # reshape obs: B, T, ... to B*T ...
         this_nobs = dict_apply(nobs, 
@@ -269,12 +276,12 @@ class ImplicitAlgorithm(BaseImagePolicy):
         trajectory.requires_grad_(True)
         optimizer = torch.optim.LBFGS([trajectory], 
                                         lr=1.0, # designed to work with unit step size
-                                        max_iter=20, 
+                                        max_iter=10, 
                                         # history_size=3,
-                                        tolerance_grad=1e-3, 
-                                        tolerance_change=1e-4,
-                                        # line_search_fn="strong_wolfe",
-                                        line_search_fn=None, # faster than strong wolfe
+                                        # tolerance_grad=1e-6, 
+                                        # tolerance_change=1e-7,
+                                        line_search_fn="strong_wolfe",
+                                        # line_search_fn=None, # faster than strong wolfe, but uses the fixed step size from lr
                     )
         
         if self.compiled_policy is not None:
@@ -288,37 +295,51 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # get past action indices for boundary condition enforcement
         past_actions = np.where(np.array(self.action_rel_indices) < 0)[0]
         
+        if past_actions.shape[0] > 0:
+            with torch.no_grad():
+                # set the previous action
+                trajectory[:, past_actions, :] = naction_prev
         
-        def closure():
+        losses = []
+        def get_per_sample_loss():
             # nonlocals
-            nonlocal trajectory
+            nonlocal trajectory, losses
             
             optimizer.zero_grad()
             
+            # setup
             with torch.no_grad():
                 # noise? starting to look more similar to the core DDIM function
                 if self.lbfgs_options.use_add_noise:
                     trajectory += self.lbfgs_options.noise_mag * self.make_noise(trajectory)
                     
                 # enforce past actions
-                trajectory[:, past_actions, :] = original_trajectory[:, past_actions, :]
+                trajectory[:, past_actions, :] = naction_prev
             
+            # run the policy
+            if self.lbfgs_options.use_policy:
+                qval = policy(trajectory, timestep, global_cond=global_cond)
+                qval = qval.squeeze()
+                
+                qval = self.lbfgs_options.policy_weight * qval
+            else:
+                qval = th.tensor(0.0, device=trajectory.device, dtype=trajectory.dtype)
             
-            qval = policy(trajectory, timestep, global_cond=global_cond)
-            
-            penalties = 0.0
+            penalties = th.tensor(0.0, device=trajectory.device, dtype=trajectory.dtype)
             # add on a L2 regularization term to prevent massive actions
             if self.lbfgs_options.use_l2_reg:
+                # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
                 traj_norm_sq = trajectory.square().mean(dim=(1, 2))
                 penalties = penalties + self.lbfgs_options.l2_reg_weight * traj_norm_sq
                 
             # jerk penalty
             # ... issue: nactions are normalized? Maybe doesn't matter...
             if self.lbfgs_options.use_jerk_penalty and self.horizon >= 3:
-                # simple finite differences
-                # ASSUMES ACTIONS ARE TORQUES/ACCELERATIONS
+                
                 a_diff = th.diff(trajectory, dim=1) # shape (B, T-1, Da)
                 jerk = a_diff / commons.LEARNING_RATE_DT
+                
+                # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
                 jerk_penalty = jerk.square().mean(dim=(1,2))
                 penalties = penalties + self.lbfgs_options.jerk_weight * jerk_penalty
             
@@ -327,35 +348,51 @@ class ImplicitAlgorithm(BaseImagePolicy):
                 if nb_penalties > 0:
                     penalties = penalties / nb_penalties
                 
+                
             loss = -qval + penalties
-            loss = loss.sum()
-            loss.backward()
             return loss
+            
+        def closure():
+            per_sample_loss = get_per_sample_loss()
+            
+            loss = per_sample_loss.mean()
+            loss.backward()
+            
+            # logging
+            losses.append(loss.item())
+            return loss
+        
+        # initial losses
+        with torch.no_grad():
+            initial_losses = get_per_sample_loss()
                  
         # speed up .backward() by not calculating gradients for the policy parameters
         self.policy.requires_grad_(False)
         # just to make sure
         with torch.enable_grad():
             # only need to call step once    
-            optimizer.step(closure)
+            optimizer.step(closure) #type:ignore
         # restore grad for policy parameters
         self.policy.requires_grad_(True)
 
         self.policy.train()
         
-        traj = trajectory.detach().clone()
 
         # 5. Find the highest scoring trajectory
-        if traj.shape[0] > 0:
+        if trajectory.shape[0] > 0:
             with torch.no_grad():
-                final_scores = policy(traj, 0.0, global_cond=global_cond).squeeze()
-                best_idx = torch.argmax(final_scores)
+                # final action enforcement (also should be done in get_per_sample_loss)
+                trajectory[:, past_actions, :] = naction_prev
+                final_losses = get_per_sample_loss()
+                
+                # min the loss
+                best_idx = torch.argmin(final_losses)
                 
                 # slice so we keep the batch dimension
-                best_traj = traj[best_idx:best_idx+1].clone()
+                best_traj = trajectory[best_idx:best_idx+1].detach().clone()
                 
         else:
-            best_traj = traj
+            best_traj = trajectory.detach().clone()
             
         # final optional noise
         with torch.no_grad():

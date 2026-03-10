@@ -445,13 +445,15 @@ models:
             lbfgs_options:
               _target_: diffusion_policy.model.implicit_model.LBFGSOptions
 
-              use_l2_reg: true
-              use_jerk_penalty: true
+              use_l2_reg: false # penalizes big actions
+              use_jerk_penalty: true # penalizes big changes in action, but not necessarily big actions themselves
               use_add_noise: true
+              use_policy: true # debugging
 
-              l2_reg_weight: 1.0
-              jerk_weight: 0.002
-              noise_mag: 0.001
+              l2_reg_weight: 0.0 # good value: 1.0
+              jerk_weight: 1.0 # good value ... 1.0?
+              noise_mag: 0.01
+              policy_weight: 1.0
 
 
 

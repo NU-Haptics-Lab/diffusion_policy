@@ -1161,6 +1161,10 @@ class SandboxRobotRLBatchLoader(SandboxRobotBCBatchLoader):
         # duplicate action into action_next
         nns['action_next'] = nns['action']
         
+        # must overwrite the previous action to use our action normalizer
+        nns['obs']['robot_joint_prev_action'] = nns['action']
+        nns['obs_next']['robot_joint_prev_action'] = nns['action_next']
+        
         
         nns['not_done'] = get_identity_normalizer_from_stat({'min': np.array([0], dtype=np.float32)})
         
