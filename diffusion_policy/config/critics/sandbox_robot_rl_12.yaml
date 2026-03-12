@@ -5,6 +5,7 @@
 description: "sandbox_rl_12: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation. added more penalties (energy, limits, contacts). adding previous robot joint action. back to inference sgfds. Turned off all gym penalties, using lbfgs penalties to enforce them. IMO makes a lot of sense because they're well defined and dense. Another advantage: can be changed without retraining"
 # global controls
 debug: false # 
+profile: false # whether to profile stuff
 single_thread: false # nice for debugging
 use_compiled_policy: false # set false for debugging or if nb iterations == 0. right now the policy is very slow when compiled. could be because if it has to recompile at each rollout, not sure.
 total_num_epochs: 10001
@@ -87,7 +88,7 @@ checkpoint:
   save_last_snapshot: false
 
   format_str: step={global_step:07d}.ckpt
-  k: 50 # nb checkpoints to keep
+  k: 5 # nb checkpoints to keep
   checkpoint_every: 50 # how often, in epochs
   mode: max
   monitor_key: epoch
@@ -252,7 +253,7 @@ session_trainer:
       use_energy_limited_actions: false
       which_model_to_use_for_inference: critic
       use_ema_model: false
-      use_freq_schedule: true
+      use_freq_schedule: false
 
 
       env_maker:
@@ -430,10 +431,10 @@ models:
             _target_: diffusion_policy.model.implicit_model.ImplicitAlgorithmInferenceFromBCDataset # the actual critic alg
             use_lbfgs_for_inference: true
             use_batch_gd_for_inference: false
-            use_add_inference_noise: false
+            use_add_inference_noise: true # used in GD
             inference_step_size: 0.05 # reference: traj mean is ~0.008, std is ~0.5, min/max 1.0. grads mean is ~0.015, std: ~0.1, min/max ~1.5
             inference_iterations: 0 # the larger this number, the slower inference is, also the worse performance tends to be. 40 -> really bad.
-            inference_noise: 0.00 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
+            inference_noise: 0.01 # controls exploration magnitude. Remember, actions are normalized, so 0.01 means a scale of 1%. Noise drawn from a standard gaussian
 
             path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_gpu_actions_rl_12.yaml
 
@@ -461,7 +462,7 @@ models:
 
               l2_reg_weight: 0.0 # good value: 1.0
               jerk_weight: 0.5 # good value ... 1.0?
-              noise_mag: 0.01
+              noise_mag: 0.025
               policy_weight: 1.0
 
 

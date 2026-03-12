@@ -303,18 +303,20 @@ class TrainAndVal:
         
     def reinit_no_val(self):
         """
-        able to just add new episodes since train == all. Saved time.
+        able to just add new episodes since train == all. Saves time.
         """
-        self.sampler.reinit_all()
-        
-        self.train_dataset.reinit_all()
+        with utils.profile_section("reinit_no_val.reinit_all"):
+            self.sampler.reinit_all()
+            
+            self.train_dataset.reinit_all()
         
         # train config
         train_cfg = copy.deepcopy(self.options.common) # type: ignore
         OmegaConf.unsafe_merge(train_cfg, self.options.train) # type: ignore
         
         # torch dataloader
-        self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
+        with utils.profile_section("reinit_no_val.make_dataloader"):
+            self.train_dataloader = self.make_dataloader(self.train_dataset, train_cfg)
         
         # dict access
         self.dd = {}

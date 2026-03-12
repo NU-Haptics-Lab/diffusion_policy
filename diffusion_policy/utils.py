@@ -12,12 +12,31 @@ from omegaconf import (
 )
 
 import time
+import contextlib
 
 def tic():
     return time.time()
 
 def toc(tic):
     return time.time() - tic
+
+@contextlib.contextmanager
+def profile_section(name):
+    # Setup: Check if profiling is enabled
+    if globals.CONFIG is not None and getattr(globals.CONFIG, "profile", False):
+        start_time = time.perf_counter()
+        # print(f"[INFO] Starting profile: {name}")
+    else:
+        start_time = 0.0
+    
+    try:
+        yield
+    finally:
+        # Teardown: Calculate time only if profiling was active
+        if globals.CONFIG is not None and getattr(globals.CONFIG, "profile", False):
+            elapsed = time.perf_counter() - start_time
+            # print(f"[INFO] {name} took {elapsed:.4f} seconds")
+            globals.log_one_if_exists(f"profiling/{name}", elapsed)
 
 def EveryEpoch(every: int):
     yes = (globals.EPOCH % every) == 0

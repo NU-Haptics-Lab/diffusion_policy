@@ -28,7 +28,7 @@ class StepTrainer:
     """
 
     def __init__(self,
-                 w_batch_losses: dict,
+                 w_batch_losses: dict[str, WeightedBatchLoss],
                  grad_norm = 1.0
         ):
         # handle to node

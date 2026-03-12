@@ -65,6 +65,9 @@ def update_difficulty_scale3(outcome):
     alpha = 0.01 # smoothing factor
     
     DIFFICULTY_SCALE = alpha * outcome + (1 - alpha) * DIFFICULTY_SCALE
+    
+    # save to commons as well
+    commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
 
 class Node:
     """
@@ -179,18 +182,21 @@ class ReverseCurriculumGeneration:
         self.total_successes += outcome
         
         # just do it here
-        sr = self.total_successes / self.total_attempts
-        if sr > 0.5:
-            update_difficulty_scale3(1.0)
+        if True:
+            sr = self.total_successes / self.total_attempts
+            if sr > 0.5:
+                update_difficulty_scale3(1.0)
+            else:
+                update_difficulty_scale3(0.0)
         else:
-            update_difficulty_scale3(0.0)
+            # test
+            update_difficulty_scale3(outcome)
 
         # update global
         # update_difficulty_scale3(outcome)
 
         # log the difficulty scale
-        if globals.LOGGER is not None:
-            globals.LOGGER.log_one("difficulty_scale", DIFFICULTY_SCALE)
+        globals.log_one_if_exists("difficulty_scale", DIFFICULTY_SCALE)
     
     # def get_current_timeout(self):
     #     if self.current_node is not None:

@@ -165,10 +165,12 @@ class Rollout:
             # rollout n times per trigger
             for n in range(self.num_rollouts_per_trigger):
                 # rollout_prep
-                self.rollout_prep()
+                with utils.profile_section("rollout_prep"):
+                    self.rollout_prep()
             
                 # one rollout
-                samples, reward, best_qvals, jerk, env_time, inference_time = self.one_rollout()
+                with utils.profile_section("one_rollout"):
+                    samples, reward, best_qvals, jerk, env_time, inference_time = self.one_rollout()
                 total_env_time += env_time
                 total_inference_time += inference_time
                 
@@ -183,7 +185,8 @@ class Rollout:
                 
                 # dump the samples to the replay buffer
                 if save:
-                    self.save_episode(samples, successful=successful)
+                    with utils.profile_section("save_episode"):
+                        self.save_episode(samples, successful=successful)
                 
                 # save vals
                 total_reward += reward
@@ -203,19 +206,19 @@ class Rollout:
             successes = np.mean(successes)
             
             # logging
-            globals.LOGGER.log_one("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
-            globals.LOGGER.log_one("rollout/avg_success_rate", successes / self.num_rollouts_per_trigger)
-            globals.LOGGER.log_one("rollout/avg_best_qval", avg_best_qval / self.num_rollouts_per_trigger)
-            globals.LOGGER.log_one("rollout/avg_jerk", avg_jerk / self.num_rollouts_per_trigger)
+            globals.log_one_if_exists("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
+            globals.log_one_if_exists("rollout/avg_success_rate", successes / self.num_rollouts_per_trigger)
+            globals.log_one_if_exists("rollout/avg_best_qval", avg_best_qval / self.num_rollouts_per_trigger)
+            globals.log_one_if_exists("rollout/avg_jerk", avg_jerk / self.num_rollouts_per_trigger)
             
             # length of rb so we can correlate nb eps to SR
-            globals.LOGGER.log_one("rollout/rb_nb_episodes", self.get_rb().n_episodes)
+            globals.log_one_if_exists("dataset/rb_nb_episodes", self.get_rb().n_episodes)
+            globals.log_one_if_exists("dataset/rb_nb_datapts", self.get_rb().n_steps)
             
             # if successes > 0:
             #     avg_ttc = ttc / successes
             #     globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
             toc = utils.toc(tic)
-            globals.log_one_if_exists("profiling/Rollout.run_rollouts", toc)
             print("Rollout time: {:.2f} seconds".format(toc))
             print("Total env compute time: {:.2f} seconds".format(total_env_time))
             print("Total inference compute time: {:.2f} seconds".format(total_inference_time))
@@ -664,17 +667,23 @@ class Rollout:
                 rb = self.get_rb()
                 rb_id = self.rb_id
                 
-            self.save_envs_episode_to_rb(episode, rb)
+            with utils.profile_section("save_envs_episode_to_rb"):
+                self.save_envs_episode_to_rb(episode, rb)
             
             # must re-index the sampler. reindex.
+            assert(globals.DATALOADERS is not None)
             sampler: TrainAndVal = globals.DATALOADERS[rb_id]
-            sampler.reinit() # lazy reinit
-            successes, count = sampler.sampler.get_nb_successes()
-            sr = successes / count if count > 0 else 0.0
+            with utils.profile_section("save_episode.sampler.reinit"):
+                sampler.reinit() # lazy reinit?
+                
+            ## turns out this call is very very slow
+            # successes, count = sampler.sampler.get_nb_successes()
+            # sr = successes / count if count > 0 else 0.0
             
             # log
-            if globals.LOGGER is not None:
-                globals.LOGGER.log_one("rollout/dataset_success_rate", sr)
+            # if globals.LOGGER is not None:
+            #     globals.LOGGER.log_one("rollout/dataset_success_rate", sr)
             
             # all dataloader iterators are now invalid, so each Batchloader class must now reset
-            globals.SESSION_TRAINER.reset()
+            with utils.profile_section("reset_session_trainer"):
+                globals.SESSION_TRAINER.reset()

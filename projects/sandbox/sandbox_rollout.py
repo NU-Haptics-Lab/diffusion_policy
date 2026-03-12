@@ -66,6 +66,12 @@ class SandboxRLRolloutEnv(RolloutEnv):
         return self.env
             
 class SandboxRollout(Rollout):
+    def setup(self):
+        super().setup()
+        
+        # assertions
+        assert(isinstance(self.env, VecEnv))
+        
     def convert_drake_obs(self, drake_obs):
         """
         convert from the drake obs dict to the obs dict expected by the policy
@@ -161,6 +167,8 @@ class SandboxRollout(Rollout):
         
     
     def step_trajectory(self, actions):
+        assert(isinstance(self.env, VecEnv))
+        
         total_reward = np.zeros(commons.NB_PARALLEL_ENVS)
         samples = []
         
@@ -203,6 +211,13 @@ class SandboxRollout(Rollout):
             toc = utils.toc(tic)
             globals.log_one_if_exists("profiling/SandboxRollout.step_trajectory", toc)
             total_compute_time += toc
+            
+            for info in infos:
+            # log difficulty scale
+                if "difficulty_scale" in info:
+                    globals.log_one_if_exists("difficulty_scale", info["difficulty_scale"])
+            
+            # early exit
             if done:
                 break
             

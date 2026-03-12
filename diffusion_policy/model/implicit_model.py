@@ -439,6 +439,8 @@ class ImplicitAlgorithm(BaseImagePolicy):
             if self.lbfgs_options.use_add_noise:
                 best_trajs += self.lbfgs_options.noise_mag * self.make_noise(best_trajs)
         
+            # replace the above line with this:
+            # trajectory += noise_weight * self.make_noise(trajectory)
         
         return best_trajs
     
@@ -604,12 +606,12 @@ class ImplicitAlgorithm(BaseImagePolicy):
         with torch.enable_grad():
             # only need to call step once 
             if True: 
-                start_event.record()  
+                start_event.record() #type:ignore
                 
             optimizer.step(closure) #type:ignore
         # restore grad for policy parameters
             if True:
-                end_event.record()
+                end_event.record() #type:ignore
                 torch.cuda.synchronize()
                 elapsed_time_ms = start_event.elapsed_time(end_event)
                 globals.log_one_if_exists("profiling/LBFGS_closure_time_ms", elapsed_time_ms)
