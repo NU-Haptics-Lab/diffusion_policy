@@ -377,7 +377,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
             loss.backward()
             
             # logging
-            losses.append(loss.item())
+            # losses.append(loss.item())
             return loss
         
         # initial losses
