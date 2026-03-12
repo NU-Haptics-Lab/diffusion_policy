@@ -66,10 +66,10 @@ class SandboxRobotRLEpisodeSampler(EpisodeSampler):
         
         sample = {}
         sample["obs"] = self.get_obs_sample(ep_idx)
-        sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
+        sample["obs_next"] = self.get_obs_sample(ep_idx + 1) # NOTE: this doesn't take into account the length of the trajectory
         
         sample["action"] = self.get_action_sample(ep_idx)
-        sample["action_next"] = self.get_action_sample(ep_idx + 1)
+        sample["action_next"] = self.get_action_sample(ep_idx + 1) # NOTE: this doesn't take into account the length of the trajectory ... need to think about the training ramifications...
         
         
         sample["reward"] = self.get_reward(ep_idx)

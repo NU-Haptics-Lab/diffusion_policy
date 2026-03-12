@@ -565,6 +565,7 @@ class EpisodeSampler:
         return not_done
     
     def get_reward(self, ep_idx):
+        # TODO: set rewards where indices > end of ep to 0.0, so they aren't counted multiple times.
         indices = self.get_ep_relative_action_indices(ep_idx)
         
         reward = self.get_key_sample("reward", indices) # adds a dimension
@@ -697,7 +698,7 @@ class EpisodeSampler:
         sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
 
         sample["action"] = self.get_action_sample(ep_idx)
-        sample["action_next"] = self.get_action_sample(ep_idx + 1)
+        sample["action_next"] = self.get_action_sample(ep_idx + 1) # NOTE: this doesn't take into account the length of the trajectory
 
         sample["reward"] = self.get_reward(ep_idx)
 

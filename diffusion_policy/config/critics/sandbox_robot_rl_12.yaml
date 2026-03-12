@@ -254,6 +254,8 @@ session_trainer:
       which_model_to_use_for_inference: critic
       use_ema_model: false
       use_freq_schedule: false
+      use_freq_calculation: true
+      use_freq_calculation_target_percent: 0.1
 
 
       env_maker:

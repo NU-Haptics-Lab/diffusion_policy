@@ -77,6 +77,8 @@ class Rollout:
                  use_ema_model = True,
                  use_filter_successful_and_failed_episodes = True,
                  use_freq_schedule = False,
+                 use_freq_calculation = False,
+                 use_freq_calculation_target_percent = 0.1,
                  ) -> None:
         self.evaluator = evaluator
         self.freq = freq
@@ -97,6 +99,8 @@ class Rollout:
         self.use_ema_model = use_ema_model
         self.use_filter_successful_and_failed_episodes = use_filter_successful_and_failed_episodes
         self.use_freq_schedule = use_freq_schedule
+        self.use_freq_calculation = use_freq_calculation
+        self.use_freq_calculation_target_percent = use_freq_calculation_target_percent
         
 
         # refs
@@ -146,6 +150,20 @@ class Rollout:
         if self.use_freq_schedule:
             freq = int(self.freq_scheduler.get_value(globals.STEP))
             globals.log_one_if_exists("rollout/freq", freq)
+        elif self.use_freq_calculation:
+            # function of the rb size
+            n_datapts: int = self.get_rb().n_steps #type:ignore
+            
+            batch_size = globals.CONFIG.batch_size #type:ignore
+            
+            # target % of the dataset to get through during training
+            target_percent = self.use_freq_calculation_target_percent #type:ignore
+            
+            nb_target_samples = target_percent * n_datapts
+            
+            nb_target_batches = int(nb_target_samples / batch_size)
+            
+            freq = max(1, nb_target_batches)
         else:
             freq = self.freq
         

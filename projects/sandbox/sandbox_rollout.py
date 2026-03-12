@@ -69,6 +69,9 @@ class SandboxRollout(Rollout):
     def setup(self):
         super().setup()
         
+        # default value
+        self.difficulty_scale = 0.0
+        
         # assertions
         assert(isinstance(self.env, VecEnv))
         
@@ -93,7 +96,12 @@ class SandboxRollout(Rollout):
         return action_dict
     
     def rollout_prep(self):
+        assert(isinstance(self.env, VecEnv))
         # update the eval class
+        
+        # set options
+        options = {"difficulty_scale": self.difficulty_scale}
+        self.env.set_options(options)
         
         # reset the sim class
         obs = self.env.reset()
@@ -215,11 +223,19 @@ class SandboxRollout(Rollout):
             for info in infos:
             # log difficulty scale
                 if "difficulty_scale" in info:
-                    globals.log_one_if_exists("difficulty_scale", info["difficulty_scale"])
+                    # update difficulty scale using an LPF
+                    self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * info["difficulty_scale"]
+                    
+                    # debug
+                    globals.log_one_if_exists("difficulty_scale_env", info["difficulty_scale"])
+                    
+                    globals.log_one_if_exists("difficulty_scale", self.difficulty_scale)
+                
             
             # early exit
             if done:
                 break
+            
             
         return samples, new_obs, total_reward, env_dones, infos, total_jerk, total_compute_time
     

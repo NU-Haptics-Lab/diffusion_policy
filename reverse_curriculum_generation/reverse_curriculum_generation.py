@@ -20,7 +20,7 @@ from diffusion_policy.common.sarsa_sampler import (
 import avatar_drake_sim.sims.sandbox.sandbox_common as commons
 
 # my globals, kind of like a singleton
-DIFFICULTY_SCALE = 0.0 # 0.0 to 1.0
+# DIFFICULTY_SCALE = 0.0 # 0.0 to 1.0
 SUCCESS_RATE = 0.0
 NB_ATTEMPTS = 0
 
@@ -38,36 +38,32 @@ NB_ATTEMPTS = 0
 #     # save to commons as well
 #     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
     
-def update_difficulty_scale2(outcome):
-    """
-    update the success rate and increase difficulty if s.r. >50%, decrease if s.r. <50%
-    """
-    global SUCCESS_RATE, NB_ATTEMPTS, DIFFICULTY_SCALE
+# def update_difficulty_scale2(outcome):
+#     """
+#     update the success rate and increase difficulty if s.r. >50%, decrease if s.r. <50%
+#     """
+#     global SUCCESS_RATE, NB_ATTEMPTS, DIFFICULTY_SCALE
     
-    delta = 0.005 # 0.5%
+#     delta = 0.005 # 0.5%
 
-    NB_ATTEMPTS += 1
-    SUCCESS_RATE += (outcome - SUCCESS_RATE) / NB_ATTEMPTS # could use the last x attempts instead of all attempts
+#     NB_ATTEMPTS += 1
+#     SUCCESS_RATE += (outcome - SUCCESS_RATE) / NB_ATTEMPTS # could use the last x attempts instead of all attempts
 
-    if SUCCESS_RATE > 0.5:
-        DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
-    else:
-        DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
+#     if SUCCESS_RATE > 0.5:
+#         DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
+#     else:
+#         DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
         
-    # save to commons as well
-    commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
+#     # save to commons as well
+#     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
     
 def update_difficulty_scale3(outcome):
     """
     just use a low pass filter
     """
-    global DIFFICULTY_SCALE
     alpha = 0.01 # smoothing factor
     
-    DIFFICULTY_SCALE = alpha * outcome + (1 - alpha) * DIFFICULTY_SCALE
-    
-    # save to commons as well
-    commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
+    commons.DIFFICULTY_SCALE = alpha * outcome + (1 - alpha) * commons.DIFFICULTY_SCALE
 
 class Node:
     """
@@ -133,8 +129,8 @@ class Node:
         from the continuous global difficulty scale
         """
         # convert difficulty scale to an ep idx
-        ep_idx_floor = np.floor((1.0 - DIFFICULTY_SCALE) * (self.ep_len - 1))
-        ep_idx_ceil = np.ceil((1.0 - DIFFICULTY_SCALE) * (self.ep_len - 1))
+        ep_idx_floor = np.floor((1.0 - commons.DIFFICULTY_SCALE) * (self.ep_len - 1))
+        ep_idx_ceil = np.ceil((1.0 - commons.DIFFICULTY_SCALE) * (self.ep_len - 1))
 
         sample_floor = self.ep.get_obs_sample(int(ep_idx_floor))
         sample_ceil = self.ep.get_obs_sample(int(ep_idx_ceil))
@@ -143,7 +139,7 @@ class Node:
         if ep_idx_floor == ep_idx_ceil:
             return sample_floor
         else:
-            alpha = (1.0 - DIFFICULTY_SCALE) * (self.ep_len - 1) - ep_idx_floor
+            alpha = (1.0 - commons.DIFFICULTY_SCALE) * (self.ep_len - 1) - ep_idx_floor
             sample = {}
             for key in sample_floor:
                 sample[key] = (1 - alpha) * sample_floor[key] + alpha * sample_ceil[key]
@@ -171,7 +167,6 @@ class ReverseCurriculumGeneration:
         self.nodes = [Node(ep) for ep in eps]
         
     def update(self, outcome):
-        global DIFFICULTY_SCALE
         # update it
         # # WON"T WORK WITH VECTOR ENVS
         # if self.current_node is not None:
@@ -196,7 +191,7 @@ class ReverseCurriculumGeneration:
         # update_difficulty_scale3(outcome)
 
         # log the difficulty scale
-        globals.log_one_if_exists("difficulty_scale", DIFFICULTY_SCALE)
+        globals.log_one_if_exists("difficulty_scale", commons.DIFFICULTY_SCALE)
     
     # def get_current_timeout(self):
     #     if self.current_node is not None:
