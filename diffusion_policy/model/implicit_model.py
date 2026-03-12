@@ -233,7 +233,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return self.inference(nobs_dict)
     
     # @torch.no_grad() need grads for lbfgs
-    def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
+    def inference_lbfgs_old(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
         """
@@ -377,7 +377,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
             loss.backward()
             
             # logging
-            losses.append(loss.item())
+            # losses.append(loss.item())
             return loss
         
         # initial losses
@@ -403,6 +403,203 @@ class ImplicitAlgorithm(BaseImagePolicy):
             # final action enforcement (also should be done in get_per_sample_loss)
             trajectory[:, past_actions, :] = naction_prev
             final_losses = get_per_sample_loss()
+            
+            # split by env
+            for i in range(nb_envs):
+                final_losses_env = final_losses[i*nb_proposed_trajectories:(i+1)*nb_proposed_trajectories]
+            
+                # min the loss
+                best_idx = torch.argmin(final_losses_env)
+                
+                # slice so we keep the batch dimension
+                best_traj = trajectory[best_idx:best_idx+1].detach().clone()
+                
+                best_trajs.append(best_traj)
+                
+        # else:
+        #     best_traj = trajectory.detach().clone()
+        
+        # stack if we have >1 envs
+        best_trajs = torch.cat(best_trajs, dim=0)
+            
+        # final optional noise
+        with torch.no_grad():
+            # noise? starting to look more similar to the core DDIM function
+            if self.lbfgs_options.use_add_noise:
+                best_trajs += self.lbfgs_options.noise_mag * self.make_noise(best_trajs)
+        
+        
+        return best_trajs
+    
+
+    def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
+        """
+        use torch L-BFGS
+
+        new version optimized for inference time
+        """
+        self.policy.eval()
+        To = 1
+        value = next(iter(nobs.values()))
+        B = value.shape[0] # batch
+        nb_envs = B
+        T = self.horizon # trajectory length
+        Da = self.policy.action_dim # action dimension
+        device = self.device
+        dtype = self.dtype
+        timestep = 0.0
+        nb_proposed_trajectories = warm_start_trajectory.shape[0] if warm_start_trajectory is not None else 0
+
+        # for now
+        assert(warm_start_trajectory is not None), "Must supply a warm start trajectory for LBFGS inference"
+        
+        # previous action
+        naction_prev = nobs['robot_joint_prev_action']
+
+        # reshape obs: B, T, ... to B*T ...
+        this_nobs = dict_apply(nobs, 
+            lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+
+        # get encoded obs, no grad to save time
+        with torch.no_grad():
+            nobs_features = self.policy.forward_obs_encoder(this_nobs)
+            global_cond = nobs_features.reshape(B, -1)
+            
+        
+        trajectory = warm_start_trajectory.clone().detach().to(device).to(dtype)
+
+        # for debugging
+        # original_trajectory = trajectory.clone().detach()
+        
+            
+        ###################
+        # do necessary tiling in case nb_envs > 1. Tile the global_cond instead of nobs because it'll be much smaller (and an array instead of a dict)
+        if nb_envs > 1:
+            # tile the trajectories
+            trajectory = th.tile(trajectory, (nb_envs, 1, 1))
+            
+            # repeat each global_cond nb_proposed_trajectories times, so that each proposed trajectory gets the same global_cond
+            global_cond = th.repeat_interleave(global_cond, repeats=nb_proposed_trajectories, dim=0)
+            
+            # must also repeat_interleave the prev action
+            naction_prev = th.repeat_interleave(naction_prev, repeats=nb_proposed_trajectories, dim=0)
+            
+            # assert the shapes are correct
+            assert(trajectory.shape[0] == global_cond.shape[0] == naction_prev.shape[0])
+        ###################
+        
+        # trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
+        trajectory.requires_grad_(True)
+        optimizer = torch.optim.LBFGS([trajectory], 
+                                        lr=1.0, # designed to work with unit step size
+                                        max_iter=10, 
+                                        # history_size=3,
+                                        # tolerance_grad=1e-6, 
+                                        # tolerance_change=1e-7,
+                                        line_search_fn="strong_wolfe",
+                                        # line_search_fn=None, # faster than strong wolfe, but uses the fixed step size from lr
+                    )
+        
+        if self.compiled_policy is not None:
+            policy = self.compiled_policy
+        else:
+            policy = self.policy
+        
+        # initial scores for debugging
+        if False:
+            initial_scores = policy(trajectory, timestep, global_cond=global_cond).squeeze()
+        
+        # get past action indices for boundary condition enforcement
+        past_actions = np.where(np.array(self.action_rel_indices) < 0)[0]
+        
+        # not needed. done in closure
+        # if past_actions.shape[0] > 0:
+        #     with torch.no_grad():
+        #         # set the previous action
+        #         trajectory[:, past_actions, :] = naction_prev
+        
+        current_losses = torch.empty(trajectory.shape[0], device=trajectory.device, dtype=trajectory.dtype)
+        def closure():
+            # nonlocals
+            nonlocal trajectory, current_losses
+            
+            optimizer.zero_grad()
+            
+            # setup
+            with torch.no_grad():
+                # noise? starting to look more similar to the core DDIM function
+                if self.lbfgs_options.use_add_noise:
+                    trajectory += self.lbfgs_options.noise_mag * self.make_noise(trajectory)
+                    
+                # enforce past actions
+                trajectory[:, past_actions, :] = naction_prev
+            
+            # run the policy
+            if self.lbfgs_options.use_policy:
+                qval = policy(trajectory, timestep, global_cond=global_cond)
+                qval = qval.squeeze()
+                
+                qval = self.lbfgs_options.policy_weight * qval
+            else:
+                qval = th.tensor(0.0, device=trajectory.device, dtype=trajectory.dtype)
+            
+            penalties = th.tensor(0.0, device=trajectory.device, dtype=trajectory.dtype)
+            # add on a L2 regularization term to prevent massive actions
+            if self.lbfgs_options.use_l2_reg:
+                # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
+                traj_norm_sq = trajectory.square().mean(dim=(1, 2))
+                penalties = penalties + self.lbfgs_options.l2_reg_weight * traj_norm_sq
+                
+            # jerk penalty
+            # ... issue: nactions are normalized? Maybe doesn't matter...
+            if self.lbfgs_options.use_jerk_penalty and self.horizon >= 3:
+                
+                a_diff = th.diff(trajectory, dim=1) # shape (B, T-1, Da)
+                jerk = a_diff / commons.LEARNING_RATE_DT
+                
+                # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
+                jerk_penalty = jerk.square().mean(dim=(1,2))
+                penalties = penalties + self.lbfgs_options.jerk_weight * jerk_penalty
+            
+            if self.lbfgs_options.divide_by_nb_of_penalties:
+                nb_penalties = self.lbfgs_options.get_nb_penalties()
+                if nb_penalties > 0:
+                    penalties = penalties / nb_penalties
+                
+                
+            per_sample_loss = -qval + penalties       
+            current_losses = per_sample_loss.detach().clone()     
+            
+            loss = per_sample_loss.mean()
+            loss.backward()
+            
+            # logging
+            # losses.append(loss.item())
+            return loss
+        
+        # # initial losses -- debugging
+        # with torch.no_grad():
+        #     initial_losses = get_per_sample_loss()
+                 
+        # speed up .backward() by not calculating gradients for the policy parameters
+        self.policy.requires_grad_(False)
+        # just to make sure
+        with torch.enable_grad():
+            # only need to call step once    
+            optimizer.step(closure) #type:ignore
+        # restore grad for policy parameters
+        self.policy.requires_grad_(True)
+
+        self.policy.train()
+        
+
+        # 5. Find the highest scoring trajectory
+        # if trajectory.shape[0] > 0:
+        best_trajs = []
+        with torch.no_grad():
+            # final action enforcement (also should be done in get_per_sample_loss)
+            trajectory[:, past_actions, :] = naction_prev
+            final_losses = current_losses # is actually one step behind, but it'll be faster this way
             
             # split by env
             for i in range(nb_envs):
@@ -708,6 +905,9 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         ### using GPU actions
         if True:
             self.load_gpu_actions()
+
+        # pre-tile actions?
+
             
     def load_gpu_actions(self):
         """
