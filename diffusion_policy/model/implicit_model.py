@@ -296,10 +296,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
         optimizer = torch.optim.LBFGS([trajectory], 
                                         lr=1.0, # designed to work with unit step size
                                         max_iter=10, 
-                                        # history_size=3,
+                                        history_size=3,
                                         # tolerance_grad=1e-6, 
                                         # tolerance_change=1e-7,
-                                        # line_search_fn="strong_wolfe",
+                                        line_search_fn="strong_wolfe",
                                         # line_search_fn=None, # faster than strong wolfe, but uses the fixed step size from lr
                     )
         
@@ -417,7 +417,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
             
             # split by env
             for i in range(nb_envs):
-                final_losses_env = final_losses[i*nb_proposed_trajectories:(i+1)*nb_proposed_trajectories]
+                final_losses_env = final_losses[i*nb_proposed_trajectories_per_env:(i+1)*nb_proposed_trajectories_per_env]
             
                 # min the loss
                 best_idx = torch.argmin(final_losses_env)
@@ -934,9 +934,9 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         # pre-tile actions?
         actions = self.get_gpu_actions_batch()
         
-        actions_tiled = th.tile(actions, (commons.NB_PARALLEL_ENVS, 1, 1))
+        # actions_tiled = th.tile(actions, (commons.NB_PARALLEL_ENVS, 1, 1))
             
-        self.warm_start_trajectories = actions_tiled
+        self.warm_start_trajectories = actions
 
             
     def load_gpu_actions(self):
@@ -973,7 +973,7 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
 
         return super().inference_batch_gd(nobs, warm_start_trajectory=actions)
     
-    def inference_lbfgs(self, nobs: dict, warm_start_trajectory=None):
+    def inference_lbfgs2(self, nobs: dict, warm_start_trajectory=None):
         """
         need to use a batch loader to deal with norming correctly
         """
@@ -982,14 +982,14 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
             
         return super().inference_lbfgs(nobs, warm_start_trajectory=self.warm_start_trajectories)
     
-    def inference_lbfgs2(self, nobs: dict, warm_start_trajectory=None):
+    def inference_lbfgs(self, nobs: dict, warm_start_trajectory=None):
         """
         this version samples 10 random initial actions per env
         """
         actions = self.warm_start_trajectories
         nb_envs = commons.NB_PARALLEL_ENVS
 
-        nb_per_env = 10
+        nb_per_env = 100
 
         # get random actions from actions
         random_actions = []
