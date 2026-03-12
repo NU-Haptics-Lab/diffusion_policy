@@ -200,7 +200,10 @@ class SimpleInference:
         self.policy.noise_scheduler = self.noise_scheduler
         
         # run inference
+        tic = utils.tic()
         action, all_actions = self.RunInference(obs_dict_np)
+        toc = utils.toc(tic)
+        globals.log_one_if_exists("profiling/SimpleInference.RunInference", toc)
         
         # put the original back in for training
         assert(self.original_policy_noise_scheduler is not None)

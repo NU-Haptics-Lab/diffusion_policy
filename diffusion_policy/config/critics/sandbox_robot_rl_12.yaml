@@ -260,7 +260,7 @@ session_trainer:
 
         # parallel envs?
         sandbox_commons_options:
-          NB_PARALLEL_ENVS: 12
+          NB_PARALLEL_ENVS: 2
           use_dataset_state_initialization: true # we want to
         drake_env_globals_config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/drake/sandbox_robot_rl_12.yaml
 

@@ -113,6 +113,7 @@ class SandboxRollout(Rollout):
             # get the action trajectory
             actions, best_qval, failed = self.infer_action() 
             toc = utils.toc(tic)
+            globals.log_one_if_exists("profiling/SandboxRollout.infer_action", toc)
             total_inference_time += toc
             
             if failed:
@@ -200,6 +201,7 @@ class SandboxRollout(Rollout):
             total_reward[not_done] += rewards[not_done]
             
             toc = utils.toc(tic)
+            globals.log_one_if_exists("profiling/SandboxRollout.step_trajectory", toc)
             total_compute_time += toc
             if done:
                 break

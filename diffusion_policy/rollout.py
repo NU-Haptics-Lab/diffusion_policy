@@ -215,6 +215,7 @@ class Rollout:
             #     avg_ttc = ttc / successes
             #     globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
             toc = utils.toc(tic)
+            globals.log_one_if_exists("profiling/Rollout.run_rollouts", toc)
             print("Rollout time: {:.2f} seconds".format(toc))
             print("Total env compute time: {:.2f} seconds".format(total_env_time))
             print("Total inference compute time: {:.2f} seconds".format(total_inference_time))

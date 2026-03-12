@@ -233,7 +233,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return self.inference(nobs_dict)
     
     # @torch.no_grad() need grads for lbfgs
-    def inference_lbfgs_old(self, nobs: dict, warm_start_trajectory = None):
+    def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
         """
@@ -298,7 +298,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
                                         # history_size=3,
                                         # tolerance_grad=1e-6, 
                                         # tolerance_change=1e-7,
-                                        line_search_fn="strong_wolfe",
+                                        # line_search_fn="strong_wolfe",
                                         # line_search_fn=None, # faster than strong wolfe, but uses the fixed step size from lr
                     )
         
@@ -317,55 +317,65 @@ class ImplicitAlgorithm(BaseImagePolicy):
             with torch.no_grad():
                 # set the previous action
                 trajectory[:, past_actions, :] = naction_prev
+                
+        # set stuff up for fast closure
+        jerk_weight = self.lbfgs_options.jerk_weight * self.lbfgs_options.use_jerk_penalty
+        policy_weight = self.lbfgs_options.policy_weight * self.lbfgs_options.use_policy
+        l2_weight = self.lbfgs_options.l2_reg_weight * self.lbfgs_options.use_l2_reg
+        noise_weight = self.lbfgs_options.noise_mag * self.lbfgs_options.use_add_noise
+        divisor = self.lbfgs_options.get_nb_penalties() if self.lbfgs_options.divide_by_nb_of_penalties else 1.0
         
-        losses = []
+        # make the past action mask
+        mask = torch.ones_like(trajectory)
+        mask[:, past_actions, :] = 0.0
+        # Pre-aligned fixed actions
+        fixed_contribution = naction_prev * (1.0 - mask)
+        
+        # move to device
+        jerk_weight = torch.tensor(jerk_weight, device=device, dtype=dtype)
+        policy_weight = torch.tensor(policy_weight, device=device, dtype=dtype)
+        l2_weight = torch.tensor(l2_weight, device=device, dtype=dtype)
+        noise_weight = torch.tensor(noise_weight, device=device, dtype=dtype)
+        divisor = torch.tensor(divisor, device=device, dtype=dtype)
+        
+        # losses = []
         def get_per_sample_loss():
             # nonlocals
-            nonlocal trajectory, losses
+            nonlocal trajectory
             
             optimizer.zero_grad()
             
             # setup
             with torch.no_grad():
                 # noise? starting to look more similar to the core DDIM function
-                if self.lbfgs_options.use_add_noise:
-                    trajectory += self.lbfgs_options.noise_mag * self.make_noise(trajectory)
+                trajectory += noise_weight * self.make_noise(trajectory)
                     
                 # enforce past actions
-                trajectory[:, past_actions, :] = naction_prev
+                trajectory.data.copy_(trajectory.data * mask + fixed_contribution)
             
             # run the policy
-            if self.lbfgs_options.use_policy:
-                qval = policy(trajectory, timestep, global_cond=global_cond)
-                qval = qval.squeeze()
-                
-                qval = self.lbfgs_options.policy_weight * qval
-            else:
-                qval = th.tensor(0.0, device=trajectory.device, dtype=trajectory.dtype)
+            qval = policy(trajectory, timestep, global_cond=global_cond)
+            qval = qval.squeeze()
             
-            penalties = th.tensor(0.0, device=trajectory.device, dtype=trajectory.dtype)
+            qval = policy_weight * qval
+            
             # add on a L2 regularization term to prevent massive actions
-            if self.lbfgs_options.use_l2_reg:
-                # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
-                traj_norm_sq = trajectory.square().mean(dim=(1, 2))
-                penalties = penalties + self.lbfgs_options.l2_reg_weight * traj_norm_sq
+            # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
+            traj_norm_sq = trajectory.square().mean(dim=(1, 2))
                 
             # jerk penalty
             # ... issue: nactions are normalized? Maybe doesn't matter...
-            if self.lbfgs_options.use_jerk_penalty and self.horizon >= 3:
-                
-                a_diff = th.diff(trajectory, dim=1) # shape (B, T-1, Da)
-                jerk = a_diff / commons.LEARNING_RATE_DT
-                
-                # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
-                jerk_penalty = jerk.square().mean(dim=(1,2))
-                penalties = penalties + self.lbfgs_options.jerk_weight * jerk_penalty
+            a_diff = th.diff(trajectory, dim=1) # shape (B, T-1, Da)
+            jerk = a_diff / commons.LEARNING_RATE_DT
             
-            if self.lbfgs_options.divide_by_nb_of_penalties:
-                nb_penalties = self.lbfgs_options.get_nb_penalties()
-                if nb_penalties > 0:
-                    penalties = penalties / nb_penalties
-                
+            # mean it over the trajectory dimension and the action dimension BUT NOT THE BATCH DIMENSION
+            jerk_penalty = jerk.square().mean(dim=(1,2))
+            
+            # sum the penalties
+            penalties = l2_weight * traj_norm_sq + jerk_weight * jerk_penalty
+            
+            # divide them
+            penalties = penalties / divisor
                 
             loss = -qval + penalties
             return loss
@@ -432,12 +442,17 @@ class ImplicitAlgorithm(BaseImagePolicy):
         return best_trajs
     
 
-    def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
+    def inference_lbfgs2(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
 
         new version optimized for inference time
         """
+        # PROFILING
+        if True:
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+        ###
         self.policy.eval()
         To = 1
         value = next(iter(nobs.values()))
@@ -449,6 +464,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         dtype = self.dtype
         timestep = 0.0
         nb_proposed_trajectories = warm_start_trajectory.shape[0] if warm_start_trajectory is not None else 0
+        nb_proposed_trajectories = int(nb_proposed_trajectories / commons.NB_PARALLEL_ENVS)
 
         # for now
         assert(warm_start_trajectory is not None), "Must supply a warm start trajectory for LBFGS inference"
@@ -475,8 +491,8 @@ class ImplicitAlgorithm(BaseImagePolicy):
         ###################
         # do necessary tiling in case nb_envs > 1. Tile the global_cond instead of nobs because it'll be much smaller (and an array instead of a dict)
         if nb_envs > 1:
-            # tile the trajectories
-            trajectory = th.tile(trajectory, (nb_envs, 1, 1))
+            # tile the trajectories -- already done in the parent function
+            # trajectory = th.tile(trajectory, (nb_envs, 1, 1))
             
             # repeat each global_cond nb_proposed_trajectories times, so that each proposed trajectory gets the same global_cond
             global_cond = th.repeat_interleave(global_cond, repeats=nb_proposed_trajectories, dim=0)
@@ -492,7 +508,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
         trajectory.requires_grad_(True)
         optimizer = torch.optim.LBFGS([trajectory], 
                                         lr=1.0, # designed to work with unit step size
-                                        max_iter=10, 
+                                        max_iter=1, 
                                         # history_size=3,
                                         # tolerance_grad=1e-6, 
                                         # tolerance_change=1e-7,
@@ -585,9 +601,17 @@ class ImplicitAlgorithm(BaseImagePolicy):
         self.policy.requires_grad_(False)
         # just to make sure
         with torch.enable_grad():
-            # only need to call step once    
+            # only need to call step once 
+            if True: 
+                start_event.record()  
+                
             optimizer.step(closure) #type:ignore
         # restore grad for policy parameters
+            if True:
+                end_event.record()
+                torch.cuda.synchronize()
+                elapsed_time_ms = start_event.elapsed_time(end_event)
+                globals.log_one_if_exists("profiling/LBFGS_closure_time_ms", elapsed_time_ms)
         self.policy.requires_grad_(True)
 
         self.policy.train()
@@ -907,6 +931,11 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
             self.load_gpu_actions()
 
         # pre-tile actions?
+        actions = self.get_gpu_actions_batch()
+        
+        actions_tiled = th.tile(actions, (commons.NB_PARALLEL_ENVS, 1, 1))
+            
+        self.warm_start_trajectories = actions_tiled
 
             
     def load_gpu_actions(self):
@@ -947,7 +976,7 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         """
         need to use a batch loader to deal with norming correctly
         """
-        if True:
+        if False:
             actions = self.get_gpu_actions_batch()
             
-        return super().inference_lbfgs(nobs, warm_start_trajectory=actions)
+        return super().inference_lbfgs(nobs, warm_start_trajectory=self.warm_start_trajectories)
