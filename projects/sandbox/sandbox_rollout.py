@@ -104,11 +104,16 @@ class SandboxRollout(Rollout):
         best_qvals = []
         total_jerk = 0.0
         env_dones = np.zeros(commons.NB_PARALLEL_ENVS, dtype=bool)
+        total_env_time = 0.0
+        total_inference_time = 0.0
         
         done = False
         while not done:
+            tic = utils.tic()
             # get the action trajectory
             actions, best_qval, failed = self.infer_action() 
+            toc = utils.toc(tic)
+            total_inference_time += toc
             
             if failed:
                 print("No valid action. Episode failure.")
@@ -122,7 +127,7 @@ class SandboxRollout(Rollout):
                 best_qvals.append(best_qval)
                 
                 # execute the full trajectory
-                new_samples, new_obs, rewards, dones, infos, jerk = self.step_trajectory(actions)
+                new_samples, new_obs, rewards, dones, infos, jerk, env_time = self.step_trajectory(actions)
                 
                 # append all new samples
                 samples += new_samples
@@ -136,6 +141,7 @@ class SandboxRollout(Rollout):
                 not_done = ~env_dones
                 total_reward[not_done] += rewards[not_done]
                 total_jerk += jerk
+                total_env_time += env_time
                 
                 # if dones:
                 #     done = True
@@ -147,7 +153,7 @@ class SandboxRollout(Rollout):
         if len(samples) > 0:
             total_jerk /= len(samples)
             
-        return samples, total_reward, best_qvals, total_jerk
+        return samples, total_reward, best_qvals, total_jerk, total_env_time, total_inference_time
 
 # immediate next steps:
     # collect larger mage hand demo dataset
@@ -167,9 +173,11 @@ class SandboxRollout(Rollout):
         
         
         total_jerk = 0.0
+        total_compute_time = 0.0
         
         m = min(H, self.rollout_num_actions)
         for i in range(m):
+            tic = utils.tic()
             action = actions[:, i, :]
             
             # convert action for Drake
@@ -191,10 +199,12 @@ class SandboxRollout(Rollout):
             not_done = ~env_dones
             total_reward[not_done] += rewards[not_done]
             
+            toc = utils.toc(tic)
+            total_compute_time += toc
             if done:
                 break
             
-        return samples, new_obs, total_reward, env_dones, infos, total_jerk
+        return samples, new_obs, total_reward, env_dones, infos, total_jerk, total_compute_time
     
     def save_samples(self, actions, rewards, env_dones, samples):
         """
