@@ -159,6 +159,8 @@ class Rollout:
             avg_jerk = 0.0
             ttc = 0.0
             tic = utils.tic()
+            total_env_time = 0.0
+            total_inference_time = 0.0
             
             # rollout n times per trigger
             for n in range(self.num_rollouts_per_trigger):
@@ -166,7 +168,9 @@ class Rollout:
                 self.rollout_prep()
             
                 # one rollout
-                samples, reward, best_qvals, jerk = self.one_rollout()
+                samples, reward, best_qvals, jerk, env_time, inference_time = self.one_rollout()
+                total_env_time += env_time
+                total_inference_time += inference_time
                 
                 successful = np.mean(reward > 0.0)
                 
@@ -212,6 +216,8 @@ class Rollout:
             #     globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
             toc = utils.toc(tic)
             print("Rollout time: {:.2f} seconds".format(toc))
+            print("Total env compute time: {:.2f} seconds".format(total_env_time))
+            print("Total inference compute time: {:.2f} seconds".format(total_inference_time))
                 
     def rollout_prep(self):
         # update the eval class
@@ -251,9 +257,11 @@ class Rollout:
         state = self.state
         
         total_jerk = 0.0
+        total_compute_time = 0.0
         
         m = min(len(actions), self.rollout_num_actions)
         for i in range(m):
+            tic = utils.tic()
             action = actions[i]
             
             # get jerk
@@ -275,10 +283,12 @@ class Rollout:
             
             total_reward += float(rewards)
             
+            toc = utils.toc(tic)
+            total_compute_time += toc
             if done:
                 break
             
-        return samples, new_obs, total_reward, done, infos, total_jerk
+        return samples, new_obs, total_reward, done, infos, total_jerk, total_compute_time
     
     def eval_actions(self, actionss):
         # get the state
@@ -428,11 +438,16 @@ class Rollout:
         total_reward = 0.0
         best_qvals = []
         total_jerk = 0.0
+        total_env_time = 0.0
+        total_inference_time = 0.0
         
         done = False
         while not done:
+            tic = utils.tic()
             # get the action trajectory
             actions, best_qval, failed = self.infer_action() 
+            toc = utils.toc(tic)
+            total_inference_time += toc
             
             if failed:
                 print("No valid action. Episode failure.")
@@ -446,7 +461,7 @@ class Rollout:
                 best_qvals.append(best_qval)
                 
                 # execute the full trajectory
-                new_samples, new_obs, rewards, dones, infos, jerk = self.step_trajectory(actions)
+                new_samples, new_obs, rewards, dones, infos, jerk, env_time = self.step_trajectory(actions)
                 
                 # append all new samples
                 samples += new_samples
@@ -469,12 +484,13 @@ class Rollout:
                 # logging
                 total_reward += rewards
                 total_jerk += jerk
+                total_env_time += env_time
                 
         # normalize jerk by episode length
         if len(samples) > 0:
             total_jerk /= len(samples)
             
-        return samples, total_reward, best_qvals, total_jerk
+        return samples, total_reward, best_qvals, total_jerk, total_env_time, total_inference_time
     
     def save_samples(self, actions, rewards, samples):
         # save the sample using the old obs, current action, current reward
