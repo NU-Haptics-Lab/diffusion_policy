@@ -135,7 +135,7 @@ class Rollout:
                 
         if self.use_freq_schedule:
             # xa, ya, xb, yb
-            self.freq_scheduler = SimpleLinearScheduler(0.0, 10.0, 25000.0, 100.0)
+            self.freq_scheduler = SimpleLinearScheduler(0.0, 10.0, 25000.0, 50.0)
 
     def run_rollouts(self):
         self.run()
@@ -158,6 +158,7 @@ class Rollout:
             avg_best_qval = 0.0
             avg_jerk = 0.0
             ttc = 0.0
+            tic = utils.tic()
             
             # rollout n times per trigger
             for n in range(self.num_rollouts_per_trigger):
@@ -167,7 +168,7 @@ class Rollout:
                 # one rollout
                 samples, reward, best_qvals, jerk = self.one_rollout()
                 
-                successful = reward > 0.0
+                successful = np.mean(reward > 0.0)
                 
                 save = False
                 if self.save_rollouts:
@@ -186,11 +187,16 @@ class Rollout:
                 avg_jerk += np.array(jerk).mean()
                 
                 # success?
-                if successful:
-                    successes += 1
+                if successful > 0.0:
+                    successes += successful
                     
                     # add on episode length
                     ttc += len(samples)
+                    
+            # must average over all envs
+            total_reward = np.mean(total_reward)
+            avg_best_qval = np.mean(avg_best_qval)
+            successes = np.mean(successes)
             
             # logging
             globals.LOGGER.log_one("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
@@ -201,9 +207,11 @@ class Rollout:
             # length of rb so we can correlate nb eps to SR
             globals.LOGGER.log_one("rollout/rb_nb_episodes", self.get_rb().n_episodes)
             
-            if successes > 0:
-                avg_ttc = ttc / successes
-                globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
+            # if successes > 0:
+            #     avg_ttc = ttc / successes
+            #     globals.LOGGER.log_one("rollout/avg_ttc", avg_ttc)
+            toc = utils.toc(tic)
+            print("Rollout time: {:.2f} seconds".format(toc))
                 
     def rollout_prep(self):
         # update the eval class
@@ -406,8 +414,8 @@ class Rollout:
     def prep_action_for_stepping(self, actions):
         # none protection
         if actions is not None:
-            # remove batch dim
-            actions = actions[0]
+            # remove batch dim, actually no. VecEnv's
+            # actions = actions[0]
             assert(isinstance(actions, np.ndarray)) # should already be
             # actions = actions.numpy()
         return actions
@@ -416,7 +424,7 @@ class Rollout:
         """
         Run one rollout
         """
-        samples = []
+        samples: list[dict] = []
         total_reward = 0.0
         best_qvals = []
         total_jerk = 0.0
@@ -608,10 +616,17 @@ class Rollout:
         assert(isinstance(rb, ReplayBuffer))
         # use the replay buffer to write to disk
         rb.add_episode(data_dict, compressors='disk')
+        
+    def save_envs_episode_to_rb(self, episode: list[dict], rb):
+        return self.save_episode_to_rb(episode, rb)
             
     def save_episode(self, episode, successful=None):
         ep_len = len(episode)
         if ep_len > 0:
+            
+            successful = None
+            assert(successful is None) # not supported yet, with vecenv's
+            
             if successful is None:
                 rb = self.get_rb()
                 rb_id = self.rb_id
@@ -632,7 +647,7 @@ class Rollout:
                 rb = self.get_rb()
                 rb_id = self.rb_id
                 
-            self.save_episode_to_rb(episode, rb)
+            self.save_envs_episode_to_rb(episode, rb)
             
             # must re-index the sampler. reindex.
             sampler: TrainAndVal = globals.DATALOADERS[rb_id]

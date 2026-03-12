@@ -156,6 +156,8 @@ class ReverseCurriculumGeneration:
         # my members
         self.nodes = []
         self.current_node: Node | None = None
+        self.total_attempts = 0
+        self.total_successes = 0
         
     def setup(self):
         # # rb handle
@@ -166,13 +168,25 @@ class ReverseCurriculumGeneration:
         self.nodes = [Node(ep) for ep in eps]
         
     def update(self, outcome):
+        global DIFFICULTY_SCALE
         # update it
         # # WON"T WORK WITH VECTOR ENVS
         # if self.current_node is not None:
         #     self.current_node.update(outcome)
+        
+        # won't work with vector env, will ahve to make a discrete state
+        self.total_attempts += 1
+        self.total_successes += outcome
+        
+        # just do it here
+        sr = self.total_successes / self.total_attempts
+        if sr > 0.5:
+            update_difficulty_scale3(1.0)
+        else:
+            update_difficulty_scale3(0.0)
 
         # update global
-        update_difficulty_scale3(outcome)
+        # update_difficulty_scale3(outcome)
 
         # log the difficulty scale
         if globals.LOGGER is not None:

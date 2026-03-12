@@ -193,12 +193,17 @@ class DataArray:
                  normalizer: SingleFieldLinearNormalizer,
                  descriptor = "",
                  strict: bool = True,
-                 clamp = True, # UNUSED whether to clamp the normalized values to [-1, 1]
+                #  clamp = True, # UNUSED whether to clamp the normalized values to [-1, 1]
                  ):
         self.normalizer = normalizer
         self.descriptor = descriptor
         self.strict = strict
         self.clamp = globals.CONFIG.clamp # type:ignore
+        
+        if self.clamp:
+            self.clamp_value = globals.CONFIG.clamp_value #type:ignore
+        else:
+            self.clamp_value = None
         
         # transfer to device, since I own normalizer
         # if hasattr(globals.CONFIG, "device"):
@@ -234,7 +239,7 @@ class DataArray:
         self.datapoint = self.normalizer.normalize(self.datapoint)
         
         if self.clamp:
-            self.datapoint = torch.clamp(self.datapoint, -1.0, 1.0)
+            self.datapoint = torch.clamp(self.datapoint, -self.clamp_value, self.clamp_value)
             
             pass
             
@@ -250,7 +255,7 @@ class DataArray:
         
         # must clamp the normalized datapoint first
         if self.clamp:
-            self.datapoint = torch.clamp(self.datapoint, -1.0, 1.0)
+            self.datapoint = torch.clamp(self.datapoint, -self.clamp_value, self.clamp_value)
             
             pass
 
@@ -311,7 +316,7 @@ class NestedDataArray:
         for key, val in nested_normalizers.items():
             # leaf
             if isinstance(val, SingleFieldLinearNormalizer):
-                da = DataArray(val, descriptor=key, strict=self.strict, clamp=val.clamp)
+                da = DataArray(val, descriptor=key, strict=self.strict)
                 self.nest[key] = da
 
             # another branch

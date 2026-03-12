@@ -241,11 +241,13 @@ class ImplicitAlgorithm(BaseImagePolicy):
         To = 1
         value = next(iter(nobs.values()))
         B = value.shape[0] # batch
+        nb_envs = B
         T = self.horizon # trajectory length
         Da = self.policy.action_dim # action dimension
         device = self.device
         dtype = self.dtype
         timestep = 0.0
+        nb_proposed_trajectories = warm_start_trajectory.shape[0] if warm_start_trajectory is not None else 0
         
         # previous action
         naction_prev = nobs['robot_joint_prev_action']
@@ -258,9 +260,9 @@ class ImplicitAlgorithm(BaseImagePolicy):
         with torch.no_grad():
             nobs_features = self.policy.forward_obs_encoder(this_nobs)
             global_cond = nobs_features.reshape(B, -1)
-
         # dummy trajectory
         if warm_start_trajectory is None:
+            raise NotImplementedError("unsupported with vecenv's")
             dummy_trajectory = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
 
             # randomly initialize a traj
@@ -269,8 +271,24 @@ class ImplicitAlgorithm(BaseImagePolicy):
             trajectory = warm_start_trajectory.clone().detach().to(device).to(dtype)
 
         # for debugging
-        original_trajectory = trajectory.clone().detach()
+        # original_trajectory = trajectory.clone().detach()
         
+            
+        ###################
+        # do necessary tiling in case nb_envs > 1. Tile the global_cond instead of nobs because it'll be much smaller (and an array instead of a dict)
+        if nb_envs > 1:
+            # tile the trajectories
+            trajectory = th.tile(trajectory, (nb_envs, 1, 1))
+            
+            # repeat each global_cond nb_proposed_trajectories times, so that each proposed trajectory gets the same global_cond
+            global_cond = th.repeat_interleave(global_cond, repeats=nb_proposed_trajectories, dim=0)
+            
+            # must also repeat_interleave the prev action
+            naction_prev = th.repeat_interleave(naction_prev, repeats=nb_proposed_trajectories, dim=0)
+            
+            # assert the shapes are correct
+            assert(trajectory.shape[0] == global_cond.shape[0] == naction_prev.shape[0])
+        ###################
         
         # trajectory = torch.zeros((B, T, Da), device=device, requires_grad=True)
         trajectory.requires_grad_(True)
@@ -290,7 +308,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
             policy = self.policy
         
         # initial scores for debugging
-        initial_scores = policy(original_trajectory, timestep, global_cond=global_cond).squeeze()
+        initial_scores = policy(trajectory, timestep, global_cond=global_cond).squeeze()
         
         # get past action indices for boundary condition enforcement
         past_actions = np.where(np.array(self.action_rel_indices) < 0)[0]
@@ -379,29 +397,72 @@ class ImplicitAlgorithm(BaseImagePolicy):
         
 
         # 5. Find the highest scoring trajectory
-        if trajectory.shape[0] > 0:
-            with torch.no_grad():
-                # final action enforcement (also should be done in get_per_sample_loss)
-                trajectory[:, past_actions, :] = naction_prev
-                final_losses = get_per_sample_loss()
-                
+        # if trajectory.shape[0] > 0:
+        best_trajs = []
+        with torch.no_grad():
+            # final action enforcement (also should be done in get_per_sample_loss)
+            trajectory[:, past_actions, :] = naction_prev
+            final_losses = get_per_sample_loss()
+            
+            # split by env
+            for i in range(nb_envs):
+                final_losses_env = final_losses[i*nb_proposed_trajectories:(i+1)*nb_proposed_trajectories]
+            
                 # min the loss
-                best_idx = torch.argmin(final_losses)
+                best_idx = torch.argmin(final_losses_env)
                 
                 # slice so we keep the batch dimension
                 best_traj = trajectory[best_idx:best_idx+1].detach().clone()
                 
-        else:
-            best_traj = trajectory.detach().clone()
+                best_trajs.append(best_traj)
+                
+        # else:
+        #     best_traj = trajectory.detach().clone()
+        
+        # stack if we have >1 envs
+        best_trajs = torch.cat(best_trajs, dim=0)
             
         # final optional noise
         with torch.no_grad():
             # noise? starting to look more similar to the core DDIM function
             if self.lbfgs_options.use_add_noise:
-                best_traj += self.lbfgs_options.noise_mag * self.make_noise(best_traj)
+                best_trajs += self.lbfgs_options.noise_mag * self.make_noise(best_trajs)
         
         
-        return best_traj
+        return best_trajs
+    
+    # def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
+    #     """
+    #     wrapper in case the nb of envs is >1. For training this would be the batch number, for inference it's the number of parallel envs
+    #     """
+    #     nb_envs = next(iter(nobs.values())).shape[0]
+        
+    #     return self.single_obs_inference_lbfgs(nobs, warm_start_trajectory)
+        
+        # simple call if nb_envs == 1
+        # # if nb_envs == 1:
+        #     return self.single_obs_inference_lbfgs(nobs, warm_start_trajectory)
+        
+        # won't work with lbfgs in its current state
+        # else:
+        #     # make our fcn
+        #     def single_obs_inference_lbfgs_wrapper(nobs_single):
+        #         nobs_single = dict_apply(nobs_single, lambda x: x.unsqueeze(0))
+                
+        #         best_traj_single = self.single_obs_inference_lbfgs(nobs_single, warm_start_trajectory)
+                
+        #         return best_traj_single.squeeze(0)
+            
+        #     # use vmap
+        #     vectorized_lbfgs_fcn = torch.vmap(single_obs_inference_lbfgs_wrapper, in_dims=(0,))
+            
+        #     # call it
+        #     best_trajs = vectorized_lbfgs_fcn(nobs)
+            
+        #     # we're done
+        #     return best_trajs
+            
+        
     
     def make_vmap_grad_batch_traj(self):
         def single_trajectory_loss(traj, global_cond):

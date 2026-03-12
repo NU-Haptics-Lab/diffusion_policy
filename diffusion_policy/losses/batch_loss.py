@@ -914,7 +914,8 @@ class CriticOnlyBatchLoss(BatchLoss):
         critic_loss = self.critic.loss(nbatch, self.rb_id)
         
         # remove outlier losses... use carefully
-        critic_loss2 = self.remove_outliers(critic_loss)
+        # critic_loss2 = self.remove_outliers(critic_loss)
+        critic_loss2 = critic_loss
         
         critic_loss3 = critic_loss2.mean()
         

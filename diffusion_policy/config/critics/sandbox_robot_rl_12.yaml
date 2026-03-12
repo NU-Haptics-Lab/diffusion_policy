@@ -18,7 +18,7 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 doing_bc: false
 
@@ -62,7 +62,8 @@ action_relative_to_state: false
 use_denoise: false
 ### End Global Control Panel ###
 
-clamp: false # clamp actions (and diffusion noise)
+clamp: True # clamp actions (and diffusion noise) to some range. Useful for SIM data, which might have insane outliers
+clamp_value: 10.0 # this is normalized, remember
 
 
 # rollouts?
@@ -253,8 +254,16 @@ session_trainer:
       use_ema_model: false
       use_freq_schedule: true
 
+
       env_maker:
         _target_: projects.sandbox.sandbox_rollout.SandboxRLRolloutEnv
+
+        # parallel envs?
+        sandbox_commons_options:
+          NB_PARALLEL_ENVS: 12
+          use_dataset_state_initialization: true # we want to
+        drake_env_globals_config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/drake/sandbox_robot_rl_12.yaml
+
 
       evaluator:
         _target_: diffusion_policy.evaluation.eval.SimpleInference
@@ -321,7 +330,7 @@ common_dataset:
 
     ep_sampler_class_str: diffusion_policy.samplers.sandbox_robot_rl_sampler.SandboxRobotRLEpisodeSampler
 
-    use_cap_rewards: false # don't want to because then the policy has no gradient in the beginning of randomized training
+    use_cap_rewards: true # hmm, yes for now, I think the dataset has some outliers in it.
     reward_cap: 10.0 # just so the q-vals don't totally blow up
 
 ###########################################################################
@@ -451,7 +460,7 @@ models:
               use_policy: true # debugging
 
               l2_reg_weight: 0.0 # good value: 1.0
-              jerk_weight: 1.0 # good value ... 1.0?
+              jerk_weight: 0.5 # good value ... 1.0?
               noise_mag: 0.01
               policy_weight: 1.0
 

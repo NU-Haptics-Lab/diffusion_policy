@@ -11,6 +11,14 @@ from omegaconf import (
     DictConfig,
 )
 
+import time
+
+def tic():
+    return time.time()
+
+def toc(tic):
+    return time.time() - tic
+
 def EveryEpoch(every: int):
     yes = (globals.EPOCH % every) == 0
     return yes

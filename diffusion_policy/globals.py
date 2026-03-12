@@ -10,7 +10,6 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.replay_buffer_loader import ReplayBufferLoader
 from diffusion_policy.model.models import Models
 from diffusion_policy.common.checkpointer import TopKCheckpointManager
@@ -233,6 +232,7 @@ def load_global_config_from_path(cfg_path, cfg_key):
     cfg = OmegaConf.load(cfg_path)
     load_global_config(cfg, cfg_key) #type:ignore
     
+# alias
 def load_global_config_from_path_and_save_to_globals_dict(cfg_path, cfg_key):    
     load_global_config_from_path(cfg_path, cfg_key)
     
@@ -262,6 +262,11 @@ def load_config_to_global(config_key):
     SESSION_TRAINER          = global_config.SESSION_TRAINER
     
     pass
+    
+def load_config_direct_to_global(config):
+    # this is for when we don't want to save to the GLOBALS_DICT, but just want to load a config directly to the global vars
+    load_global_config(config, "direct_load")
+    load_config_to_global("direct_load")
     
 @contextmanager
 def use_config(cfg_key):
@@ -295,3 +300,27 @@ def save_current_config_to_globals(cfg_key):
 def log_one_if_exists(label, datapoint):
     if LOGGER is not None:
         LOGGER.log_one(label, datapoint)
+        
+def get_current_globals():
+    return {
+        "CONFIG": CONFIG,
+        "REPLAY_BUFFER_LOADER": REPLAY_BUFFER_LOADER,
+        "DATALOADERS": DATALOADERS,
+        "LOGGER": LOGGER,
+        "CHECKPOINTER": CHECKPOINTER,
+        "DEFAULT_BATCH_LOADER": DEFAULT_BATCH_LOADER,
+        "MODELS": MODELS,
+        "SESSION_TRAINER": SESSION_TRAINER,
+    }
+    
+def set_current_globals(globals_dict: dict):
+    global CONFIG, REPLAY_BUFFER_LOADER, DATALOADERS, LOGGER, CHECKPOINTER, DEFAULT_BATCH_LOADER, MODELS, SESSION_TRAINER
+    
+    CONFIG = globals_dict["CONFIG"]
+    REPLAY_BUFFER_LOADER = globals_dict["REPLAY_BUFFER_LOADER"]
+    DATALOADERS = globals_dict["DATALOADERS"]
+    LOGGER = globals_dict["LOGGER"]
+    CHECKPOINTER = globals_dict["CHECKPOINTER"]
+    DEFAULT_BATCH_LOADER = globals_dict["DEFAULT_BATCH_LOADER"]
+    MODELS = globals_dict["MODELS"]
+    SESSION_TRAINER = globals_dict["SESSION_TRAINER"]

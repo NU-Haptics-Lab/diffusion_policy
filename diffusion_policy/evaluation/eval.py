@@ -154,11 +154,15 @@ class SimpleInference:
         for key in lowdim_keys:
             val = obs[key]
             if isinstance(val, np.ndarray):
+                # only the action dim
                 if val.ndim == 1:
                     # add batch and traj dim
                     val2 = np.expand_dims(val, axis=(0,1))
+                    
+                # batch and action dim
                 elif val.ndim == 2:
-                    val2 = np.expand_dims(val, axis=0)
+                    # add a traj dim
+                    val2 = np.expand_dims(val, axis=1)
                 else:
                     val2 = val
                     

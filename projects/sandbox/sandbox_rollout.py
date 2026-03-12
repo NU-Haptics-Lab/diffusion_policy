@@ -30,17 +30,38 @@ import diffusion_policy.globals as globals
 
 from diffusion_policy.evaluation.eval import SimpleInference
 
+import avatar_drake_sim.sims.sandbox.sandbox_common as commons
+
+
+from avatar_drake_sim.sims.sandbox.sandbox_gym import SandboxGymEnv
+
+import stable_baselines3 as sb3
+from stable_baselines3.common.vec_env import VecEnv
+
     
 class SandboxRLRolloutEnv(RolloutEnv):
+    def __init__(self,
+                 sandbox_commons_options: dict | None = None,
+                 drake_env_globals_config_path = None,
+                 ):
+        super().__init__()
+        self.sandbox_commons_options = sandbox_commons_options
+        self.drake_env_globals_config_path = drake_env_globals_config_path
+        
+        # load options
+        if sandbox_commons_options is not None:
+            commons.set_current_globals(sandbox_commons_options)
+        
     def setup(self):
         
         import logging; logging.getLogger("drake").setLevel(logging.ERROR)
         
         # Register environment with gym globally
-        gym.envs.register(id="SandboxRLGymEnv-v0", entry_point="avatar_drake_sim.sims.sandbox.sandbox_gym:SandboxGymEnv") #type:ignore
+        # gym.envs.register(id="SandboxRLGymEnv-v0", entry_point="avatar_drake_sim.sims.sandbox.sandbox_gym:SandboxGymEnv") #type:ignore
             
         
-        self.env = gym.make("SandboxRLGymEnv-v0")
+        # self.env = gym.make("SandboxRLGymEnv-v0", globals_config_path=self.drake_env_globals_config_path) #type:ignore
+        self.env: VecEnv = SandboxGymEnv(globals_config_path=self.drake_env_globals_config_path)
         
         return self.env
             
@@ -69,7 +90,7 @@ class SandboxRollout(Rollout):
         # update the eval class
         
         # reset the sim class
-        obs, info = self.env.reset()
+        obs = self.env.reset()
                         
         # update the evaluator
         self.save_data(obs)
@@ -79,9 +100,10 @@ class SandboxRollout(Rollout):
         Run one rollout
         """
         samples = []
-        total_reward = 0.0
+        total_reward = np.zeros(commons.NB_PARALLEL_ENVS)
         best_qvals = []
         total_jerk = 0.0
+        env_dones = np.zeros(commons.NB_PARALLEL_ENVS, dtype=bool)
         
         done = False
         while not done:
@@ -110,12 +132,16 @@ class SandboxRollout(Rollout):
                     new_obs,
                 )
                 
-                if dones:
-                    done = True
-                    
                 # logging
-                total_reward += rewards
+                not_done = ~env_dones
+                total_reward[not_done] += rewards[not_done]
                 total_jerk += jerk
+                
+                # if dones:
+                #     done = True
+                env_dones = np.logical_or(env_dones, dones)
+                done = np.all(env_dones)
+                    
                 
         # normalize jerk by episode length
         if len(samples) > 0:
@@ -128,48 +154,56 @@ class SandboxRollout(Rollout):
         
     
     def step_trajectory(self, actions):
-        total_reward = 0.0
+        total_reward = np.zeros(commons.NB_PARALLEL_ENVS)
         samples = []
         
         new_obs = None
-        done = False
+        env_dones = np.zeros(commons.NB_PARALLEL_ENVS, dtype=bool)
         infos = None
+        
+        B = actions.shape[0]
+        nb_envs = B
+        H = actions.shape[1]
         
         
         total_jerk = 0.0
         
-        m = min(len(actions), self.rollout_num_actions)
+        m = min(H, self.rollout_num_actions)
         for i in range(m):
-            action = actions[i]
+            action = actions[:, i, :]
             
             # convert action for Drake
             action = self.convert_action(action)
             
             # step the env
-            new_obs, rewards, terminated, truncated, infos = self.env.step(action) #type:ignore
+            new_obs, rewards, dones, infos = self.env.step(action) #type:ignore
             
             # save sample using the old obs. Required for RL
-            self.save_samples(action, rewards, samples)
+            self.save_samples(action, rewards, env_dones, samples)
             
             # must save the obs for the next save_samples
             self.save_data(new_obs)
                         
-            done = terminated or truncated
+            # done = terminated or truncated
+            env_dones = np.logical_or(env_dones, dones)
+            done = np.all(env_dones)
             
-            total_reward += float(rewards)
+            not_done = ~env_dones
+            total_reward[not_done] += rewards[not_done]
             
             if done:
                 break
             
-        return samples, new_obs, total_reward, done, infos, total_jerk
+        return samples, new_obs, total_reward, env_dones, infos, total_jerk
     
-    def save_samples(self, actions, rewards, samples):
+    def save_samples(self, actions, rewards, env_dones, samples):
         """
         each sample must contain all the obs keys, the action key, and 'reward'
         """
         # save the sample using the old obs, current action, current reward
         action_key = globals.CONFIG.action_key # type: ignore
         
+        # the old obs
         obs = self.obs
         
         assert(obs is not None)
@@ -177,6 +211,7 @@ class SandboxRollout(Rollout):
         data = {
             action_key: actions,
             'reward': np.float32(rewards),
+            'dones': env_dones, # need dones for episode masking
         }
         
         data.update(obs)
@@ -187,3 +222,39 @@ class SandboxRollout(Rollout):
         
         # append the data
         samples.append(to_save)
+        
+    def save_envs_episode_to_rb(self, episode: list[dict], rb):
+        # separate out the envs in the episode and save each one as its own episode in the rb
+        
+        # convert episodes to arrays
+        env_episode_dicts = []
+        
+        for env_idx in range(commons.NB_PARALLEL_ENVS):
+            env_episode_dict = {}
+            
+            # get the not done mask
+            done_mask = np.array([step['dones'][env_idx] for step in episode])
+            
+            # if env never finished? is this a bug?
+            if done_mask.sum() == 0:
+                idx = len(done_mask) - 1
+                
+            # get the first index
+            else:
+                idx = np.where(done_mask)[0][0]
+            
+            # mask
+            keep_mask = np.zeros_like(done_mask, dtype=bool)
+            keep_mask[0:idx+1] = True
+            
+            
+            for key in episode[0].keys():
+                data_arr = np.array([step[key][env_idx] for step in episode])
+                keep_data_arr = data_arr[keep_mask]
+                env_episode_dict[key] = keep_data_arr
+                
+            env_episode_dicts.append(env_episode_dict)
+            
+        # confirm that reward has captured the episode termination correctly
+        for episode in env_episode_dicts:
+            rb.add_episode(episode, compressors='disk')
