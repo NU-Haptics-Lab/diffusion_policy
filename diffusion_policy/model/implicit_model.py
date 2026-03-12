@@ -247,7 +247,8 @@ class ImplicitAlgorithm(BaseImagePolicy):
         device = self.device
         dtype = self.dtype
         timestep = 0.0
-        nb_proposed_trajectories = warm_start_trajectory.shape[0] if warm_start_trajectory is not None else 0
+        total_nb_proposed_trajectories = warm_start_trajectory.shape[0] if warm_start_trajectory is not None else 0
+        nb_proposed_trajectories_per_env = int(total_nb_proposed_trajectories / commons.NB_PARALLEL_ENVS) if total_nb_proposed_trajectories > 0 else 0
         
         # previous action
         naction_prev = nobs['robot_joint_prev_action']
@@ -278,13 +279,13 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # do necessary tiling in case nb_envs > 1. Tile the global_cond instead of nobs because it'll be much smaller (and an array instead of a dict)
         if nb_envs > 1:
             # tile the trajectories
-            trajectory = th.tile(trajectory, (nb_envs, 1, 1))
+            # trajectory = th.tile(trajectory, (nb_envs, 1, 1))
             
             # repeat each global_cond nb_proposed_trajectories times, so that each proposed trajectory gets the same global_cond
-            global_cond = th.repeat_interleave(global_cond, repeats=nb_proposed_trajectories, dim=0)
+            global_cond = th.repeat_interleave(global_cond, repeats=nb_proposed_trajectories_per_env, dim=0)
             
             # must also repeat_interleave the prev action
-            naction_prev = th.repeat_interleave(naction_prev, repeats=nb_proposed_trajectories, dim=0)
+            naction_prev = th.repeat_interleave(naction_prev, repeats=nb_proposed_trajectories_per_env, dim=0)
             
             # assert the shapes are correct
             assert(trajectory.shape[0] == global_cond.shape[0] == naction_prev.shape[0])
@@ -980,3 +981,24 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
             actions = self.get_gpu_actions_batch()
             
         return super().inference_lbfgs(nobs, warm_start_trajectory=self.warm_start_trajectories)
+    
+    def inference_lbfgs2(self, nobs: dict, warm_start_trajectory=None):
+        """
+        this version samples 10 random initial actions per env
+        """
+        actions = self.warm_start_trajectories
+        nb_envs = commons.NB_PARALLEL_ENVS
+
+        nb_per_env = 10
+
+        # get random actions from actions
+        random_actions = []
+        for i in range(nb_envs):
+            random_indices = torch.randint(0, actions.shape[0], (nb_per_env, ), device=actions.device)
+            random_action = actions[random_indices]
+            random_actions.append(random_action)
+
+        # stack them all, shape: (nb_envs * nb_per_env, T, Da)
+        random_actions = torch.cat(random_actions, dim=0)
+
+        return super().inference_lbfgs(nobs, warm_start_trajectory=random_actions)
