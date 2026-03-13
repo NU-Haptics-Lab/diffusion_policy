@@ -18,8 +18,19 @@ class ConditionalResidualBlock1D(nn.Module):
             cond_dim,
             kernel_size=3,
             n_groups=8,
-            cond_predict_scale=False):
+            cond_predict_scale=False,
+            num_cond_encoder_layers = 1,
+            num_cond_encoder_hidden_features = 64,
+            ):
         super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.cond_dim = cond_dim
+        self.kernel_size = kernel_size
+        self.n_groups = n_groups
+        self.cond_predict_scale = cond_predict_scale
+        self.num_cond_encoder_layers = num_cond_encoder_layers
+        self.num_cond_encoder_hidden_features = num_cond_encoder_hidden_features
 
         self.blocks = nn.ModuleList([
             Conv1dBlock(in_channels, out_channels, kernel_size, n_groups=n_groups),
@@ -36,9 +47,10 @@ class ConditionalResidualBlock1D(nn.Module):
         
         # TODO: put hidden layer count in config
         self.cond_encoder = nn.Sequential(
-            nn.Linear(cond_dim, cond_dim),
+            nn.Linear(cond_dim, self.num_cond_encoder_hidden_features),
             nn.Mish(), # (0.1),
-            nn.Linear(cond_dim, cond_channels),
+            *[nn.Linear(self.num_cond_encoder_hidden_features, self.num_cond_encoder_hidden_features), nn.Mish()] * self.num_cond_encoder_layers,
+            nn.Linear(self.num_cond_encoder_hidden_features, cond_channels),
             Rearrange('batch t -> batch t 1'),
         )
 

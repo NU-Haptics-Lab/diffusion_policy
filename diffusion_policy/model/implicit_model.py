@@ -97,6 +97,8 @@ class ImplicitPolicy(nn.Module):
             n_groups=8,
             cond_predict_scale=True,
             num_mid_module_repeats = 4,
+            num_cond_encoder_layers = 2,
+            num_cond_encoder_hidden_features = 128,
             ):
         super().__init__()
         self.action_shape = action_shape
@@ -107,6 +109,8 @@ class ImplicitPolicy(nn.Module):
         self.n_groups = n_groups
         self.cond_predict_scale = cond_predict_scale
         self.num_mid_module_repeats = num_mid_module_repeats
+        self.num_cond_encoder_layers = num_cond_encoder_layers
+        self.num_cond_encoder_hidden_features = num_cond_encoder_hidden_features
 
     def setup(self):
         # setup all my children
@@ -130,6 +134,8 @@ class ImplicitPolicy(nn.Module):
                         n_groups=self.n_groups,
                         cond_predict_scale=self.cond_predict_scale,
                         num_mid_module_repeats=self.num_mid_module_repeats,
+                        num_cond_encoder_layers=self.num_cond_encoder_layers,
+                        num_cond_encoder_hidden_features=self.num_cond_encoder_hidden_features,
                     )
         
         
@@ -295,8 +301,8 @@ class ImplicitAlgorithm(BaseImagePolicy):
         trajectory.requires_grad_(True)
         optimizer = torch.optim.LBFGS([trajectory], 
                                         lr=1.0, # designed to work with unit step size
-                                        max_iter=10, 
-                                        history_size=3,
+                                        max_iter=20, 
+                                        history_size=5,
                                         # tolerance_grad=1e-6, 
                                         # tolerance_change=1e-7,
                                         line_search_fn="strong_wolfe",
@@ -309,15 +315,18 @@ class ImplicitAlgorithm(BaseImagePolicy):
             policy = self.policy
         
         # initial scores for debugging
-        initial_scores = policy(trajectory, timestep, global_cond=global_cond).squeeze()
+        # initial_scores = policy(trajectory, timestep, global_cond=global_cond).squeeze()
         
         # get past action indices for boundary condition enforcement
         past_actions = np.where(np.array(self.action_rel_indices) < 0)[0]
         
+        # enforce initial actions
         if past_actions.shape[0] > 0:
             with torch.no_grad():
                 # set the previous action
                 trajectory[:, past_actions, :] = naction_prev
+                
+        original_trajectory = trajectory.clone().detach()
                 
         # set stuff up for fast closure
         jerk_weight = self.lbfgs_options.jerk_weight * self.lbfgs_options.use_jerk_penalty
@@ -415,23 +424,60 @@ class ImplicitAlgorithm(BaseImagePolicy):
             trajectory[:, past_actions, :] = naction_prev
             final_losses = get_per_sample_loss()
             
+            # reshape for easy indexing
+            trajectory_envs = trajectory.view(nb_envs, nb_proposed_trajectories_per_env, T, Da)
+            final_losses_envs = final_losses.view(nb_envs, nb_proposed_trajectories_per_env)
+            
             # split by env
             for i in range(nb_envs):
-                final_losses_env = final_losses[i*nb_proposed_trajectories_per_env:(i+1)*nb_proposed_trajectories_per_env]
-            
-                # min the loss
-                best_idx = torch.argmin(final_losses_env)
-                
-                # slice so we keep the batch dimension
-                best_traj = trajectory[best_idx:best_idx+1].detach().clone()
-                
-                best_trajs.append(best_traj)
+                    if False:
+                        final_losses_env = final_losses_envs[i]
+                        trajectory_env = trajectory_envs[i]
+                    
+                        # min the loss
+                        best_idx = torch.argmin(final_losses_env)
+                        
+                        # index, output is 2d: (T, Da)
+                        best_traj = trajectory_env[best_idx].detach().clone()
+                        
+                        best_trajs.append(best_traj)
+                        
+                    # random traj
+                    elif False:
+                        trajectory_env = trajectory_envs[i]
+                        
+                        # random index
+                        random_idx = torch.randint(0, nb_proposed_trajectories_per_env, (1,), device=trajectory.device)
+                        
+                        # index, squeeze batch dimension, output is 2d: (T, Da)
+                        random_traj = trajectory_env[random_idx].detach().clone().squeeze(dim=0)
+                        
+                        # add it
+                        best_trajs.append(random_traj)
+                        
+                    # random of top 5 trajs
+                    else:
+                        final_losses_env = final_losses_envs[i]
+                        trajectory_env = trajectory_envs[i]
+                    
+                        # get the indices of the top 5 lowest loss trajectories
+                        topk = min(5, nb_proposed_trajectories_per_env) # in case there are less than 5 proposed trajectories
+                        best_indices = torch.topk(final_losses_env, k=topk, largest=False).indices
+                        
+                        # randomly choose one of the topk indices
+                        random_idx = best_indices[torch.randint(0, topk, (1,), device=trajectory.device)]
+                        
+                        # index, squeeze batch dimension, output is 2d: (T, Da)
+                        best_traj = trajectory_env[random_idx].detach().clone().squeeze(dim=0)
+                        
+                        # add it
+                        best_trajs.append(best_traj)
                 
         # else:
         #     best_traj = trajectory.detach().clone()
         
-        # stack if we have >1 envs
-        best_trajs = torch.cat(best_trajs, dim=0)
+        # stack
+        best_trajs = torch.stack(best_trajs)
             
         # final optional noise
         with torch.no_grad():
@@ -441,6 +487,9 @@ class ImplicitAlgorithm(BaseImagePolicy):
         
             # replace the above line with this:
             # trajectory += noise_weight * self.make_noise(trajectory)
+            
+            # enforce past actions (not actually needed, but nice to have for debugging)
+            trajectory.data.copy_(trajectory.data * mask + fixed_contribution)
         
         return best_trajs
     
@@ -998,6 +1047,10 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         for i in range(nb_envs):
             random_indices = torch.randint(0, actions.shape[0], (nb_per_env, ), device=actions.device)
             random_action = actions[random_indices]
+            random_actions.append(random_action)
+            
+            # now draw nb_per_env actions from noise
+            random_action = self.make_noise(actions[:nb_per_env], generator=torch.Generator(device=actions.device).manual_seed(i))
             random_actions.append(random_action)
 
         # stack them all, shape: (nb_envs * nb_per_env, T, Da)

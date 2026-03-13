@@ -103,6 +103,13 @@ def main(cfg: DictConfig):
             cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
             cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
             cfg.session_trainer.epoch_trainer.rollouts.use_freq_schedule = False
+            cfg.session_trainer.epoch_trainer.rollouts.env_maker.sandbox_commons_options.NB_PARALLEL_ENVS = 1
+            
+        # dummy onine rl rb
+        if True:
+            data_dir = cfg.data_directory
+            
+            cfg.replay_buffer_loader.rb_paths.rl_replay_buffer = data_dir + "dummy_small_rb_rl_12.zarr"
         
         # # no rollouts
         # cfg.session_trainer.epoch_trainer.rollouts.use_online_rollout = False # type:ignore

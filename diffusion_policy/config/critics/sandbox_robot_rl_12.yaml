@@ -255,7 +255,7 @@ session_trainer:
       use_ema_model: false
       use_freq_schedule: false
       use_freq_calculation: true
-      use_freq_calculation_target_percent: 0.1
+      use_freq_calculation_target_percent: 0.02
 
 
       env_maker:
@@ -448,23 +448,25 @@ models:
               action_shape: ${shape_meta.action.shape}
               obs_encoder_maker: ${common_obs_encoder}
               n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
-              down_dims: # must be divisible by nb_groups (8)
-                - 128
+              down_dims: # must be divisible by nb_groups (8) this also affects the obs cond encoder, by way of dim_out = fcn(in_out = fcn(all_dims))
                 - 256
                 - 512
-              num_mid_module_repeats: 6
+                - 1024
+              num_mid_module_repeats: 4
+              num_cond_encoder_layers: 4
+              num_cond_encoder_hidden_features: 128
 
             lbfgs_options:
               _target_: diffusion_policy.model.implicit_model.LBFGSOptions
 
-              use_l2_reg: false # penalizes big actions
+              use_l2_reg: true # penalizes big actions
               use_jerk_penalty: true # penalizes big changes in action, but not necessarily big actions themselves
               use_add_noise: true
               use_policy: true # debugging
 
-              l2_reg_weight: 0.0 # good value: 1.0
+              l2_reg_weight: 0.5 # good value: 1.0
               jerk_weight: 0.5 # good value ... 1.0?
-              noise_mag: 0.025
+              noise_mag: 0.025 # normalized noise mag
               policy_weight: 1.0
 
 

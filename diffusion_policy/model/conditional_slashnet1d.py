@@ -49,8 +49,25 @@ class ConditionalSlashnet1D(nn.Module):
         n_groups=8,
         cond_predict_scale=False,
         num_mid_module_repeats = 4,
+        num_cond_encoder_layers = 2,
+        num_cond_encoder_hidden_features = 128,
+        final_layers_nb_layers = 4,
+        final_layers_hidden_dim = 128,
         ):
         super().__init__()
+        self.input_dim = input_dim
+        self.local_cond_dim = local_cond_dim
+        self.global_cond_dim = global_cond_dim
+        self.down_dims = down_dims
+        self.kernel_size = kernel_size
+        self.n_groups = n_groups
+        self.cond_predict_scale = cond_predict_scale
+        self.num_mid_module_repeats = num_mid_module_repeats
+        self.num_cond_encoder_layers = num_cond_encoder_layers
+        self.num_cond_encoder_hidden_features = num_cond_encoder_hidden_features
+        self.final_layers_nb_layers = final_layers_nb_layers
+        self.final_layers_hidden_dim = final_layers_hidden_dim
+        
         all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
 
@@ -112,15 +129,19 @@ class ConditionalSlashnet1D(nn.Module):
         nb_input_features = all_dims[-1] * (factor)
         nb_input_features = int(nb_input_features)
         self.final_layers = nn.Sequential(
-            nn.Linear(nb_input_features, 1),
+            nn.Linear(nb_input_features, final_layers_hidden_dim),
+            nn.Mish(),
+            *[nn.Linear(final_layers_hidden_dim, final_layers_hidden_dim), nn.Mish()] * final_layers_nb_layers,
+            nn.Linear(final_layers_hidden_dim, 1),
         )
 
         self.local_cond_encoder = local_cond_encoder
         self.down_modules = down_modules
 
-        logger.info(
-            "number of parameters: %e", sum(p.numel() for p in self.parameters())
-        )
+        # logger.info(
+        #     "number of parameters: %e", sum(p.numel() for p in self.parameters())
+        # )
+        globals.log_one_if_exists("model_num_params", sum(p.numel() for p in self.parameters()))
 
     def forward(self, 
             sample: torch.Tensor, 
