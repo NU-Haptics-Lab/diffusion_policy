@@ -88,7 +88,7 @@ class LBFGSOptions:
         self.policy_weight = policy_weight
         
         # set up schedules
-        self.noise_mag_scheduler = SimpleLinearScheduler(self.noise_mag, 0.0, 0.0, 1.0)
+        self.noise_mag_scheduler = SimpleLinearScheduler(0.0, self.noise_mag, 1.0, 0.0)
         
     def get_nb_penalties(self):
         return self.use_jerk_penalty + self.use_l2_reg
@@ -369,7 +369,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
             # setup
             with torch.no_grad():
                 # noise? starting to look more similar to the core DDIM function
-                trajectory += noise_weight * self.make_noise(trajectory)
+                if False:
+                    trajectory += noise_weight * self.make_noise(trajectory)
+                else:
+                    trajectory += noise_weight * self.make_per_joint_noise(trajectory)
                     
                 # enforce past actions
                 trajectory.data.copy_(trajectory.data * mask + fixed_contribution)
@@ -493,7 +496,10 @@ class ImplicitAlgorithm(BaseImagePolicy):
         # final optional noise
         with torch.no_grad():
             # noise? starting to look more similar to the core DDIM function
-            trajectory += noise_weight * self.make_noise(trajectory)
+            if False:
+                trajectory += noise_weight * self.make_noise(trajectory)
+            else:
+                trajectory += noise_weight * self.make_per_joint_noise(trajectory)
             
             # enforce past actions (not actually needed, but nice to have for debugging)
             trajectory.data.copy_(trajectory.data * mask + fixed_contribution)
@@ -662,13 +668,31 @@ class ImplicitAlgorithm(BaseImagePolicy):
         n = torch.randn(x.shape, dtype=x.dtype, device=x.device, generator=generator)
         
         must_clamp = globals.CONFIG.clamp #type:ignore
+        clamp_val = globals.CONFIG.clamp_value #type:ignore
         
         if must_clamp:
-            n = torch.clamp(n, -1.0, 1.0)
+            n = torch.clamp(n, -clamp_val, clamp_val)
             
         return n
 
-
+    def make_per_joint_noise(self, x, generator=None):
+        """
+        this version creates one noise mag per joint and applies it across the trajectory. The idea is that we don't want trajectory noise to cancel itself out / oscillate like crazy, instead we want to explore in a consistent direction for a trajectory.
+        """
+        B = x.shape[0]
+        H = x.shape[1]
+        D = x.shape[2]
+        
+        # make noise
+        n = torch.randn((B, D), dtype=x.dtype, device=x.device, generator=generator).unsqueeze(1) # shape (B, 1, D)
+        
+        must_clamp = globals.CONFIG.clamp #type:ignore
+        clamp_val = globals.CONFIG.clamp_value #type:ignore
+        
+        if must_clamp:
+            n = torch.clamp(n, -clamp_val, clamp_val)
+            
+        return n
     
     def forward(self, state_dict, action, options = None):
         this_nobs = state_dict
