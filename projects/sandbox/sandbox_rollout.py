@@ -288,6 +288,8 @@ class SandboxRollout(Rollout):
             
             # mask
             keep_mask = np.zeros_like(done_mask, dtype=bool)
+            
+            # keep all up to idx, and one more step after idx to capture the done transition
             keep_mask[0:idx+1] = True
             
             

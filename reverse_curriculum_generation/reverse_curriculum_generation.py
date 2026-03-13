@@ -24,25 +24,20 @@ import avatar_drake_sim.sims.sandbox.sandbox_common as commons
 SUCCESS_RATE = 0.0
 NB_ATTEMPTS = 0
 
-# def update_difficulty_scale(outcome):
-#     global DIFFICULTY_SCALE
-
-#     delta = 0.005 # 0.5%
+def update_difficulty_scale(outcome):
+    delta = 0.005 # 0.5%
     
-#     # simple update rule: if outcome is success, increase difficulty, if failure, decrease difficulty
-#     if outcome:
-#         DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
-#     else:
-#         DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
-
-#     # save to commons as well
-#     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
+    # simple update rule: if outcome is success, increase difficulty, if failure, decrease difficulty
+    if outcome:
+        commons.DIFFICULTY_SCALE = min(1.0, commons.DIFFICULTY_SCALE + delta)
+    else:
+        commons.DIFFICULTY_SCALE = max(0.0, commons.DIFFICULTY_SCALE - delta)
     
 # def update_difficulty_scale2(outcome):
 #     """
 #     update the success rate and increase difficulty if s.r. >50%, decrease if s.r. <50%
 #     """
-#     global SUCCESS_RATE, NB_ATTEMPTS, DIFFICULTY_SCALE
+#     global SUCCESS_RATE, NB_ATTEMPTS
     
 #     delta = 0.005 # 0.5%
 
@@ -50,12 +45,9 @@ NB_ATTEMPTS = 0
 #     SUCCESS_RATE += (outcome - SUCCESS_RATE) / NB_ATTEMPTS # could use the last x attempts instead of all attempts
 
 #     if SUCCESS_RATE > 0.5:
-#         DIFFICULTY_SCALE = min(1.0, DIFFICULTY_SCALE + delta)
+#         commons.DIFFICULTY_SCALE = min(1.0, commons.DIFFICULTY_SCALE + delta)
 #     else:
-#         DIFFICULTY_SCALE = max(0.0, DIFFICULTY_SCALE - delta)
-        
-#     # save to commons as well
-#     commons.DIFFICULTY_SCALE = DIFFICULTY_SCALE
+#         commons.DIFFICULTY_SCALE = max(0.0, commons.DIFFICULTY_SCALE - delta)
     
 def update_difficulty_scale3(outcome):
     """
@@ -63,7 +55,12 @@ def update_difficulty_scale3(outcome):
     """
     alpha = 0.01 # smoothing factor
     
-    commons.DIFFICULTY_SCALE = alpha * outcome + (1 - alpha) * commons.DIFFICULTY_SCALE
+    commons.DIFFICULTY_SCALE = np.clip(
+        alpha * outcome + (1 - alpha) * commons.DIFFICULTY_SCALE,
+        0.0, 1.0
+    )
+    
+    
 
 class Node:
     """
@@ -182,7 +179,7 @@ class ReverseCurriculumGeneration:
             if sr > 0.5:
                 update_difficulty_scale3(1.0)
             else:
-                update_difficulty_scale3(0.0)
+                update_difficulty_scale3(-1.0)
         else:
             # test
             update_difficulty_scale3(outcome)
