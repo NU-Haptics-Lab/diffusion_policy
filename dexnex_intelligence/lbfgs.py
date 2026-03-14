@@ -43,8 +43,7 @@ class LBFGSProblem:
         self.policy.eval()
         To = 1
         value = next(iter(nobs.values()))
-        B = value.shape[0] # batch
-        nb_envs = B
+        nb_envs = value.shape[0] # batch
         T = self.horizon # trajectory length
         Da = self.policy.action_dim # action dimension
         device = self.device
@@ -63,7 +62,7 @@ class LBFGSProblem:
         # get encoded obs, no grad to save time
         with th.no_grad():
             nobs_features = self.policy.forward_obs_encoder(this_nobs)
-            global_cond = nobs_features.reshape(B, -1)
+            global_cond = nobs_features.reshape(nb_envs, -1)
         # dummy trajectory
         if warm_start_trajectory is None:
             raise NotImplementedError("unsupported with vecenv's")
@@ -148,6 +147,7 @@ class LBFGSProblem:
 
 
         # initial forward/backward pass to determine the active joints based off how impactful the critic thinks each joint is. Similar to coordinate search
+        # reminder: each env may have different active joints, so we do this per env
         with th.enable_grad():
             qval = policy(trajectory, timestep, global_cond=global_cond)
             loss = -qval.mean()
@@ -166,19 +166,18 @@ class LBFGSProblem:
             grads_envs_abs_mean = grads_envs_abs.mean(dim=1) # shape (nb_envs, T, Da)
 
             # topk joints by mean abs grad for each env
-            topk = 1 # TODO: schedule w.r.t. difficulty scale
+            topk = 3 # TODO: schedule w.r.t. difficulty scale
+            
+            # JUST KNOW: this may contain repeat joints
             _, topk_indices = th.topk(grads_envs_abs_mean, k=topk, dim=-1) # shape (nb_envs, T, topk)
 
             # make a mask of the active joints, shape (nb_envs, T, Da)
             active_joints_mask = th.zeros_like(grads_envs_abs_mean).scatter_(-1, topk_indices, 1.0)
 
             # reshape and tile the mask. shape: (B, T, Da), recall that B = nb_envs * nb_proposed_trajectories_per_env and each nb_proposed_trajectories_per_env pertains to a specific env
-            active_joints_mask = active_joints_mask.view(nb_envs, 1, T, Da).expand(-1, nb_proposed_trajectories_per_env, -1, -1).reshape(B, T, Da)
+            active_joints_mask = active_joints_mask.view(nb_envs, 1, T, Da).expand(-1, nb_proposed_trajectories_per_env, -1, -1).reshape(total_nb_proposed_trajectories, T, Da)
 
-        def closure_setup():
-            # nonlocals
-            nonlocal trajectory
-
+        def closure_setup(trajectory):
             # no grad
             with th.no_grad():
                 # add noise
@@ -189,14 +188,18 @@ class LBFGSProblem:
                     
                 # enforce past actions
                 trajectory.data.copy_(trajectory.data * mask + fixed_contribution)
+                
+            return trajectory
 
         
         def closure_get_per_sample_loss():
+            nonlocal trajectory
+            
             # zero out the grads, necessary for lbfgs? idk.
             optimizer.zero_grad()
             
             # setup
-            closure_setup()
+            trajectory = closure_setup(trajectory)
             
             # run the policy
             qval = policy(trajectory, timestep, global_cond=global_cond)
@@ -250,6 +253,8 @@ class LBFGSProblem:
 
         self.policy.train()
         
+        # final noise
+        trajectory = closure_setup(trajectory)
 
         # 5. Find the highest scoring trajectory
         # if trajectory.shape[0] > 0:
@@ -310,18 +315,6 @@ class LBFGSProblem:
 
         # stack
         best_trajs = th.stack(best_trajs)
-            
-        # final optional noise
-        with th.no_grad():
-            # noise? starting to look more similar to the core DDIM function
-            if False:
-                trajectory += noise_weight * self.make_noise(trajectory)
-            else:
-                trajectory += noise_weight * self.make_per_joint_noise(trajectory)
-            
-            # enforce past actions (not actually needed, but nice to have for debugging)
-            trajectory.data.copy_(trajectory.data * mask + fixed_contribution)
-        
 
         # we're done
         return best_trajs

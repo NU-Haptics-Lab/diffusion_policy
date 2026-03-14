@@ -19,7 +19,7 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 doing_bc: false
 
@@ -465,8 +465,8 @@ models:
               use_add_noise: true
               use_policy: true # debugging
 
-              l2_reg_weight: 0.1 # good value: 1.0
-              jerk_weight: 0.1 # good value ... 1.0?
+              l2_reg_weight: 0.0001 # good value: 1.0
+              jerk_weight: 0.0001 # good value ... 1.0?
               noise_mag: 0.01 # normalized noise mag, on a linear schedule, computed per joint
               policy_weight: 1.0
 
