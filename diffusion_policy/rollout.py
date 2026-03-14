@@ -225,7 +225,7 @@ class Rollout:
             
             # logging
             globals.log_one_if_exists("rollout/avg_ep_reward", total_reward / self.num_rollouts_per_trigger)
-            globals.log_one_if_exists("rollout/avg_success_rate", successes / self.num_rollouts_per_trigger)
+            # globals.log_one_if_exists("rollout/avg_success_rate", successes / self.num_rollouts_per_trigger)
             globals.log_one_if_exists("rollout/avg_best_qval", avg_best_qval / self.num_rollouts_per_trigger)
             globals.log_one_if_exists("rollout/avg_jerk", avg_jerk / self.num_rollouts_per_trigger)
             

@@ -204,7 +204,7 @@ class SandboxRollout(Rollout):
             new_obs, rewards, dones, infos = self.env.step(action) #type:ignore
             
             # save sample using the old obs. Required for RL
-            self.save_samples(action, rewards, env_dones, samples)
+            self.save_samples(action, rewards, env_dones, samples, infos)
             
             # must save the obs for the next save_samples
             self.save_data(new_obs)
@@ -220,16 +220,16 @@ class SandboxRollout(Rollout):
             globals.log_one_if_exists("profiling/SandboxRollout.step_trajectory", toc)
             total_compute_time += toc
             
-            for info in infos:
-            # log difficulty scale
-                if "difficulty_scale" in info:
-                    # update difficulty scale using an LPF
-                    self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * info["difficulty_scale"]
+            # for info in infos:
+            # # log difficulty scale
+            #     if "difficulty_scale" in info:
+            #         # update difficulty scale using an LPF
+            #         self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * info["difficulty_scale"]
                     
-                    # debug
-                    globals.log_one_if_exists("difficulty_scale_env", info["difficulty_scale"])
+            #         # debug
+            #         globals.log_one_if_exists("difficulty_scale_env", info["difficulty_scale"])
                     
-                    globals.log_one_if_exists("difficulty_scale", self.difficulty_scale)
+            #         globals.log_one_if_exists("difficulty_scale", self.difficulty_scale)
                 
             
             # early exit
@@ -239,7 +239,7 @@ class SandboxRollout(Rollout):
             
         return samples, new_obs, total_reward, env_dones, infos, total_jerk, total_compute_time
     
-    def save_samples(self, actions, rewards, env_dones, samples):
+    def save_samples(self, actions, rewards, env_dones, samples, infos):
         """
         each sample must contain all the obs keys, the action key, and 'reward'
         """
@@ -251,6 +251,12 @@ class SandboxRollout(Rollout):
         
         assert(obs is not None)
         
+        # convert infos to dict of arrays
+        keys = ["difficulty_scale", "task_completed"]
+        infos_dict = {}
+        for key in keys:
+            infos_dict[key] = np.array([info[key] for info in infos])
+        
         data = {
             action_key: actions,
             'reward': np.float32(rewards),
@@ -258,6 +264,8 @@ class SandboxRollout(Rollout):
         }
         
         data.update(obs)
+        
+        data.update(infos_dict)
         
         to_save = data
         # for key in globals.CONFIG.obs_keys_to_load:
@@ -270,7 +278,7 @@ class SandboxRollout(Rollout):
         # separate out the envs in the episode and save each one as its own episode in the rb
         
         # convert episodes to arrays
-        env_episode_dicts = []
+        env_episode_dicts: list[dict] = []
         
         for env_idx in range(commons.NB_PARALLEL_ENVS):
             env_episode_dict = {}
@@ -301,5 +309,25 @@ class SandboxRollout(Rollout):
             env_episode_dicts.append(env_episode_dict)
             
         # confirm that reward has captured the episode termination correctly
-        for episode in env_episode_dicts:
-            rb.add_episode(episode, compressors='disk')
+        completions = 0
+        for episode2 in env_episode_dicts:
+            rb.add_episode(episode2, compressors='disk')
+            
+            # process the infos.
+            if "task_completed" in episode2:
+                # if any step in the episode has task_completed == True, then we mark the episode as task completed
+                episode_task_completed = np.any(episode2["task_completed"])
+                completions += int(episode_task_completed)
+                
+        avg_success_rate = completions / len(env_episode_dicts)
+        globals.log_one_if_exists("rollout/avg_success_rate", avg_success_rate)
+        
+        ## update the difficulty scale
+        if avg_success_rate > 0.5:
+            self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * 1.0
+        else:
+            self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * -1.0
+        self.difficulty_scale = np.clip(self.difficulty_scale, 0.0, 1.0)
+        
+        globals.log_one_if_exists("rollout/difficulty_scale", self.difficulty_scale)
+        

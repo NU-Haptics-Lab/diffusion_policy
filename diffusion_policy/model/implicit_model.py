@@ -838,7 +838,7 @@ class ImplicitAlgorithmInferenceFromBCDataset(ImplicitAlgorithm):
         actions = self.warm_start_trajectories
         nb_envs = commons.NB_PARALLEL_ENVS
 
-        nb_per_env = 100
+        nb_per_env = 20
 
         # get random actions from actions
         random_actions = []

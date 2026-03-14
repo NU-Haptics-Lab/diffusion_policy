@@ -166,7 +166,7 @@ class LBFGSProblem:
             grads_envs_abs_mean = grads_envs_abs.mean(dim=1) # shape (nb_envs, T, Da)
 
             # topk joints by mean abs grad for each env
-            topk = 3 # TODO: schedule w.r.t. difficulty scale
+            topk = 1 # TODO: schedule w.r.t. difficulty scale
             
             # JUST KNOW: this may contain repeat joints
             _, topk_indices = th.topk(grads_envs_abs_mean, k=topk, dim=-1) # shape (nb_envs, T, topk)
