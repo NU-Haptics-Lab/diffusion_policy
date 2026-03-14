@@ -19,7 +19,7 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 doing_bc: false
 
@@ -452,6 +452,7 @@ models:
                 - 256
                 - 512
                 - 1024
+              kernel_size: 3 # smaller = fewer params
               num_mid_module_repeats: 4
               num_cond_encoder_layers: 4
               num_cond_encoder_hidden_features: 128
@@ -466,7 +467,7 @@ models:
 
               l2_reg_weight: 0.1 # good value: 1.0
               jerk_weight: 0.1 # good value ... 1.0?
-              noise_mag: 0.025 # normalized noise mag, on a linear schedule, computed per joint
+              noise_mag: 0.01 # normalized noise mag, on a linear schedule, computed per joint
               policy_weight: 1.0
 
 
