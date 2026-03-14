@@ -65,6 +65,10 @@ from avatar_drake_sim.sims.sandbox.classes.simple_scheduling import (
     SimpleLinearScheduler
 )
 
+from dexnex_intelligence.lbfgs import (
+    LBFGSProblem,
+)
+
 class LBFGSOptions:
     def __init__(self,
                  use_l2_reg = True,
@@ -249,8 +253,15 @@ class ImplicitAlgorithm(BaseImagePolicy):
     def infer(self, nobs_dict: dict, action = None, task_id=None, noise_scheduler=None):
         return self.inference(nobs_dict)
     
-    # @torch.no_grad() need grads for lbfgs
     def inference_lbfgs(self, nobs: dict, warm_start_trajectory = None):
+        problem = LBFGSProblem(self.policy, self.compiled_policy, self.horizon, self.device, self.dtype, self.action_rel_indices, self.lbfgs_options)
+
+        best_trajs = problem.solve(nobs, warm_start_trajectory)
+
+        return best_trajs
+    
+    # @torch.no_grad() need grads for lbfgs
+    def inference_lbfgs_old(self, nobs: dict, warm_start_trajectory = None):
         """
         use torch L-BFGS
         """
