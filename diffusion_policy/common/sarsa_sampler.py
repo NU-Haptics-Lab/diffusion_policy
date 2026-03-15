@@ -557,9 +557,11 @@ class EpisodeSampler:
         # last valid sample in the ep => second to last ep_idx, and don't forget python is zero-indexed.
         indices = self.get_ep_relative_action_indices(ep_idx)
 
-        # sanity check: with 2 data-points [d1, d2], len(self) = 2, => ep_idx of 0 is done ... so we add 2
+        # sanity check: with 2 data-points [d1, d2], len(self) = 2, => ep_idx of 0 is done (because we need one more obs after done is True) ... so we add 2
         # if any of the indices of this ep_idx are done, then by the time this trajectory is executed, we will be done.
-        done = np.any(indices + 2 >= len(self))
+        
+        # actually, check out the get_sample function, we allow ep_idx to be == len(self)-1 because the next obs (which isn't used) will either be a repeat of the last obs, or all zeros, depending on which option was chosen. So then the last valid sample in the ep is actually the last ep_idx, so we need to add 1, not 2.
+        done = np.any(indices + 1 >= len(self))
         not_done = not done
         
         # convert to np array, must add a dimension
