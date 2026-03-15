@@ -311,6 +311,12 @@ class SandboxRollout(Rollout):
         # confirm that reward has captured the episode termination correctly
         completions = 0
         for episode2 in env_episode_dicts:
+            # check for any nan's
+            for key, value in episode2.items():
+                if np.isnan(value).any():
+                    print(f"Warning: NaN values found in episode for key {key}. Skipping saving to RB.")
+                    continue
+                    
             rb.add_episode(episode2, compressors='disk')
             
             # process the infos.
@@ -323,11 +329,15 @@ class SandboxRollout(Rollout):
         globals.log_one_if_exists("rollout/avg_success_rate", avg_success_rate)
         
         ## update the difficulty scale
-        if avg_success_rate > 0.5:
+        sr_target = 0.25
+        if avg_success_rate > sr_target:
             self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * 1.0
         else:
             self.difficulty_scale = 0.99 * self.difficulty_scale + 0.01 * -1.0
         self.difficulty_scale = np.clip(self.difficulty_scale, 0.0, 1.0)
+        
+        # save to commons
+        commons.DIFFICULTY_SCALE = self.difficulty_scale
         
         globals.log_one_if_exists("rollout/difficulty_scale", self.difficulty_scale)
         

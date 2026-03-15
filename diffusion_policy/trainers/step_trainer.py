@@ -179,7 +179,9 @@ class StepTrainer:
             
             # nan protection
             if torch.isnan(loss):
-                raise ValueError(f"Loss for {key} is NaN. Check the BatchLoss method.")
+                print(f"Warning: NaN values found in loss for model {key}. Skipping backprop for this model.")
+                continue
+                # raise ValueError(f"Loss for {key} is NaN. Check the BatchLoss method.")
             
             model = globals.MODELS[key]
             
@@ -193,12 +195,13 @@ class StepTrainer:
             
             # if clipping the gradients
             if self.grad_norm > 0: 
-                # torch.nn.utils.clip_grad_value_(model.get_model().parameters(), clip_value=self.grad_norm) #type:ignore
-                
-                # maxgrad = MaxGrad(model)
-                # dd[key + ": Grad Max"] = maxgrad
                 norms = torch.nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=self.grad_norm) #type:ignore
-                dd[key + ": grad_norm"] = norms.max().item()
+
+                if torch.any(torch.isnan(norms)):
+                    print(f"Warning: NaN values found in gradients for model {key}. Skipping training.")
+                    continue
+                else:
+                    dd[key + ": grad_norm"] = norms.max().item()
             
             # step
             model.step()

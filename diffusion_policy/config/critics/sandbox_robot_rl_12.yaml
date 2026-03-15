@@ -7,7 +7,7 @@ description: "sandbox_rl_12: running the Drake sandbox RL env. implicit actor po
 debug: false # 
 profile: false # whether to profile stuff
 single_thread: false # nice for debugging
-use_compiled_policy: false # set false for debugging or if nb iterations == 0. right now the policy is very slow when compiled. could be because if it has to recompile at each rollout, not sure.
+use_compiled_policy: false # set false for debugging or if nb iterations == 0. working well now, first inference will be much slower, but subsequent inferences are ~2x faster. Didn't see a huge speedup in training. A much bigger impact was how many samples I did inference with
 total_num_epochs: 10001
 batches_per_epoch: 100 # 100,000 baseline nb steps
 batch_size: 128
@@ -255,7 +255,7 @@ session_trainer:
       use_ema_model: false
       use_freq_schedule: false
       use_freq_calculation: true
-      use_freq_calculation_target_percent: 0.02
+      use_freq_calculation_target_percent: 0.05
 
 
       env_maker:
@@ -460,7 +460,7 @@ models:
             lbfgs_options:
               _target_: diffusion_policy.model.implicit_model.LBFGSOptions
 
-              use_l2_reg: true # penalizes big actions
+              use_l2_reg: false # penalizes big actions
               use_jerk_penalty: true # penalizes big changes in action, but not necessarily big actions themselves
               use_add_noise: true
               use_policy: true # debugging

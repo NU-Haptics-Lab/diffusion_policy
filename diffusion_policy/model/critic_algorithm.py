@@ -19,6 +19,8 @@ import torch
 import copy
 import numpy as np
 import torch
+import torch as th
+
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -130,6 +132,30 @@ class CriticAlgorithm(nn.Module):
         reward = nbatch_dict['reward']
         not_done = nbatch_dict['not_done']
         
+        # make a mask for valid inputs
+        valid_mask = th.ones(len(action), dtype=th.bool, device=action.device)
+        
+        # remove non finites, they are most likely in the action
+        valid_mask = valid_mask & th.isfinite(action).all(dim=(1,2))
+        valid_mask = valid_mask & th.isfinite(next_action).all(dim=(1,2))
+        
+        for key, val in state.items():
+            valid_mask = valid_mask & th.isfinite(val).all(dim=(1,2))
+        for key, val in next_state.items():
+            valid_mask = valid_mask & th.isfinite(val).all(dim=(1,2))
+            
+        valid_mask = valid_mask & th.isfinite(reward).all(dim=(1))
+        valid_mask = valid_mask & th.isfinite(not_done).all(dim=(1))
+        
+        # mask all inputs
+        action = action[valid_mask]
+        next_action = next_action[valid_mask]
+        state = {key: val[valid_mask] for key, val in state.items()}
+        next_state = {key: val[valid_mask] for key, val in next_state.items()}
+        reward = reward[valid_mask]
+        not_done = not_done[valid_mask]
+        
+        
         # can't train when batch length is 1
         if True:
             if len(action) <= 1:
@@ -146,14 +172,6 @@ class CriticAlgorithm(nn.Module):
         current_q1, current_q2 = self.critic(state, action)
 
         """ max-q-backup not yet integrated, Kumar et al. 2020 """
-        # if self.max_q_backup:
-        #     next_state_rpt = torch.repeat_interleave(next_state, repeats=10, dim=0)
-        #     next_action_rpt = self.ema_model(next_state_rpt)
-        #     target_q1, target_q2 = self.critic_target(next_state_rpt, next_action_rpt)
-        #     target_q1 = target_q1.view(batch_size, 10).max(dim=1, keepdim=True)[0]
-        #     target_q2 = target_q2.view(batch_size, 10).max(dim=1, keepdim=True)[0]
-        #     target_q = torch.min(target_q1, target_q2)
-        # else:
         
         # if using a target network
         if self.use_target_network:
@@ -180,10 +198,12 @@ class CriticAlgorithm(nn.Module):
         if self.use_double_q:
             critic_loss = critic_loss + F.mse_loss(current_q2, target_q, reduction="none")
         
+        # remove nan's for logging
+        if th.any(th.isnan(current_q1)):
+            current_q1 = torch.where(torch.isnan(current_q1), torch.zeros_like(current_q1), current_q1)
+            
         # logging
-        dd = {}
-        dd["qval/" + self.get_mode_string() + ": avg q-value"] = current_q1.mean()
-        globals.LOGGER.log(dd)
+        globals.log_one_if_exists("qval/" + self.get_mode_string() + ": avg qval", current_q1.mean().item())
         
         if reward.mean() > 0.0:
             pass # debugging

@@ -5,7 +5,7 @@
 
 import numpy as np
 import torch as th
-
+th.set_float32_matmul_precision('high') # gets rid of a warning
 
 
 from diffusion_policy.common.pytorch_util import (
@@ -25,6 +25,7 @@ class LBFGSProblem:
                  dtype,
                  action_rel_indices,
                  lbfgs_options,
+                 eps_greedy_eps_value = 0.0,
                  ) -> None:
         self.policy = policy
         self.compiled_policy = compiled_policy
@@ -33,6 +34,9 @@ class LBFGSProblem:
         self.dtype = dtype
         self.action_rel_indices = action_rel_indices
         self.lbfgs_options = lbfgs_options
+        self.eps_greedy_eps_value = eps_greedy_eps_value
+        
+        globals.log_one_if_exists("lbfgs/eps_greedy_eps_value", self.eps_greedy_eps_value)
         
         
     def solve(self, nobs: dict, warm_start_trajectory = None):
@@ -52,6 +56,9 @@ class LBFGSProblem:
         total_nb_proposed_trajectories = warm_start_trajectory.shape[0] if warm_start_trajectory is not None else 0
         nb_proposed_trajectories_per_env = int(total_nb_proposed_trajectories / commons.NB_PARALLEL_ENVS) if total_nb_proposed_trajectories > 0 else 0
         
+        # get the policy
+        policy = self.compiled_policy if self.compiled_policy is not None else self.policy
+        
         # previous action
         naction_prev = nobs['robot_joint_prev_action']
 
@@ -61,7 +68,7 @@ class LBFGSProblem:
 
         # get encoded obs, no grad to save time
         with th.no_grad():
-            nobs_features = self.policy.forward_obs_encoder(this_nobs)
+            nobs_features = policy.forward_obs_encoder(this_nobs)
             global_cond = nobs_features.reshape(nb_envs, -1)
         # dummy trajectory
         if warm_start_trajectory is None:
@@ -104,11 +111,6 @@ class LBFGSProblem:
                                         line_search_fn="strong_wolfe",
                                         # line_search_fn=None, # faster than strong wolfe, but uses the fixed step size from lr
                     )
-        
-        if self.compiled_policy is not None:
-            policy = self.compiled_policy
-        else:
-            policy = self.policy
         
         # initial scores for debugging
         # initial_scores = policy(trajectory, timestep, global_cond=global_cond).squeeze()
@@ -168,14 +170,27 @@ class LBFGSProblem:
             # topk joints by mean abs grad for each env
             topk = 1 # TODO: schedule w.r.t. difficulty scale
             
-            # JUST KNOW: this may contain repeat joints
+            # know this: this may contain repeat joints in different waypoints
             _, topk_indices = th.topk(grads_envs_abs_mean, k=topk, dim=-1) # shape (nb_envs, T, topk)
+                        
+            # epsilon mask for topk_indices
+            eps_mask = th.rand(topk_indices.shape, device=device) < self.eps_greedy_eps_value
+            
+            random_indices = th.randint(0, Da, topk_indices.shape, device=device)
+            
+            topk_indices = th.where(eps_mask, random_indices, topk_indices)
+            
+            # log em
+            # for i in range(T):
+            #     globals.log_one_if_exists(f"lbfgs/{i}_active_joints", int(topk_indices.squeeze()[i].cpu().numpy()))
 
             # make a mask of the active joints, shape (nb_envs, T, Da)
-            active_joints_mask = th.zeros_like(grads_envs_abs_mean).scatter_(-1, topk_indices, 1.0)
+            active_joints_mask_one_per_env = th.zeros_like(grads_envs_abs_mean).scatter_(-1, topk_indices, 1.0)
 
             # reshape and tile the mask. shape: (B, T, Da), recall that B = nb_envs * nb_proposed_trajectories_per_env and each nb_proposed_trajectories_per_env pertains to a specific env
-            active_joints_mask = active_joints_mask.view(nb_envs, 1, T, Da).expand(-1, nb_proposed_trajectories_per_env, -1, -1).reshape(total_nb_proposed_trajectories, T, Da)
+            active_joints_mask = active_joints_mask_one_per_env.view(nb_envs, 1, T, Da).expand(-1, nb_proposed_trajectories_per_env, -1, -1).reshape(total_nb_proposed_trajectories, T, Da)
+            
+            active_joints_mask_one_per_env = active_joints_mask_one_per_env.view(nb_envs, T, Da)
 
         def closure_setup(trajectory):
             # no grad
@@ -243,13 +258,13 @@ class LBFGSProblem:
             initial_losses = closure_get_per_sample_loss()
                  
         # speed up .backward() by not calculating gradients for the policy parameters
-        self.policy.requires_grad_(False)
+        # self.policy.requires_grad_(False) # might actually be slower
         # just to make sure
         with th.enable_grad():
             # only need to call step once    
             optimizer.step(closure) #type:ignore
         # restore grad for policy parameters
-        self.policy.requires_grad_(True)
+        # self.policy.requires_grad_(True)
 
         self.policy.train()
         
@@ -315,6 +330,18 @@ class LBFGSProblem:
 
         # stack
         best_trajs = th.stack(best_trajs)
+        
+        # eps greedy mask on the action magnitude as well?
+        if True:
+            eps_mask = th.rand(best_trajs.shape, device=best_trajs.device) < self.eps_greedy_eps_value
+            
+            random_trajs = self.make_per_joint_noise(best_trajs)
+            
+            # mult by active joints mask
+            assert(active_joints_mask_one_per_env.shape == best_trajs.shape)
+            random_trajs = random_trajs * active_joints_mask_one_per_env
+            
+            best_trajs = th.where(eps_mask, random_trajs, best_trajs)
 
         # we're done
         return best_trajs

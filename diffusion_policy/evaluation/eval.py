@@ -213,7 +213,14 @@ class SimpleInference:
         action = action.numpy()
         all_actions = all_actions.numpy()
         
-        assert(not np.isnan(all_actions).any())
+        # set nans to zero, print a warning
+        if np.isnan(all_actions).any():
+            print("Warning: NaN values found in actions. Setting NaNs to zero.")
+            all_actions = np.where(np.isnan(all_actions), 0.0, all_actions)
+            
+            action = np.where(np.isnan(action), 0.0, action)
+        
+        # assert(not np.isnan(all_actions).any())
         return action, all_actions
 
 class Inference:

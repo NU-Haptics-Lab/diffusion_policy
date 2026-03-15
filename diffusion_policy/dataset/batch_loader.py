@@ -1111,14 +1111,14 @@ class SandboxRobotBCBatchLoader(BatchLoader):
         #     {'min': np.zeros(nb, dtype=np.float32)}
         #     )
         # custom for torque
-        max_torques = 5.0 * np.ones(nb, dtype=np.float32)
+        max_torques = 1.0 * np.ones(nb, dtype=np.float32)
         max_torques[0:6] = np.array([
-            50.0,
+            500.0,
+            500.0,
+            200.0,
+            150.0,
             40.0,
-            30.0,
-            20.0,
-            10.0,
-            10.0,
+            40.0,
         ])
         nns["action"] = get_range_normalizer_from_stat(
             {'min': -max_torques, 'max': max_torques}

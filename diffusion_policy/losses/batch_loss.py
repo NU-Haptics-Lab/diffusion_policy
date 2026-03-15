@@ -913,6 +913,21 @@ class CriticOnlyBatchLoss(BatchLoss):
         # get the DQL losses
         critic_loss = self.critic.loss(nbatch, self.rb_id)
         
+        # remove nan's
+        if torch.isnan(critic_loss).any() or torch.isinf(critic_loss).any():
+            print("Warning: critic loss contains NaN's. Removing NaN samples")
+            # replacing nan's with zeros won't solve the problem since the forward pass likely contains nan's. So we just have to remove those samples from the batch
+            nb_nan = torch.isnan(critic_loss).sum().item()
+            print("Number of NaN samples in critic loss: {}".format(nb_nan))
+            
+            nb_inf = torch.isinf(critic_loss).sum().item()
+            print("Number of Inf samples in critic loss: {}".format(nb_inf))
+            
+            mask_keep = ~(torch.isnan(critic_loss) | torch.isinf(critic_loss))
+            
+            critic_loss = critic_loss[mask_keep]
+            
+        
         # remove outlier losses... use carefully
         # critic_loss2 = self.remove_outliers(critic_loss)
         critic_loss2 = critic_loss
@@ -923,8 +938,7 @@ class CriticOnlyBatchLoss(BatchLoss):
             'critic': critic_loss3
         }
         
-        if globals.LOGGER is not None:
-            globals.LOGGER.log_one("losses/" + self.rb_id + ": critic_loss", critic_loss3)
+        globals.log_one_if_exists("losses/" + self.rb_id + ": critic_loss", critic_loss3)
         
         # we're done
         return losses

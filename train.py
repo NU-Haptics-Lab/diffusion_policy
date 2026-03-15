@@ -70,6 +70,7 @@ def main(cfg: DictConfig):
     # whether we're debugging
     if cfg.debug:  # type: ignore
         cfg.single_thread = True # type: ignore
+        cfg.use_compiled_policy = False
         # no resuming
         cfg.resume = False # type:ignore
         
@@ -118,7 +119,7 @@ def main(cfg: DictConfig):
         if False:
             cfg.use_compiled_policy = False
         
-        torch.autograd.set_detect_anomaly(True) # type: ignore
+        torch.autograd.set_detect_anomaly(True) # type: ignore only use in debugging, it's quite slow
         
     # load using a common local loader, put in a globals dict
     load_global_config_and_save_to_globals_dict(cfg, "train")

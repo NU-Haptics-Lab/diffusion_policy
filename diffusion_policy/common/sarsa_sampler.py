@@ -1019,6 +1019,23 @@ class DatasetSampler:
 
         # get the sample from the episode
         sample = ep.get_sample(ep_tr_idx)
+        
+        # check for nans
+        for key, val in sample.items():
+            if isinstance(val, dict):
+                for subkey, subval in val.items():
+                    if isinstance(val, th.Tensor):
+                        val = val.cpu().numpy()
+                        
+                        if np.any(np.isnan(subval)):
+                            print("DatasetSampler.get_sample: found NaN in sample[{}][{}] for ds_tr_idx {}".format(key, subkey, ds_tr_idx))
+                        
+            else:
+                if isinstance(val, th.Tensor):
+                    val = val.cpu().numpy()
+                    
+                    if np.any(np.isnan(val)):
+                        print("DatasetSampler.get_sample: found NaN in sample[{}] for ds_tr_idx {}".format(key, ds_tr_idx))
 
         # we're done
         return sample
