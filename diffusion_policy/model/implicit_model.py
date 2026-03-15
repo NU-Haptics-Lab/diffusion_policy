@@ -245,7 +245,7 @@ class ImplicitAlgorithm(BaseImagePolicy):
                 if self.use_batch_gd_for_inference:
                     self.compiled_vmap_grad_batch_traj_fcn = torch.compile(self.vmap_grad_batch_traj_fcn, mode="reduce-overhead")
                     
-        self.eps_greedy_eps_scheduler = SimpleLinearScheduler(0.0, 0.25, 1.0, 0.0)
+        self.eps_greedy_eps_scheduler = SimpleLinearScheduler(0.0, globals.CONFIG.implicit_algorithm_eps_greedy_initial_eps, 1.0, 0.0)
 
     # alias
     def predict_action(self, nobs): #type:ignore

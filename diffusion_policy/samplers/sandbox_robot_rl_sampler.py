@@ -64,12 +64,14 @@ class SandboxRobotRLEpisodeSampler(EpisodeSampler):
         # assert(ep_idx <= len(self)-2) # must be -2 since we get the next obs & action
         assert(ep_idx <= len(self)-1) # allow ep_idx to be == len(self)-1. In that case, obs_next will be a repeat of obs
         
+        H = len(globals.CONFIG.action_rel_indices) # type: ignore
+        
         sample = {}
         sample["obs"] = self.get_obs_sample(ep_idx)
-        sample["obs_next"] = self.get_obs_sample(ep_idx + 1) # NOTE: this doesn't take into account the length of the trajectory
+        sample["obs_next"] = self.get_obs_sample(ep_idx + H)
         
         sample["action"] = self.get_action_sample(ep_idx)
-        sample["action_next"] = self.get_action_sample(ep_idx + 1) # NOTE: this doesn't take into account the length of the trajectory ... need to think about the training ramifications...
+        sample["action_next"] = self.get_action_sample(ep_idx + H)
         
         
         sample["reward"] = self.get_reward(ep_idx)

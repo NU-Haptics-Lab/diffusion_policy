@@ -59,38 +59,38 @@ def get_history_indices(
             
     return indices
 
-def get_next_index(
-    episode_ends, 
-    index: int,
-    ):
-    """
-    Get the next index. Ensures it's not past the end of the episode, although this should be taken care of in `create_indices`
-    """
-    lb_idx = get_lower_bound_idx(episode_ends, index)
-    ub_idx = lb_idx + 1
+# def get_next_index(
+#     episode_ends, 
+#     index: int,
+#     ):
+#     """
+#     Get the next index. Ensures it's not past the end of the episode, although this should be taken care of in `create_indices`
+#     """
+#     lb_idx = get_lower_bound_idx(episode_ends, index)
+#     ub_idx = lb_idx + 1
     
-    if ub_idx > len(episode_ends):
-        print("sampler_ql.get_next_index: Something went terribly wrong.")
-        raise
+#     if ub_idx > len(episode_ends):
+#         print("sampler_ql.get_next_index: Something went terribly wrong.")
+#         raise
         
-    return index + 1
+#     return index + 1
 
-def get_not_done(
-    episode_ends,
-    index: int
-    ):
-    lb_idx = get_lower_bound_idx(episode_ends, index)
-    ub_idx = lb_idx + 1
+# def get_not_done(
+#     episode_ends,
+#     index: int
+#     ):
+#     lb_idx = get_lower_bound_idx(episode_ends, index)
+#     ub_idx = lb_idx + 1
     
-    ub_step_idx = episode_ends[ub_idx]
+#     ub_step_idx = episode_ends[ub_idx]
     
-    # if this index is the 2nd to last index in this episode, then it's done (since it needs to get the next_state from the final index).
-    if index == ub_step_idx - 1:
-        not_done = False
-    else:
-        not_done = True
+#     # if this index is the 2nd to last index in this episode, then it's done (since it needs to get the next_state from the final index).
+#     if index == ub_step_idx - 1:
+#         not_done = False
+#     else:
+#         not_done = True
     
-    return not_done
+#     return not_done
 
 class Indices:
     """
@@ -555,9 +555,11 @@ class EpisodeSampler:
     
     def get_not_done(self, ep_idx):
         # last valid sample in the ep => second to last ep_idx, and don't forget python is zero-indexed.
+        indices = self.get_ep_relative_action_indices(ep_idx)
 
         # sanity check: with 2 data-points [d1, d2], len(self) = 2, => ep_idx of 0 is done ... so we add 2
-        done = ep_idx + 2 >= len(self)
+        # if any of the indices of this ep_idx are done, then by the time this trajectory is executed, we will be done.
+        done = np.any(indices + 2 >= len(self))
         not_done = not done
         
         # convert to np array, must add a dimension
@@ -691,14 +693,16 @@ class EpisodeSampler:
         # assert(ep_idx <= len(self)-2) # must be -2 since we get the next obs & action
         assert(ep_idx <= len(self)-1) # allow ep_idx to be == len(self)-1. In that case, obs_next will be a repeat of obs
         
+        H = len(globals.CONFIG.action_rel_indices) # type: ignore
+        
         sample = {}
         sample["obs"] = self.get_obs_sample(ep_idx)
         
         # TODO: only load next obs (and action) if we're doing QL, otherwise it's a slowdown
-        sample["obs_next"] = self.get_obs_sample(ep_idx + 1)
+        sample["obs_next"] = self.get_obs_sample(ep_idx + H)
 
         sample["action"] = self.get_action_sample(ep_idx)
-        sample["action_next"] = self.get_action_sample(ep_idx + 1) # NOTE: this doesn't take into account the length of the trajectory
+        sample["action_next"] = self.get_action_sample(ep_idx + H)
 
         sample["reward"] = self.get_reward(ep_idx)
 

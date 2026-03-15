@@ -72,10 +72,10 @@ def main(cfg: DictConfig):
         cfg.single_thread = True # type: ignore
         cfg.use_compiled_policy = False
         # no resuming
-        cfg.resume = False # type:ignore
+        # cfg.resume = False # type:ignore
         
         cfg.common_dataset.options.common.batch_size = 4 # type: ignore
-        cfg.total_num_epochs = 4 # type: ignore
+        cfg.total_num_epochs = 99999
         cfg.batches_per_epoch = 4 # type: ignore
         cfg.common_dataset.options.train.num_workers = 0 # type: ignore
         cfg.common_dataset.options.train.persistent_workers = False # type: ignore
@@ -104,6 +104,7 @@ def main(cfg: DictConfig):
             cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
             cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
             cfg.session_trainer.epoch_trainer.rollouts.use_freq_schedule = False
+            cfg.session_trainer.epoch_trainer.rollouts.use_freq_calculation = False
             cfg.session_trainer.epoch_trainer.rollouts.env_maker.sandbox_commons_options.NB_PARALLEL_ENVS = 1
             
         # dummy onine rl rb

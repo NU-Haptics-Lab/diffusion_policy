@@ -255,7 +255,7 @@ session_trainer:
       use_ema_model: false
       use_freq_schedule: false
       use_freq_calculation: true
-      use_freq_calculation_target_percent: 0.05
+      use_freq_calculation_target_percent: 0.04
 
 
       env_maker:
@@ -465,8 +465,8 @@ models:
               use_add_noise: true
               use_policy: true # debugging
 
-              l2_reg_weight: 0.0001 # good value: 1.0
-              jerk_weight: 0.0001 # good value ... 1.0?
+              l2_reg_weight: 0.00001 # good value: 1.0
+              jerk_weight: 0.00001 # good value ... 1.0?
               noise_mag: 0.01 # normalized noise mag, on a linear schedule, computed per joint
               policy_weight: 1.0
 
@@ -506,3 +506,16 @@ override:
       rl_replay_buffer:
         sampler:
           rb_id: rl_replay_buffer
+
+
+
+###################################################
+###################################################
+###################################################
+###################################################
+###################################################
+# I hate setting up an entire structure just for tests, but it would be a good habit to not just hard code in the code, so this section is my compromise.
+lbfgs_active_joints_importance_gofa_multiplier: 10.0 # increases the likelihood that gofa joints are randomly selected to be used
+implicit_algorithm_eps_greedy_initial_eps: 0.4 # this is the likelihood that a random joint is activated
+lbfgs_random_action_eps_value: 0.25 # this is the likelihood of randomizing the action of the active joints
+lbfgs_topk: 2 # nb of joints to activate for each waypoint

@@ -166,26 +166,36 @@ class LBFGSProblem:
 
             # mean the abs over the batch dim
             grads_envs_abs_mean = grads_envs_abs.mean(dim=1) # shape (nb_envs, T, Da)
+            
+            # saying the importance is proportional to the grad abs mean
+            active_joints_importance = grads_envs_abs_mean
 
             # topk joints by mean abs grad for each env
-            topk = 1 # TODO: schedule w.r.t. difficulty scale
+            topk = globals.CONFIG.lbfgs_topk # TODO: schedule w.r.t. difficulty scale
             
             # know this: this may contain repeat joints in different waypoints
-            _, topk_indices = th.topk(grads_envs_abs_mean, k=topk, dim=-1) # shape (nb_envs, T, topk)
+            topk_values, topk_indices = th.topk(active_joints_importance, k=topk, dim=-1) # shape (nb_envs, T, topk)
                         
             # epsilon mask for topk_indices
             eps_mask = th.rand(topk_indices.shape, device=device) < self.eps_greedy_eps_value
             
-            random_indices = th.randint(0, Da, topk_indices.shape, device=device)
+            # weighted random indices
+            weights = th.ones((nb_envs*T, Da), device=device)
             
+            if True:
+                weights[:, :6] *= globals.CONFIG.lbfgs_active_joints_importance_gofa_multiplier # type: ignore
+                
+            # set replacement to False to get more variety
+            random_indices = th.multinomial(weights, num_samples=topk_indices.shape[-1], replacement=False).view(topk_indices.shape)
+                        
             topk_indices = th.where(eps_mask, random_indices, topk_indices)
             
-            # log em
+            # # log em
             # for i in range(T):
             #     globals.log_one_if_exists(f"lbfgs/{i}_active_joints", int(topk_indices.squeeze()[i].cpu().numpy()))
 
             # make a mask of the active joints, shape (nb_envs, T, Da)
-            active_joints_mask_one_per_env = th.zeros_like(grads_envs_abs_mean).scatter_(-1, topk_indices, 1.0)
+            active_joints_mask_one_per_env = th.zeros_like(active_joints_importance).scatter_(-1, topk_indices, 1.0)
 
             # reshape and tile the mask. shape: (B, T, Da), recall that B = nb_envs * nb_proposed_trajectories_per_env and each nb_proposed_trajectories_per_env pertains to a specific env
             active_joints_mask = active_joints_mask_one_per_env.view(nb_envs, 1, T, Da).expand(-1, nb_proposed_trajectories_per_env, -1, -1).reshape(total_nb_proposed_trajectories, T, Da)
@@ -333,7 +343,7 @@ class LBFGSProblem:
         
         # eps greedy mask on the action magnitude as well?
         if True:
-            eps_mask = th.rand(best_trajs.shape, device=best_trajs.device) < self.eps_greedy_eps_value
+            eps_mask = th.rand(best_trajs.shape, device=best_trajs.device) < globals.CONFIG.lbfgs_random_action_eps_value # type: ignore
             
             random_trajs = self.make_per_joint_noise(best_trajs)
             
