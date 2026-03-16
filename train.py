@@ -131,6 +131,7 @@ def main(cfg: DictConfig):
     # run it
     print("Begin running.")
     try:
+        assert(isinstance(globals.SESSION_TRAINER, SessionTrainer))
         globals.SESSION_TRAINER.run()
     except KeyboardInterrupt:
         if input("Save a checkpoint? y/n ") == 'y':

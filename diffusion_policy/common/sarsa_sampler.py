@@ -692,7 +692,6 @@ class EpisodeSampler:
         return dict with keys (obs, action, reward, not_done, obs_next)
         """
         assert(ep_idx >= 0)
-        # assert(ep_idx <= len(self)-2) # must be -2 since we get the next obs & action
         assert(ep_idx <= len(self)-1) # allow ep_idx to be == len(self)-1. In that case, obs_next will be a repeat of obs
         
         H = len(globals.CONFIG.action_rel_indices) # type: ignore

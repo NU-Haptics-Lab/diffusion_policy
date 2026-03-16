@@ -4,7 +4,7 @@
 ###################################################
 description: "sandbox_rl_12: running the Drake sandbox RL env. implicit actor policy (aka no actor, online GA from the critic). Torque outputs for direct Drake execution. Including loss data as an obs. Include prev robot action. Sample init actions from BC dataset. No more denoising_critic. More similar to flow matching algs now. Just push-t for now. sandbox3.zarr. Use reverse curriculum generation. added more penalties (energy, limits, contacts). adding previous robot joint action. back to inference sgfds. Turned off all gym penalties, using lbfgs penalties to enforce them. IMO makes a lot of sense because they're well defined and dense. Another advantage: can be changed without retraining"
 # global controls
-debug: false # 
+debug: true # 
 profile: false # whether to profile stuff
 single_thread: false # nice for debugging
 use_compiled_policy: false # set false for debugging or if nb iterations == 0. working well now, first inference will be much slower, but subsequent inferences are ~2x faster. Didn't see a huge speedup in training. A much bigger impact was how many samples I did inference with
