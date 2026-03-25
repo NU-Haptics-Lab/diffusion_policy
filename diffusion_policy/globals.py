@@ -11,10 +11,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from diffusion_policy.common.replay_buffer_loader import ReplayBufferLoader
-from diffusion_policy.model.models import Models
+# from diffusion_policy.model.models import Models
 from diffusion_policy.common.checkpointer import TopKCheckpointManager
 from diffusion_policy.common.logging import Logging
-import diffusion_policy.dataset.train_and_val as train_and_val 
+# import diffusion_policy.dataset.train_and_val as train_and_val 
 # import DataLoaders
 
 
@@ -44,12 +44,12 @@ REPLAY_BUFFER_LOADER: ReplayBufferLoader | None
 """
 Contains both train and val data loaders
 """
-DATALOADERS: train_and_val.DataLoaders | None
+DATALOADERS = None
 
 """
 Contains all models used in training
 """
-MODELS: Models | None = None
+MODELS = None
 
 """ Epoch count """
 EPOCH = 1 # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoch
@@ -86,7 +86,7 @@ class GlobalConfig:
         
         REPLAY_BUFFER_LOADER: ReplayBufferLoader | None,
         
-        DATALOADERS: train_and_val.DataLoaders | None,
+        DATALOADERS: None,
         
         LOGGER: Logging | None,
         
@@ -96,7 +96,7 @@ class GlobalConfig:
         
         SESSION_TRAINER,
         
-        MODELS: Models | None = None,
+        MODELS = None,
         
         EPOCH = 1, # start on 1 so that the fcn EveryEpoch doesn't fire on the first epoch
         

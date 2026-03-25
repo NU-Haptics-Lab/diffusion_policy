@@ -1,0 +1,21 @@
+
+env_loss_params:
+  _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.SandboxLoss
+
+  penalty_options:
+    _target_: avatar_drake_sim.sims.sandbox.leafs.sandbox_loss.PenaltyOptions
+
+  use_cap_rewards: false
+  
+state_loader:
+  config_path: /home/omnid/dexnex/libraries/diffusion_policy/diffusion_policy/config/sampler/sandbox_sampler_rl_5.yaml
+  use_dataset_state_initialization: true
+  use_state_perturbations: true # they're all zeros right now, jsyk
+  use_reverse_curriculum_generation: true
+
+  keys_to_perturb:
+    - robot_joint_pos
+    - robot_joint_vel
+    - robot_joint_prev_action
+    - object_quat
+    - object_pos
