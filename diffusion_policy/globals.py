@@ -123,10 +123,12 @@ GLOBALS_DICT: dict[str, GlobalConfig] = {}
 ########################################
 ########################################
 
-def load_global_config(cfg: DictConfig, cfg_key):
+def load_global_config(cfg: DictConfig | dict, cfg_key):
     """
     loads the global config locally, does not save to the current global vars
     """
+    cfg = DictConfig(cfg)
+    
     # Temporarily disable strict mode to add new keys
     OmegaConf.set_struct(cfg, False) # type: ignore
     
@@ -263,7 +265,7 @@ def load_config_to_global(config_key):
     
     pass
     
-def load_config_direct_to_global(config):
+def load_config_direct_to_global(config: DictConfig | dict):
     # this is for when we don't want to save to the GLOBALS_DICT, but just want to load a config directly to the global vars
     load_global_config(config, "direct_load")
     load_config_to_global("direct_load")
