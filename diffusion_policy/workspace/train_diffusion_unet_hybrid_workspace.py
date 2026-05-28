@@ -124,7 +124,7 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
-            save_dir=os.path.join(self.output_dir, 'checkpoints'),
+            output_dir=self.output_dir,
             **cfg.checkpoint.topk
         )
 

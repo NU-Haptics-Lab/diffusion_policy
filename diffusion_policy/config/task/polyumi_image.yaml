@@ -1,0 +1,27 @@
+name: polyumi_image
+
+image_shape: &image_shape [3, 256, 256]
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    image:
+      shape: *image_shape
+      type: rgb
+    agent_pos:
+      shape: [8]
+      type: low_dim
+  action:
+    shape: [8]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.noop_image_runner.NoopImageRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.polyumi_image_dataset.PolyUMIImageDataset
+  zarr_path: /media/dexnex_ssd/polyumi/replay_buffers/scene_2026-05-26_17-25-43_d044.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.0
+  max_train_episodes: null
