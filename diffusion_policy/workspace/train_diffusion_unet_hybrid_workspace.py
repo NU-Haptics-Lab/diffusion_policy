@@ -162,8 +162,13 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
 
-                        # compute loss
-                        raw_loss = self.model.compute_loss(batch)
+                        # compute loss (bf16 autocast when training.use_amp; bf16 needs no GradScaler)
+                        with torch.autocast(
+                            device_type='cuda',
+                            dtype=torch.bfloat16,
+                            enabled=bool(cfg.training.get('use_amp', False)),
+                        ):
+                            raw_loss = self.model.compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
@@ -223,15 +228,18 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                         val_action_mse_errors = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                            # Validation runs in fp32 intentionally: bf16 slows the 100-step
+                            # DDPM denoising loop inside ``predict_action`` (repeated bf16↔fp32
+                            # casts per scheduler step outweigh the matmul speedup).
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                                 loss = self.model.compute_loss(batch)
                                 val_losses.append(loss)
-                                
+
                                 # action mse
                                 obs_dict = batch['obs']
                                 gt_action = batch['action']
-                                
+
                                 result = policy.predict_action(obs_dict)
                                 pred_action = result['action_pred']
                                 mse = torch.nn.functional.mse_loss(pred_action, gt_action)
@@ -260,11 +268,12 @@ class TrainDiffusionUnetHybridWorkspace(BaseWorkspace):
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
-                        # sample trajectory from training set, and evaluate difference
+                        # sample trajectory from training set, and evaluate difference.
+                        # Inference (predict_action) runs in fp32 — see note in val loop.
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
                         gt_action = batch['action']
-                        
+
                         result = policy.predict_action(obs_dict)
                         pred_action = result['action_pred']
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)

@@ -7,8 +7,8 @@ shape_meta: &shape_meta
     image:
       shape: *image_shape
       type: rgb
-    agent_pos:
-      shape: [8]
+    agent_pos:                  # gripper width only — absolute pose is excluded
+      shape: [1]
       type: low_dim
   action:
     shape: [8]
@@ -20,8 +20,9 @@ dataset:
   _target_: diffusion_policy.dataset.polyumi_image_dataset.PolyUMIImageDataset
   zarr_path: /media/dexnex_ssd/polyumi/replay_buffers/scene_2026-05-26_17-25-43_d044.zarr
   horizon: ${horizon}
-  pad_before: ${eval:'${n_obs_steps}-1'}
-  pad_after: ${eval:'${n_action_steps}-1'}
+  pad_before: 0
+  pad_after: 0
   seed: 42
-  val_ratio: 0.0
+  val_ratio: 0.02
   max_train_episodes: null
+  cache_to_gpu: cuda:0    # set to e.g. "cuda:0" to keep the buffer on GPU; needs num_workers=0

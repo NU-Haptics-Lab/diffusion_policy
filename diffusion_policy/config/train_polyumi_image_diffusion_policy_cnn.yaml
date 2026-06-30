@@ -5,22 +5,27 @@ checkpoint:
   save_last_snapshot: false
   topk:
     format_str: epoch={epoch:04d}-train_loss={train_loss:.4f}.ckpt
-    k: 5
+    k: 10
     mode: max
     monitor_key: epoch
 
+# Dataloader settings are coupled to task.dataset.cache_to_gpu:
+#   cache_to_gpu=true → num_workers=0, persistent_workers=false, pin_memory=false
+#                       (GPU tensors can't cross workers or be pinned)
+#   cache_to_gpu=null → num_workers>0, persistent_workers=true,  pin_memory=true
+#                       (standard host→device pipeline; CPU samples)
 dataloader:
-  batch_size: 16
-  num_workers: 4
+  batch_size: 64
+  num_workers: 0
   persistent_workers: false
-  pin_memory: true
+  pin_memory: false
   shuffle: true
 
 val_dataloader:
-  batch_size: 16
-  num_workers: 2
+  batch_size: 64
+  num_workers: 0
   persistent_workers: false
-  pin_memory: true
+  pin_memory: false
   shuffle: false
 
 dataset_obs_steps: 2
@@ -76,13 +81,13 @@ policy:
   cond_predict_scale: true
   crop_shape: [240, 240]
   diffusion_step_embed_dim: 128
-  down_dims: [512, 1024, 2048]
+  down_dims: [128, 256, 512]
   eval_fixed_crop: true
   horizon: 16
   kernel_size: 5
   n_action_steps: 8
   n_groups: 8
-  n_obs_steps: 2
+  n_obs_steps: 1
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
     beta_end: 0.02
@@ -98,14 +103,14 @@ policy:
   shape_meta:
     action: {shape: [8]}
     obs:
-      agent_pos: {shape: [8], type: low_dim}
       image: {shape: [3, 256, 256], type: rgb}
+      agent_pos: {shape: [1], type: low_dim}      # gripper width only
 
 shape_meta:
   action: {shape: [8]}
   obs:
-    agent_pos: {shape: [8], type: low_dim}
     image: {shape: [3, 256, 256], type: rgb}
+    agent_pos: {shape: [1], type: low_dim}
 
 task:
   name: polyumi_image
@@ -113,36 +118,46 @@ task:
   shape_meta:
     action: {shape: [8]}
     obs:
-      agent_pos: {shape: [8], type: low_dim}
       image: {shape: [3, 256, 256], type: rgb}
+      agent_pos: {shape: [1], type: low_dim}
   env_runner:
     _target_: diffusion_policy.env_runner.noop_image_runner.NoopImageRunner
   dataset:
     _target_: diffusion_policy.dataset.polyumi_image_dataset.PolyUMIImageDataset
     zarr_path: /media/dexnex_ssd/polyumi/replay_buffers/scene_2026-05-26_17-25-43_d044.zarr
     horizon: 16
-    pad_before: 1     # n_obs_steps - 1
-    pad_after: 7      # n_action_steps - 1
+    pad_before: 0     # n_obs_steps - 1
+    pad_after: 0      # n_action_steps - 1
     seed: 42
-    val_ratio: 0.0
+    val_ratio: 0.01
     max_train_episodes: null
+    # Set to e.g. "cuda:0" to load the full buffer onto GPU and skip per-step disk I/O.
+    # When enabled, set dataloader.num_workers=0 and pin_memory=false in both train and
+    # val loaders (GPU tensors can't cross process boundaries or be pinned).
+    cache_to_gpu: cuda:0
 
 task_name: polyumi_image
 
 training:
-  checkpoint_every: 50
+  checkpoint_every: 25
   debug: false
   device: cuda:0
+  # bf16 mixed-precision autocast on the train forward pass. Off by default because
+  # empirically it regressed throughput at both bs=2 (~20%) and bs=64 (~10%) on the
+  # 3090 for this U-Net: TF32 already covers most matmul speedup, and small ops like
+  # GroupNorm fall back to fp32 with repeated dtype crossings. Re-enable once we add
+  # torch.compile or channels_last. No GradScaler needed for bf16.
+  use_amp: false
   gradient_accumulate_every: 1
   lr_scheduler: cosine
   lr_warmup_steps: 500
   max_train_steps: null
-  max_val_steps: null
-  num_epochs: 500
-  resume: true
+  max_val_steps: 5
+  num_epochs: 250
+  resume: false
   rollout_every: 999999   # no env to roll out against
   sample_every: 5
   seed: 42
   tqdm_interval_sec: 1.0
   use_ema: true
-  val_every: 1
+  val_every: 25
