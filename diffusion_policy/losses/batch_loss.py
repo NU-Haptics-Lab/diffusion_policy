@@ -42,6 +42,9 @@ class BatchLoss:
         self.loss_clip_value = loss_clip_value
         self.remove_outlier_losses = remove_outlier_losses
         
+    def __len__(self):
+        return len(self.batch_loader)
+        
     def setup(self):
         # save handles to nodes
         self.actor: ModelEmaOptim = globals.MODELS["actor"] #type:ignore

@@ -56,6 +56,10 @@ def CalcSumEval(w_batch_losses):
     batch_loss: WeightedBatchLoss
     # iterate over the batch losses and get the total loss
     for key, batch_loss in w_batch_losses.items():
+        # len check
+        if len(batch_loss) == 0:
+            continue
+        
         # task toggle check
         if key not in globals.CONFIG.tasks_to_use:
             continue

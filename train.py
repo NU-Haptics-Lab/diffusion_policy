@@ -99,7 +99,7 @@ def main(cfg: DictConfig):
         #     cfg.step_freqs[key] = 1
         
         # testing rollouts
-        if True:
+        if False:
             cfg.session_trainer.epoch_trainer.rollouts.freq = 1 # type:ignore
             cfg.session_trainer.epoch_trainer.rollouts.num_rollouts_per_trigger = 1
             cfg.session_trainer.epoch_trainer.rollouts.warmup_nb_steps = 0
@@ -108,7 +108,7 @@ def main(cfg: DictConfig):
             cfg.session_trainer.epoch_trainer.rollouts.env_maker.sandbox_commons_options.NB_PARALLEL_ENVS = 1
             
         # dummy onine rl rb
-        if True:
+        if False:
             data_dir = cfg.data_directory
             
             cfg.replay_buffer_loader.rb_paths.rl_replay_buffer = data_dir + "dummy_small_rb_rl_12.zarr"

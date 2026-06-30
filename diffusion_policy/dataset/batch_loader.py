@@ -373,8 +373,19 @@ class BatchLoader:
         self.strict = strict
         
         self.dataloaders = None #type:ignore
+        self.iterator = None
         
         self.is_setup = False
+        
+    def __len__(self):
+        if self.use_dataloader and self.dataloaders is not None:
+            dataloader = self.dataloaders[self.train_or_val]
+            if dataloader is None:
+                return 0
+            else:
+                return len(dataloader)
+        else:
+            return 0
         
     def setup(self):
         
@@ -528,7 +539,12 @@ class BatchLoader:
         # forces a reshuffle
         if self.use_dataloader and self.dataloaders is not None:
             dataloader = self.dataloaders[self.train_or_val]
-            self.iterator = iter(dataloader)
+            
+            if dataloader is None:
+                self.iterator = None
+                print("Note: setting batch_loader.iterator to None.")
+            else:
+                self.iterator = iter(dataloader)
             
             # print("New len iterator: {}".format(len(dataloader)))
         else:
@@ -1181,3 +1197,59 @@ class NestedBatchLoader(dict):
     """
     Extend BatchLoader functionality to multiple BatchLoaders. Useful when doing co-training on different datasets
     """
+    
+class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
+    """
+    BatchLoader for task 24 (erlenmeyer flask insertion).
+
+    Zarr keys produced by gen_dataset.py:
+      joint_states          [T, 30]  — gofa(6)+wrist(2)+th(5)+ff(4)+mf(4)+rf(4)+lf(5)
+      joint_commands        [T, 30]  — same layout, used as action
+      wrist_cam_features    [T, 768] — DINOv2 ViT-B/14 CLS token
+      overhead_cam_features [T, 768] — DINOv2 ViT-B/14 CLS token
+      biotac_lh             [T, D]   — already normalised to [0, 1]
+
+    Joint limits in JOINT_LIMITS only cover 21 joints (no rf/lf), so both
+    joint_states and joint_commands are fitted from data in get_fitted_nns.
+    DINOv2 features are also fitted (range varies by scene/lighting).
+    biotac_lh keeps its identity normalizer (already [0, 1]).
+    """
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+        return nns
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
+        act_key: str = globals.CONFIG.action_key  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            if obs_key == 'biotac_lh':
+                # already normalised to [0, 1] at recording time — keep identity
+                continue
+            if obs_key in rb:
+                self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+
+        if act_key in rb:
+            self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns

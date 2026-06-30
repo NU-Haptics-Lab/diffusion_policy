@@ -396,6 +396,7 @@ class TrainAndVal:
         if len(self.val_dataset) > 0:
             self.dd["val"] = self.val_dataloader
         else:
+            print("Warning: len(self.val_dataset) == 0 for rb_id: {}".format(self.rb_id))
             self.dd["val"] = None
         
         print(self.rb_id + ": len train dataset (nb batches): {}".format(len(self.train_dataloader)))
