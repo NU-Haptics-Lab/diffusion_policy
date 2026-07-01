@@ -273,8 +273,8 @@ common_dataset:
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
-  use_weighted_dataloader: true # will override options
-  preload_to_gpu: true
+  use_weighted_dataloader: true 
+  preload_to_gpu: true # will override options
 
   options:
     common:
