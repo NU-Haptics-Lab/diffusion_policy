@@ -1181,6 +1181,10 @@ class DatasetSampler:
         
         else:
             nb = int(nb_datapts * ratio)
+            
+            # at least one
+            nb = max(1, nb)
+            
             choices = rng.choice(nb_datapts, size=nb, replace=False)
             
             mask = np.zeros((nb_datapts), dtype=bool)

@@ -974,6 +974,9 @@ class WeightedBatchLoss:
     def setup(self):
         self.batch_loss.setup()
         
+    def __len__(self):
+        return len(self.batch_loss)
+        
     def weight_loss(self, loss):
         # type protection
         assert(isinstance(loss, torch.Tensor))

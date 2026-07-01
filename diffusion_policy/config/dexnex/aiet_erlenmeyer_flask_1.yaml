@@ -4,7 +4,7 @@
 ###################################################
 description: "aiet_erlenmeyer_flask_1: training for the aiet erlenmeyer flask task. left side only."
 # global controls
-debug: true #
+debug: false #
 single_thread: false 
 use_compiled_policy: false
 total_num_epochs: 501
@@ -273,7 +273,8 @@ common_dataset:
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
-  use_weighted_dataloader: true
+  use_weighted_dataloader: true # will override options
+  preload_to_gpu: true
 
   options:
     common:

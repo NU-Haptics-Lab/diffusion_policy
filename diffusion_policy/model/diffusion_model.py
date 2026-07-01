@@ -188,6 +188,9 @@ class DiffusionModel(BaseImagePolicy):
         
         self.embed_task_id = embed_task_id
         
+        # Nones
+        self.obs_encoder = None
+        
         
     def setup(self):
         self.obs_encoder_maker.setup()

@@ -203,6 +203,7 @@ class ModelEmaOptim(Base):
         
     def setup(self):
         # setup
+        self.model.setup()
         self.ema.setup(self.model.get_model())
         self.optim.setup(self.model.get_model())
             

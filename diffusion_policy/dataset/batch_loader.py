@@ -1211,11 +1211,17 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
 
     Joint limits in JOINT_LIMITS only cover 21 joints (no rf/lf), so both
     joint_states and joint_commands are fitted from data in get_fitted_nns.
-    DINOv2 features are also fitted (range varies by scene/lighting).
     biotac_lh keeps its identity normalizer (already [0, 1]).
+    
+    For now, don't normalize the dinov2 features
     """
 
     def get_static_nns(self):
+        """
+        default identity normalizers
+        
+        nns['action'] is hard-coded in diffusion_model and must be used
+        """
         nns = {}
         obs = {}
         obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
@@ -1241,13 +1247,14 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
         obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
         act_key: str = globals.CONFIG.action_key  # type: ignore
+        
+        obs_keys_to_normalize = [
+            "joint_states",
+        ]
 
-        for obs_key in obs_keys_to_load:
-            if obs_key == 'biotac_lh':
-                # already normalised to [0, 1] at recording time — keep identity
-                continue
-            if obs_key in rb:
-                self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+        for obs_key in obs_keys_to_normalize:
+            assert obs_key in obs_keys_to_load, f"Observation key '{obs_key}' is not in the list of keys to load."
+            self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
 
         if act_key in rb:
             self.fit_nn(rb[act_key], nns['action'], act_key)

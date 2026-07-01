@@ -29,7 +29,7 @@ from contextlib import contextmanager
 """
 the current config key
 """
-CURRENT_CONFIG_KEY = ""
+CURRENT_CONFIG_KEY = "default_null"
 
 """
 Global config access
@@ -206,7 +206,7 @@ def load_global_config(cfg: DictConfig | dict, cfg_key):
     
     # must do the following within a context to maintain the correct global state
     with use_config(cfg_key):
-        ## now must call setup methods for all nodes
+        ## now must call setup methods for all "nodes"
         if LOGGER is not None:
             LOGGER.setup()
             
@@ -280,7 +280,8 @@ def use_config(cfg_key):
         
     # revert to backup config
     finally:
-        load_config_to_global(backup)
+        if backup != "default_null":
+            load_config_to_global(backup)
         
 def save_current_config_to_globals(cfg_key):
     global CURRENT_CONFIG_KEY, CONFIG, REPLAY_BUFFER_LOADER, DATALOADERS, LOGGER, CHECKPOINTER, DEFAULT_BATCH_LOADER, MODELS, SESSION_TRAINER

@@ -19,6 +19,10 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
         return obs_sample
 
     def get_sample(self, ep_idx):
+        """
+        note: nns['action'] is hard-coded in diffusion_model and must be used
+        """
+        
         assert ep_idx >= 0
         assert ep_idx <= len(self) - 1
 
@@ -27,6 +31,6 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
         sample["obs"] = self.get_obs_sample(ep_idx)
 
         act_key = globals.CONFIG.action_key  # type: ignore
-        sample[act_key] = self.get_action_trajectory(ep_idx, act_key)
+        sample["action"] = self.get_action_trajectory(ep_idx, act_key)
 
         return sample
