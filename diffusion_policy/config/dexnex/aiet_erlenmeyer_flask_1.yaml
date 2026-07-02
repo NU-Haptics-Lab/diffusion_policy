@@ -4,7 +4,7 @@
 ###################################################
 description: "aiet_erlenmeyer_flask_1: training for the aiet erlenmeyer flask task. left side only."
 # global controls
-debug: false #
+debug: true #
 single_thread: false 
 use_compiled_policy: false
 total_num_epochs: 501
@@ -164,10 +164,6 @@ common_obs_encoder:
       shape:
       - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
       
-    joint_commands:
-      shape:
-      - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
-
     wrist_cam_features:
       shape:
       - 768
