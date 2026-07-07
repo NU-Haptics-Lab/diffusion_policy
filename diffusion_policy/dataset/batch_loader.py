@@ -1260,3 +1260,64 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
             self.fit_nn(rb[act_key], nns['action'], act_key)
 
         return nns
+    
+
+class TroubleshootClenchBatchLoader(BatchLoader):
+    """
+    BatchLoader for task 24 (erlenmeyer flask insertion).
+
+    Zarr keys produced by gen_dataset.py:
+      joint_commands        [T, 30]  — same layout, used as action
+      wrist_cam_features    [T, 768] — DINOv2 ViT-B/14 CLS token
+      biotac_lh             [T, D]   — already normalised to [0, 1]
+
+    Joint limits in JOINT_LIMITS only cover 21 joints (no rf/lf), so both
+    joint_states and joint_commands are fitted from data in get_fitted_nns.
+    biotac_lh keeps its identity normalizer (already [0, 1]).
+    
+    For now, don't normalize the dinov2 features
+    """
+
+    def get_static_nns(self):
+        """
+        default identity normalizers
+        
+        nns['action'] is hard-coded in diffusion_model and must be used
+        """
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+        return nns
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
+        act_key: str = globals.CONFIG.action_key  # type: ignore
+        
+        obs_keys_to_normalize = [
+        ]
+
+        for obs_key in obs_keys_to_normalize:
+            assert obs_key in obs_keys_to_load, f"Observation key '{obs_key}' is not in the list of keys to load."
+            self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+
+        if act_key in rb:
+            self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns

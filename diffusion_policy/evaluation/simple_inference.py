@@ -36,14 +36,15 @@ class SimpleInference:
         # save a handle
         self.batch_loader = globals.DEFAULT_BATCH_LOADER
 
-        # make the scheduler, hard-coded
+        # make the scheduler, hard-coded except prediction_type which callers
+        # may override via globals.CONFIG.prediction_type before calling setup()
         self.noise_scheduler = DDIMScheduler(
             beta_end=0.02,
             beta_schedule="squaredcos_cap_v2",
             beta_start=0.0001,
             clip_sample=True,
             num_train_timesteps=globals.CONFIG.common_noise_scheduler.num_train_timesteps, # type:ignore
-            prediction_type="epsilon"
+            prediction_type=getattr(globals.CONFIG.common_noise_scheduler, "prediction_type", "epsilon"),
         )
         self.noise_scheduler.set_timesteps(globals.CONFIG.num_inference_steps) # type:ignore
 

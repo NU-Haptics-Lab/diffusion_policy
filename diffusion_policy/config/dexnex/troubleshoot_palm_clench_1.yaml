@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_erlenmeyer_flask_1: training for the aiet erlenmeyer flask task. left side only."
+description: "troubleshoot_palm_clench_1: clench and unclench."
 # global controls
 debug: false #
 single_thread: false 
@@ -25,10 +25,10 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_erlenmeyer_flask_1
+run_tag: troubleshoot_palm_clench_1
 
-resume_tag: step=0010115
-output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_1
+resume_tag: step=0011941
+output_dir: /media/dexnex_ssd/models/troubleshoot_palm_clench_1
 
 tasks_to_use:
   - all
@@ -37,17 +37,11 @@ tasks_to_use:
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
-  - joint_states
   - wrist_cam_features
-  - overhead_cam_features
-  - biotac_lh
 
 # which obs the sarsa_sampler will load from the replay buffer
 obs_keys_to_load:
-  - joint_states
   - wrist_cam_features
-  - overhead_cam_features
-  - biotac_lh
 
 models_to_train:
   - actor
@@ -107,10 +101,6 @@ checkpoint:
 
 # common data 
 shape_meta:
-  joint_states:
-    shape:
-    - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
-    
   joint_commands:
     shape:
     - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
@@ -118,14 +108,6 @@ shape_meta:
   wrist_cam_features:
     shape:
     - 768
-
-  overhead_cam_features:
-    shape:
-    - 768
-    
-  biotac_lh:
-    shape:
-    - 5
 
 
 training:
@@ -160,21 +142,9 @@ common_obs_encoder:
   cw: null
 
   lowdims:
-    joint_states:
-      shape:
-      - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
-      
     wrist_cam_features:
       shape:
       - 768
-
-    overhead_cam_features:
-      shape:
-      - 768
-      
-    biotac_lh:
-      shape:
-      - 5
 
 
 
@@ -196,16 +166,15 @@ common_indices:
 replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
 
-  # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
-    all: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    all: /media/dexnex_ssd/datasets/troubleshoot_task_palm_clenched.zarr
 
   modes:
     all: r
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
-  _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlaskBatchLoader
+  _target_: diffusion_policy.dataset.batch_loader.TroubleshootClenchBatchLoader
   rb_id: "default" # forces a load
   train_or_val: eval # unnecessary during inference
   use_dataloader: false # must be false during inference
@@ -254,7 +223,7 @@ common_wbatch_loss:
     # children
     # for normalizing
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlaskBatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.TroubleshootClenchBatchLoader
       rb_id: default # forces a load
       train_or_val: train
 
@@ -292,7 +261,7 @@ common_dataset:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
-    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_sampler.AIETErlenmeyerFlaskSampler
+    ep_sampler_class_str: diffusion_policy.samplers.troubleshoot_task_sampler.TroubleshootTaskSampler
 
     # child
 
@@ -363,7 +332,7 @@ common_noise_scheduler:
   beta_start: 0.0001
   clip_sample: true # apparently you want this true when prediction_type is sample
   num_train_timesteps: 100
-  prediction_type: sample # epsilon or sample
+  prediction_type: sample # epsilon or sample. sample for the troubleshooting task
      
 device: cuda:0
 
