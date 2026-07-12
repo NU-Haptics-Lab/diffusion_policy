@@ -7,9 +7,9 @@ description: "aiet_erlenmeyer_flask_1: training for the aiet erlenmeyer flask ta
 debug: false #
 single_thread: false 
 use_compiled_policy: false
-total_num_epochs: 501
+total_num_epochs: 2001
 batches_per_epoch: 100
-batch_size: 64
+batch_size: 128
 val_every: 20
 
 action_key: joint_commands
@@ -22,12 +22,12 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
 run_tag: aiet_erlenmeyer_flask_1
 
-resume_tag: step=0010115
+resume_tag: step=0004648
 output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_1
 
 tasks_to_use:
@@ -94,7 +94,7 @@ checkpoint:
 
   format_str: step={global_step:07d}.ckpt
   k: 50 # nb checkpoints to keep
-  checkpoint_every: 50 # how often, in epochs
+  checkpoint_every: 100 # how often, in epochs
   mode: max
   monitor_key: epoch
   use_current_directory: false # use ${output_dir} as the base
@@ -117,11 +117,11 @@ shape_meta:
 
   wrist_cam_features:
     shape:
-    - 768
+    - 1024 # dinov3 large
 
   overhead_cam_features:
     shape:
-    - 768
+    - 1024 # dinov3 large
     
   biotac_lh:
     shape:
@@ -166,11 +166,11 @@ common_obs_encoder:
       
     wrist_cam_features:
       shape:
-      - 768
+      - 1024 # dinov3 large
 
     overhead_cam_features:
       shape:
-      - 768
+      - 1024 # dinov3 large
       
     biotac_lh:
       shape:
@@ -361,7 +361,7 @@ common_noise_scheduler:
   beta_end: 0.02
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
-  clip_sample: true # apparently you want this true when prediction_type is sample
+  clip_sample: true # apparently you want this true when prediction_type is sample. NOTE: THIS CLIPS TO -CLIP_SAMPLE_RANGE, CLIP_SAMPLE_RANGE SO MAKE SURE YOU NORMALIZE THE ACTIONS TO THAT RANGE
   num_train_timesteps: 100
   prediction_type: sample # epsilon or sample
      
