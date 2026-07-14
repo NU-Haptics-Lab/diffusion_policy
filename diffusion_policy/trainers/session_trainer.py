@@ -26,7 +26,14 @@ class SessionTrainer:
         Run for one session
         """
         globals.LOGGER.log_one("epoch", globals.EPOCH) # edge-case compat for when we save <1 epoch after beginning the session
-            
+
+        # save an initial checkpoint before any training occurs, so step 0 is always recoverable
+        # (bypass force_save's top-k logic here, since no metrics have been logged yet)
+        if not globals.CHECKPOINTER.resume:
+            globals.CHECKPOINTER.save_checkpoint(tag='step_0')
+            if globals.CHECKPOINTER.save_last_ckpt:
+                globals.CHECKPOINTER.save_checkpoint()
+
         while globals.EPOCH < globals.CONFIG.total_num_epochs: #type:ignore
             # train for one epoch
             self.epoch_trainer.train()

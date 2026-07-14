@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import einops
 import diffusion_policy.model.bet.latent_generators.latent_generator as latent_generator
 
-from diffusion_policy.model.diffusion.transformer_for_diffusion import TransformerForDiffusion
+from diffusion_policy.model.diffusion.dexnex_transformer_for_diffusion import TransformerForDiffusion
 from diffusion_policy.model.bet.libraries.loss_fn import FocalLoss, soft_cross_entropy
 
 from typing import Optional, Tuple

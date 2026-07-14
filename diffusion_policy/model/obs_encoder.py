@@ -1,11 +1,54 @@
+from collections import OrderedDict
+import numpy as np
 import torch
 import torch.nn as nn
 
 
 import diffusion_policy.globals as globals
 import robomimic.models.base_nets as rmbn
+import robomimic.utils.tensor_utils as TensorUtils
 from robomimic.models.obs_nets import ObservationEncoder
 from diffusion_policy.model.components.dexnex_layers import CascadingCNNSpatialSoftmax
+
+
+def per_key_output_dims(obs_encoder: ObservationEncoder) -> "OrderedDict[str, int]":
+    """
+    Like ObservationEncoder.output_shape(), but returns the flat output dim
+    of each obs key individually instead of summing them into one total.
+    Pure shape math, no forward pass.
+    """
+    dims = OrderedDict()
+    for k in obs_encoder.obs_shapes:
+        feat_shape = obs_encoder.obs_shapes[k]
+        if obs_encoder.obs_randomizers[k] is not None:
+            feat_shape = obs_encoder.obs_randomizers[k].output_shape_in(feat_shape)
+        if obs_encoder.obs_nets[k] is not None:
+            feat_shape = obs_encoder.obs_nets[k].output_shape(feat_shape)
+        if obs_encoder.obs_randomizers[k] is not None:
+            feat_shape = obs_encoder.obs_randomizers[k].output_shape_out(feat_shape)
+        dims[k] = int(np.prod(feat_shape))
+    return dims
+
+
+def encode_obs_per_key(obs_encoder: ObservationEncoder, obs_dict) -> "OrderedDict[str, torch.Tensor]":
+    """
+    Like ObservationEncoder.forward(), but returns each obs key's processed,
+    flattened feature ([B, D_k]) individually instead of concatenating them
+    into one [B, D] vector.
+    """
+    feats = OrderedDict()
+    for k in obs_encoder.obs_shapes:
+        x = obs_dict[k]
+        if obs_encoder.obs_randomizers[k] is not None:
+            x = obs_encoder.obs_randomizers[k].forward_in(x)
+        if obs_encoder.obs_nets[k] is not None:
+            x = obs_encoder.obs_nets[k](x)
+            if obs_encoder.activation is not None:
+                x = obs_encoder.activation(x)
+        if obs_encoder.obs_randomizers[k] is not None:
+            x = obs_encoder.obs_randomizers[k].forward_out(x)
+        feats[k] = TensorUtils.flatten(x, begin_axis=1)
+    return feats
 
 class StateRandomizer(rmbn.Randomizer):
     def __init__(self,

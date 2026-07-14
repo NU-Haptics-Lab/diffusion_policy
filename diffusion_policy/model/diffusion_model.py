@@ -14,6 +14,7 @@ from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+from diffusion_policy.model.diffusion.dexnex_transformer_for_diffusion import DexNexTransformerForDiffusion
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.common.robomimic_config_util import get_robomimic_config
 from robomimic.algo import algo_factory
@@ -29,7 +30,7 @@ import torchsummary
 from torchvision import models as vision_models
 
 import diffusion_policy.model.components.dexnex_layers as dexnex_layers
-from diffusion_policy.model.obs_encoder import ObsEncoderMaker
+from diffusion_policy.model.obs_encoder import ObsEncoderMaker, per_key_output_dims, encode_obs_per_key
 
 import diffusion_policy.globals as globals
 from diffusion_policy.utils import print_nb_params
@@ -95,6 +96,29 @@ def VectorNoiseStep(noise_scheduler,
     batched_func = torch.vmap(func)  
     out = batched_func(pred, timesteps, noisy_trajectory)
     return out
+
+class DexNexTransformerAdapter(nn.Module):
+    """
+    Adapts DexNexTransformerForDiffusion's (sample, timestep, cond) forward
+    to match ConditionalUnet1D's (sample, timestep, task_ids, local_cond, global_cond)
+    call signature, so DiffusionModel's call sites don't need to branch on model type.
+
+    `global_cond` is expected to already be a dict of {obs_key: (B, D_k)} tensors,
+    built upstream (see DiffusionModel._encode_obs_cond) -- one token per obs key.
+    """
+    def __init__(self, transformer: DexNexTransformerForDiffusion):
+        super().__init__()
+        self.transformer = transformer
+
+    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, **kwargs):
+        return self.transformer(sample, timestep, cond=global_cond, task_ids=task_ids)
+
+    def get_optim_groups(self, weight_decay: float=1e-3):
+        return self.transformer.get_optim_groups(weight_decay=weight_decay)
+
+    def configure_optimizers(self, learning_rate: float=1e-4, weight_decay: float=1e-3, betas=(0.9,0.95)):
+        return self.transformer.configure_optimizers(learning_rate=learning_rate, weight_decay=weight_decay, betas=betas)
+
 
 class SimpleModel(nn.Module):
     def __init__(self, input_dim, action_dim, *args, **kwargs) -> None:
@@ -163,9 +187,18 @@ class DiffusionModel(BaseImagePolicy):
             use_simple_model = False,
             num_mid_module_repeats = 4,
             embed_task_id = False,
+            num_tasks = 0, # size of the task-id embedding table (dexnex_transformer only)
+            model_type = 'unet', # 'unet' | 'dexnex_transformer'
+            transformer_n_layer = 8,
+            transformer_n_head = 8,
+            transformer_n_emb = 256,
+            transformer_p_drop_emb = 0.1,
+            transformer_p_drop_attn = 0.1,
+            transformer_n_cond_layers = 4,
             # parameters passed to step
             **kwargs):
         super().__init__()
+        assert model_type in ('unet', 'dexnex_transformer')
         self.action_shape = action_shape
         self.obs_encoder_maker = obs_encoder_maker
         self.obs_encoder_group_norm = obs_encoder_group_norm
@@ -175,19 +208,28 @@ class DiffusionModel(BaseImagePolicy):
         self.n_groups = n_groups
         self.cond_predict_scale = cond_predict_scale
         self.eval_fixed_crop = eval_fixed_crop
-        
+
         self.action_relative_to_state = action_relative_to_state
         self.use_tree = use_tree
         self.use_simple_model = use_simple_model
-        
+
         self.noise_scheduler = noise_scheduler
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
         self.num_mid_module_repeats = num_mid_module_repeats
-        
+
         self.embed_task_id = embed_task_id
-        
+        self.num_tasks = num_tasks
+
+        self.model_type = model_type
+        self.transformer_n_layer = transformer_n_layer
+        self.transformer_n_head = transformer_n_head
+        self.transformer_n_emb = transformer_n_emb
+        self.transformer_p_drop_emb = transformer_p_drop_emb
+        self.transformer_p_drop_attn = transformer_p_drop_attn
+        self.transformer_n_cond_layers = transformer_n_cond_layers
+
         # Nones
         self.obs_encoder = None
         
@@ -245,7 +287,30 @@ class DiffusionModel(BaseImagePolicy):
             nb_inps = self.action_dim * self.horizon + obs_feature_dim + 1 # trajectory, obs, timestep
             model = SimpleModel(nb_inps, self.action_dim * self.horizon)
             pass
-            
+
+        elif self.model_type == 'dexnex_transformer':
+            assert self.obs_as_global_cond, "dexnex_transformer only supports obs_as_global_cond=True"
+            # one token per obs key; each key's n_obs_steps history is flattened into its token
+            cond_dims = {
+                key: dim * self.n_obs_steps
+                for key, dim in per_key_output_dims(self.obs_encoder).items()
+            }
+            transformer = DexNexTransformerForDiffusion(
+                input_dim=self.action_dim,
+                output_dim=self.action_dim,
+                horizon=self.horizon,
+                n_obs_steps=self.n_obs_steps,
+                cond_dims=cond_dims,
+                num_tasks=self.num_tasks if self.embed_task_id else 0,
+                n_layer=self.transformer_n_layer,
+                n_head=self.transformer_n_head,
+                n_emb=self.transformer_n_emb,
+                p_drop_emb=self.transformer_p_drop_emb,
+                p_drop_attn=self.transformer_p_drop_attn,
+                n_cond_layers=self.transformer_n_cond_layers,
+            )
+            model = DexNexTransformerAdapter(transformer)
+
         else:
             model = ConditionalUnet1D(
                 input_dim=input_dim,
@@ -301,7 +366,25 @@ class DiffusionModel(BaseImagePolicy):
         
         ### TEST
         self.random_noise = None
-    
+
+    def _encode_obs_cond(self, nobs, To, B):
+        """
+        Flatten obs history (B,To,...) -> (B*To,...), encode, and reshape back.
+
+        For the unet, returns one fused vector (B, obs_feature_dim*To).
+        For the dexnex_transformer, returns a dict of {obs_key: (B, D_k*To)}
+        -- one token per obs key, so obs keys are never fused together.
+        """
+        assert self.obs_encoder is not None
+        this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
+
+        if self.model_type == 'dexnex_transformer':
+            per_key_features = encode_obs_per_key(self.obs_encoder, this_nobs)
+            return {key: feat.reshape(B, -1) for key, feat in per_key_features.items()}
+        else:
+            nobs_features = self.obs_encoder(this_nobs)
+            return nobs_features.reshape(B, -1)
+
     # ========= inference  ============
     def conditional_sample(self, 
             condition_data, 
@@ -454,13 +537,7 @@ class DiffusionModel(BaseImagePolicy):
         if self.obs_as_global_cond:
             # condition through global feature
             
-            # # I'm not sure why this line was included... required during training ... I think it's because batches during training are [Batch-dim, Traj-dim, data] but during inference we often only have the data-dim
-            this_nobs = dict_apply(nobs, lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
-            # this_nobs = nobs
-            
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(B, -1)
+            global_cond = self._encode_obs_cond(nobs, To, B)
             # empty data for action
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
@@ -655,12 +732,7 @@ class DiffusionModel(BaseImagePolicy):
         cond_data = trajectory
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T ...
-            # could use einops.rearrange(global_cond, 'b h t -> b (h t)') instead
-            this_nobs = dict_apply(nobs, 
-                lambda x: x[:,-To:,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(batch_size, -1)
+            global_cond = self._encode_obs_cond(nobs, To, batch_size)
         # else:
         #     # reshape B, T, ... to B*T
         #     this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))

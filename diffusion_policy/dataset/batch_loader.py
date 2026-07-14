@@ -1239,6 +1239,13 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
         )
 
         nns['obs'] = obs
+        
+        
+        # task id, identity normalizer
+        nns['task_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        
         return nns
 
     def get_fitted_nns(self):
@@ -1301,6 +1308,7 @@ class TroubleshootClenchBatchLoader(BatchLoader):
         )
 
         nns['obs'] = obs
+        
         return nns
 
     def get_fitted_nns(self):

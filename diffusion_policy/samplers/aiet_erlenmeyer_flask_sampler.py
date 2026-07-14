@@ -32,5 +32,11 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
 
         act_key = globals.CONFIG.action_key  # type: ignore
         sample["action"] = self.get_action_trajectory(ep_idx, act_key)
+        
+        # task id. 24 if the sample doesn't have a task id.
+        try:
+            sample["task_id"] = self.get_key_sample("task_id", ep_idx)
+        except KeyError:
+            sample["task_id"] = 24
 
         return sample

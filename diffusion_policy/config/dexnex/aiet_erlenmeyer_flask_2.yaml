@@ -2,9 +2,9 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_erlenmeyer_flask_1: training for the aiet erlenmeyer flask task. left side only."
+description: "aiet_erlenmeyer_flask_2: training for the aiet erlenmeyer flask task. left side only. switch to diffusion transformer"
 # global controls
-debug: true #
+debug: false #
 single_thread: false 
 use_compiled_policy: false
 total_num_epochs: 2001
@@ -25,10 +25,10 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_erlenmeyer_flask_1
+run_tag: aiet_erlenmeyer_flask_2
 
 resume_tag: step=0004648
-output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_1
+output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_2
 
 tasks_to_use:
   - all
@@ -40,6 +40,7 @@ obs_keys_to_use:
   - joint_states
   - wrist_cam_features
   - overhead_cam_features
+  - overhead_roi_features
   - biotac_lh
 
 # which obs the sarsa_sampler will load from the replay buffer
@@ -47,6 +48,7 @@ obs_keys_to_load:
   - joint_states
   - wrist_cam_features
   - overhead_cam_features
+  - overhead_roi_features
   - biotac_lh
 
 models_to_train:
@@ -122,6 +124,10 @@ shape_meta:
   overhead_cam_features:
     shape:
     - 1024 # dinov3 large
+
+  overhead_roi_features:
+    shape:
+    - 1024 # dinov3 large
     
   biotac_lh:
     shape:
@@ -169,6 +175,10 @@ common_obs_encoder:
       - 1024 # dinov3 large
 
     overhead_cam_features:
+      shape:
+      - 1024 # dinov3 large
+
+    overhead_roi_features:
       shape:
       - 1024 # dinov3 large
       
@@ -327,6 +337,16 @@ models:
           action_relative_to_state: ${action_relative_to_state}
           use_tree: false
           use_simple_model: false
+
+          # diffusion transformer?
+          model_type: dexnex_transformer
+          transformer_n_layer: 16
+          transformer_n_emb: 1024
+          transformer_n_cond_layers: 16
+
+          # co-train?
+          embed_task_id: true
+          num_tasks: 26
 
       ema:
         _target_: diffusion_policy.model.model.Ema
