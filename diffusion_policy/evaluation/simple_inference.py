@@ -104,14 +104,22 @@ class SimpleInference:
         # get obs keys to use
         obs_keys_to_use: list = globals.CONFIG.obs_keys_to_use #type:ignore
 
+        # patch-token groups (e.g. DINOv3 patches) bypass obs_encoder entirely and
+        # are read straight out of nobs by DiffusionModel._encode_patch_groups, so
+        # they're deliberately excluded from obs_keys_to_use (obs_encoder would
+        # flatten and destroy the grid) but still must survive this filtering step.
+        patch_keys_to_use: list = list(getattr(self.policy, "patch_keys_to_use", []) or [])
+
+        keys_to_keep = obs_keys_to_use + patch_keys_to_use
+
         # confirm all keys are in obs
-        for key in obs_keys_to_use:
+        for key in keys_to_keep:
             assert(key in obs)
 
-        # only keep the ones in obs_keys_to_use
-        obs = {key: obs[key] for key in obs_keys_to_use}
+        # only keep the ones in obs_keys_to_use / patch_keys_to_use
+        obs = {key: obs[key] for key in keys_to_keep}
 
-        for key in obs_keys_to_use:
+        for key in keys_to_keep:
             val = obs[key]
             if isinstance(val, np.ndarray):
                 # only the action dim

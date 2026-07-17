@@ -6,8 +6,8 @@ description: "aiet_erlenmeyer_flask_2: training for the aiet erlenmeyer flask ta
 # global controls
 debug: false #
 single_thread: false 
-use_compiled_policy: false
-total_num_epochs: 4001
+use_compiled_policy: false # currently doesn't do anything 
+total_num_epochs: 1001
 batches_per_epoch: 100
 batch_size: 64
 val_every: 20
@@ -27,7 +27,7 @@ resume: false
 # should be the same as this file's name (sans .yaml)
 run_tag: aiet_erlenmeyer_flask_2
 
-resume_tag: step=0166399
+resume_tag: step=0009318
 output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_2
 
 tasks_to_use:
@@ -84,8 +84,8 @@ clamp: false # clamp actions (and diffusion noise)
 ###################################################
 ###################################################
 ###################################################
-# action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
-action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
+# action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 
@@ -100,7 +100,7 @@ checkpoint:
 
   format_str: step={global_step:07d}.ckpt
   k: 50 # nb checkpoints to keep
-  checkpoint_every: 100 # how often, in epochs
+  checkpoint_every: 50 # how often, in epochs
   mode: max
   monitor_key: epoch
   use_current_directory: false # use ${output_dir} as the base
@@ -215,6 +215,7 @@ common_indices:
   pad_after: 0
   debug: ${debug}
   use_zero_padding: false # should be true if the action is torque or vel, should be false if the action is position. Think about action_rel_indices and obs_rel_indices. Will work without any extra code so long as obs_rel_indices is [0]. Otherwise, will have to specify per key
+  restrict_to_valid_future: true # if true, excludes "current" indices near the end of an episode whose action_rel_indices future window would run past the true episode end -- otherwise those future actions get forward-filled (repeating the last valid action)
 
 
 

@@ -159,7 +159,9 @@ class StepTrainer:
     def train(self):
         globals.MODELS.reset() 
         # initialize a zero loss variable
-        total_losses = CalcSumLoss(self.w_batch_losses)
+        
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            total_losses = CalcSumLoss(self.w_batch_losses)
         
         dd = {}
         

@@ -107,6 +107,7 @@ class Indices:
         pad_after : int=0,
         debug : bool=True,
         use_zero_padding : bool=True, # if False, will use fill-back / fill-forward instead of zero padding. Should be False for position control, True for vel or torque control
+        restrict_to_valid_future : bool=False, # if True, exclude "current" indices whose action_rel_indices future window would run past the true episode end (which would otherwise be forward-filled with the last valid action). If False (default), keeps existing forward-fill behavior.
         ):
         
         # assertions
@@ -123,6 +124,7 @@ class Indices:
         self.pad_after = pad_after
         self.debug = debug
         self.use_zero_padding = use_zero_padding
+        self.restrict_to_valid_future = restrict_to_valid_future
 
         self.replay_buffer = globals.REPLAY_BUFFER_LOADER[self.rb_id] #type:ignore
         self.indices = []
@@ -159,11 +161,17 @@ class Indices:
         # self.mask_length = len(self.mask_indices)
         self.mask_length = len(self.mask)
         
-        # # max future action
-        # max_future_action = np.array(globals.CONFIG.action_rel_indices).max()
-
         # these are the training indices. Add padding before, add padding after.
-        self.train_indices = range(-self.pad_before, self.mask_length + self.pad_after)
+        end = self.mask_length + self.pad_after
+
+        if self.restrict_to_valid_future:
+            # exclude "current" indices whose action_rel_indices future window would
+            # run past the true episode end -- otherwise those future actions get
+            # forward-filled (repeating the last valid action) in get_rb_indices
+            max_future_action = np.array(globals.CONFIG.action_rel_indices).max() #type:ignore
+            end -= max_future_action
+
+        self.train_indices = range(-self.pad_before, end)
         pass
         
     # def get_mask_indices(self):
