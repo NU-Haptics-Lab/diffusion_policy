@@ -632,6 +632,12 @@ class BatchLoader:
 
         ndata = self.transfer_and_norm(batch)
         
+        # assert all finite values
+        def fn(x):
+            if not torch.isfinite(x).all():
+                raise ValueError("Batch contains non-finite values.")
+        pytorch_util.dict_apply_inplace(ndata, fn)
+        
         # we're done
         return ndata
     

@@ -110,8 +110,8 @@ class DexNexTransformerAdapter(nn.Module):
         super().__init__()
         self.transformer = transformer
 
-    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, **kwargs):
-        return self.transformer(sample, timestep, cond=global_cond, task_ids=task_ids)
+    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, log_attn=False, **kwargs):
+        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, log_attn=log_attn)
 
     def get_optim_groups(self, weight_decay: float=1e-3):
         return self.transformer.get_optim_groups(weight_decay=weight_decay)
@@ -195,10 +195,16 @@ class DiffusionModel(BaseImagePolicy):
             transformer_p_drop_emb = 0.1,
             transformer_p_drop_attn = 0.1,
             transformer_n_cond_layers = 4,
+            transformer_p_drop_token = 0.0, # whole-token (modality) dropout probability
+            transformer_droppable_token_keys = None, # obs/task_id keys eligible for whole-token dropout; None = all except timestep
+            patch_keys_to_use = None, # obs keys that are unpooled patch-token grids (e.g. DINOv3 patches); dexnex_transformer only. Read directly from nbatch['obs'], bypassing obs_encoder, since ObservationEncoder always flattens per-key output and would destroy the patch grid.
+            diagnostics_every_n_steps = 50, # gate for the pricier periodic diagnostics (attn entropy, task embedding stats)
             # parameters passed to step
             **kwargs):
         super().__init__()
         assert model_type in ('unet', 'dexnex_transformer')
+        if patch_keys_to_use:
+            assert n_obs_steps == 1, "patch-token history is not supported yet; only the most recent obs step is used"
         self.action_shape = action_shape
         self.obs_encoder_maker = obs_encoder_maker
         self.obs_encoder_group_norm = obs_encoder_group_norm
@@ -229,6 +235,10 @@ class DiffusionModel(BaseImagePolicy):
         self.transformer_p_drop_emb = transformer_p_drop_emb
         self.transformer_p_drop_attn = transformer_p_drop_attn
         self.transformer_n_cond_layers = transformer_n_cond_layers
+        self.transformer_p_drop_token = transformer_p_drop_token
+        self.transformer_droppable_token_keys = transformer_droppable_token_keys
+        self.patch_keys_to_use = patch_keys_to_use or []
+        self.diagnostics_every_n_steps = diagnostics_every_n_steps
 
         # Nones
         self.obs_encoder = None
@@ -295,12 +305,26 @@ class DiffusionModel(BaseImagePolicy):
                 key: dim * self.n_obs_steps
                 for key, dim in per_key_output_dims(self.obs_encoder).items()
             }
+            # patch-token groups (e.g. DINOv3 patches per camera) bypass obs_encoder entirely,
+            # since ObservationEncoder always flattens per-key output and would destroy the
+            # patch grid. Shapes come straight from shape_meta, same source ObsEncoderMaker uses.
+            # shape_meta stores the raw (H, W, patch_dim) spatial grid (e.g. 14x14x1024 for
+            # DINOv3); flatten the H,W grid dims into a single num_patches axis here, since
+            # DexNexTransformerForDiffusion expects (num_patches, patch_dim).
+            patch_group_dims = {}
+            for key in self.patch_keys_to_use:
+                *grid_dims, patch_dim = globals.CONFIG.shape_meta[key].shape #type:ignore
+                num_patches = 1
+                for d in grid_dims:
+                    num_patches *= d
+                patch_group_dims[key] = (num_patches, patch_dim)
             transformer = DexNexTransformerForDiffusion(
                 input_dim=self.action_dim,
                 output_dim=self.action_dim,
                 horizon=self.horizon,
                 n_obs_steps=self.n_obs_steps,
                 cond_dims=cond_dims,
+                patch_group_dims=patch_group_dims if patch_group_dims else None,
                 num_tasks=self.num_tasks if self.embed_task_id else 0,
                 n_layer=self.transformer_n_layer,
                 n_head=self.transformer_n_head,
@@ -308,6 +332,8 @@ class DiffusionModel(BaseImagePolicy):
                 p_drop_emb=self.transformer_p_drop_emb,
                 p_drop_attn=self.transformer_p_drop_attn,
                 n_cond_layers=self.transformer_n_cond_layers,
+                p_drop_token=self.transformer_p_drop_token,
+                droppable_token_keys=self.transformer_droppable_token_keys,
             )
             model = DexNexTransformerAdapter(transformer)
 
@@ -385,13 +411,36 @@ class DiffusionModel(BaseImagePolicy):
             nobs_features = self.obs_encoder(this_nobs)
             return nobs_features.reshape(B, -1)
 
+    def _encode_patch_groups(self, nobs):
+        """
+        Read patch-token groups (e.g. DINOv3 patches per camera) straight out of
+        nobs, bypassing self.obs_encoder entirely -- ObservationEncoder always
+        flattens per-key output to (B,D), which would destroy the (num_patches,
+        patch_dim) grid. Only the most recent obs step is used (n_obs_steps==1
+        is asserted in __init__ whenever patch_keys_to_use is non-empty).
+
+        nobs[key] arrives as (B, To, H, W, patch_dim) -- the raw spatial grid
+        (e.g. 14x14x1024 for DINOv3); flatten H,W into a single num_patches
+        axis to match DexNexTransformerForDiffusion's (B, num_patches, patch_dim).
+        """
+        if not self.patch_keys_to_use:
+            return None
+        patches = {}
+        for key in self.patch_keys_to_use:
+            x = nobs[key][:, -1, ...]  # (B, H, W, patch_dim)
+            B = x.shape[0]
+            patch_dim = x.shape[-1]
+            patches[key] = x.reshape(B, -1, patch_dim)  # (B, num_patches, patch_dim)
+        return patches
+
     # ========= inference  ============
-    def conditional_sample(self, 
-            condition_data, 
+    def conditional_sample(self,
+            condition_data,
             condition_mask,
             scheduler: DDPMScheduler,
-            local_cond=None, 
+            local_cond=None,
             global_cond=None,
+            patches=None,
             generator=None,
             task_id = None,
             # keyword arguments to scheduler.step
@@ -412,10 +461,10 @@ class DiffusionModel(BaseImagePolicy):
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. predict model output (could be noise or trajectory depending on pred_type)
-            model_output = self.model(trajectory, 
-                                      t, 
+            model_output = self.model(trajectory,
+                                      t,
                                       task_id,
-                local_cond=local_cond, global_cond=global_cond)
+                local_cond=local_cond, global_cond=global_cond, patches=patches)
             
             # tree?
             if self.use_tree:
@@ -538,21 +587,23 @@ class DiffusionModel(BaseImagePolicy):
             # condition through global feature
             
             global_cond = self._encode_obs_cond(nobs, To, B)
+            patches = self._encode_patch_groups(nobs)
             # empty data for action
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-            
+
         # not available rn
         else:
             raise
 
         # run sampling
         nsample = self.conditional_sample(
-            cond_data, 
+            cond_data,
             cond_mask,
             noise_scheduler,
             local_cond=local_cond,
             global_cond=global_cond,
+            patches=patches,
             task_id = task_id,
             **self.kwargs)
         
@@ -617,7 +668,21 @@ class DiffusionModel(BaseImagePolicy):
         
         # calc mse
         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
-        
+
+        # if task_id is a per-sample tensor (as opposed to a plain rb_id string),
+        # also log each task's validation MSE separately -- training loss can look
+        # fine on an underrepresented task purely because it's rarely sampled, while
+        # actual policy quality for that task stays bad; this is the more trustworthy signal.
+        if isinstance(task_id, torch.Tensor):
+            with torch.no_grad():
+                per_sample_mse = torch.nn.functional.mse_loss(pred_action, gt_action, reduction='none')
+                per_sample_mse = per_sample_mse.mean(dim=tuple(range(1, per_sample_mse.dim())))
+                task_id_flat = torch.reshape(task_id, [-1])
+                for tid in torch.unique(task_id_flat).tolist():
+                    task_mask = task_id_flat == tid
+                    if task_mask.any():
+                        globals.LOGGER.log_one(f"val_action_mse/task_{tid}", per_sample_mse[task_mask].mean())
+
         # move to cpu
         action_mse_error = mse.item()
         
@@ -728,11 +793,13 @@ class DiffusionModel(BaseImagePolicy):
         # handle different ways of passing observation
         local_cond = None
         global_cond = None
+        patches = None
         trajectory = nactions
         cond_data = trajectory
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T ...
             global_cond = self._encode_obs_cond(nobs, To, batch_size)
+            patches = self._encode_patch_groups(nobs)
         # else:
         #     # reshape B, T, ... to B*T
         #     this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
@@ -767,10 +834,14 @@ class DiffusionModel(BaseImagePolicy):
 
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
-        
+
+        # periodically capture extra diagnostics (attention entropy, task embedding
+        # drift) -- gated so the (small) extra cost of need_weights=True isn't paid every step
+        do_diagnostics = self.model_type == 'dexnex_transformer' and utils.StepFreqTrigger(self.diagnostics_every_n_steps)
+
         # Predict the noise residual
-        pred = self.model(noisy_trajectory, timesteps, task_id, 
-            local_cond=local_cond, global_cond=global_cond)
+        pred = self.model(noisy_trajectory, timesteps, task_id,
+            local_cond=local_cond, global_cond=global_cond, patches=patches, log_attn=do_diagnostics)
 
         # tree?
         if self.use_tree:
@@ -811,6 +882,64 @@ class DiffusionModel(BaseImagePolicy):
             
         # loss = reduce(loss, 'b ... -> b (...)', 'mean')
         # loss = loss.mean()
-        
-            
+
+        # log total loss, and if task_id/timestep info is available per-sample, break it down further
+        with torch.no_grad():
+            per_sample_loss = loss.mean(dim=tuple(range(1, loss.dim())))
+            globals.LOGGER.log_one("diffusion_loss/total", per_sample_loss.mean())
+
+            if task_id is not None:
+                task_id_flat = torch.reshape(task_id, [-1])
+                for tid in torch.unique(task_id_flat).tolist():
+                    task_mask = task_id_flat == tid
+                    n = task_mask.sum()
+                    if n > 0:
+                        globals.LOGGER.log_one(f"diffusion_loss/task_{tid}", per_sample_loss[task_mask].mean())
+                        globals.LOGGER.log_one(f"task_counts/task_{tid}", n)
+
+            # bucket loss by diffusion timestep (low/mid/high noise) -- a flat average can
+            # hide whether the model has learned the easy (low-noise) end but is still
+            # stuck on the hard (high-noise) end, or vice versa
+            num_train_timesteps = self.noise_scheduler.config.num_train_timesteps #type:ignore
+            num_buckets = 4
+            bucket_idx = torch.clamp(
+                (timesteps.float() / num_train_timesteps * num_buckets).long(),
+                max=num_buckets - 1)
+            for b in range(num_buckets):
+                bucket_mask = bucket_idx == b
+                if bucket_mask.any():
+                    globals.LOGGER.log_one(f"diffusion_loss/timestep_bucket_{b}", per_sample_loss[bucket_mask].mean())
+
+            # bucket loss by waypoint position in the horizon (early vs. late in the
+            # trajectory) -- helps check whether later waypoints are predicted as
+            # accurately as near-term ones, e.g. if displacement between waypoints
+            # looks too small in rollouts, check whether late-horizon buckets have
+            # disproportionately higher loss (or just near-flat/low loss everywhere,
+            # which would instead suggest the model is under-predicting motion overall)
+            num_waypoint_buckets = 4
+            horizon_len = loss.shape[1]
+            bucket_bounds = torch.linspace(0, horizon_len, num_waypoint_buckets + 1).long()
+            for b in range(num_waypoint_buckets):
+                start, end = bucket_bounds[b].item(), bucket_bounds[b + 1].item()
+                if end > start:
+                    globals.LOGGER.log_one(f"diffusion_loss/waypoint_bucket_{b}", loss[:, start:end, :].mean())
+
+            if do_diagnostics:
+                transformer = self.model.transformer #type:ignore
+                if getattr(transformer, 'last_cross_attn_entropy', None) is not None:
+                    globals.LOGGER.log_one("diagnostics/cross_attn_entropy", transformer.last_cross_attn_entropy.mean())
+                    # a name (e.g. a patch-group) can appear for many tokens -- average
+                    # them together before logging, rather than overwriting per-name
+                    weight_by_name = {}
+                    for name, w in zip(transformer.last_cross_attn_token_names,
+                                        transformer.last_cross_attn_weight_by_token.mean(dim=0)):
+                        weight_by_name.setdefault(name, []).append(w)
+                    for name, ws in weight_by_name.items():
+                        globals.LOGGER.log_one(f"diagnostics/cross_attn_weight_{name}", torch.stack(ws).mean())
+
+                task_stats = transformer.task_embedding_stats()
+                if task_stats is not None:
+                    globals.LOGGER.log_one("diagnostics/task_emb_mean_row_norm", task_stats['mean_row_norm'])
+                    globals.LOGGER.log_one("diagnostics/task_emb_mean_pairwise_distance", task_stats['mean_pairwise_distance'])
+
         return loss, a0, timesteps

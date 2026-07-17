@@ -15,12 +15,14 @@ from diffusion_policy import utils
 
 class SimpleInference:
     """
-    no state history, no task_id
+    no state history
     """
     def __init__(self,
                  policy: DiffusionModel,
+                 task_id=None,
                  ) -> None:
         self.policy = policy
+        self.task_id = task_id
 
         # my members
         self.current_obs: dict = None #type:ignore
@@ -33,6 +35,9 @@ class SimpleInference:
         """
         must be called after all nodes are made
         """
+        if self.task_id is not None:
+            self.task_id = torch.tensor([[self.task_id]], device=globals.CONFIG.device) # 2d #type:ignore
+
         # save a handle
         self.batch_loader = globals.DEFAULT_BATCH_LOADER
 
@@ -135,7 +140,7 @@ class SimpleInference:
             nobs_torch = self.norm_gpu_obs(obs_dict_np)
 
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            naction_gpu, all_nactions_gpu = self.policy.infer(nobs_torch)
+            naction_gpu, all_nactions_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
 
             future_actions = self.unnorm_cpu_action(naction_gpu)
             all_actions = self.unnorm_cpu_action(all_nactions_gpu)

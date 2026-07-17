@@ -15,6 +15,18 @@ def dict_apply(
             result[key] = func(value)
     return result
 
+def dict_apply_inplace(
+        x: Dict[str, torch.Tensor],
+        func: Callable[[torch.Tensor], None]
+        ) -> Dict[str, torch.Tensor]:
+    for key, value in x.items():
+        if isinstance(value, dict):
+            dict_apply_inplace(value, func)
+        else:
+            func(value)
+    return x
+
+
 def dict_to_torch(x):
     return dict_apply(x, torch.tensor)
 

@@ -49,6 +49,10 @@ from hydra.core.hydra_config import HydraConfig
 #         path.parent.mkdir(parents=False, exist_ok=True)
     
 
+def _find_nonfinite_state_dict_keys(state_dict: Dict[str, torch.Tensor]):
+    return [key for key, tensor in state_dict.items() if not torch.isfinite(tensor).all()]
+
+
 class TopKCheckpointManager:
     def __init__(self,
             monitor_key: str,
@@ -255,6 +259,12 @@ class TopKCheckpointManager:
             m = globals.MODELS[key]
             
             m.load_state_dict(states4, strict=False)
+            
+            # check for non-finite values in the state dict
+            nonfinite_keys = _find_nonfinite_state_dict_keys(states4)
+            if len(nonfinite_keys) > 0:
+                # print(f"Warning: Non-finite values found in state dict for model {key}. Keys: {nonfinite_keys}")
+                raise ValueError(f"Non-finite values found in state dict for model {key}. Keys: {nonfinite_keys}")
             
             pass
 

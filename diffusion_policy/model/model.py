@@ -141,6 +141,9 @@ class Optim(Base):
             self.optimizer.step()
             self.lr_scheduler.step()
             
+            # log the lr:
+            globals.LOGGER.log_one("lr", self.lr_scheduler.get_last_lr()[0])
+            
     def step_log(self):
         step_log = {
             'lr': self.lr_scheduler.get_last_lr()[0]

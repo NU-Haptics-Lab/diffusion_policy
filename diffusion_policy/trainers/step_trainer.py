@@ -18,6 +18,22 @@ def MaxGrad(model):
             grad_clip = max(grad_clip, g.max().item())
     return grad_clip
 
+def GradNormsByComponent(model, prefix_depth=3):
+    """
+    Buckets gradient norm by the first `prefix_depth` dot-separated components
+    of each parameter's name (e.g. "model.transformer.decoder"), so you can see
+    whether a specific sub-module (an obs-key projection, the decoder, the
+    task embedding, ...) is receiving meaningful gradient signal, rather than
+    only ever looking at one global norm.
+    """
+    sums = {}
+    for name, p in model.named_parameters():
+        if p.grad is None:
+            continue
+        prefix = ".".join(name.split(".")[:prefix_depth])
+        sums[prefix] = sums.get(prefix, 0.0) + p.grad.detach().float().pow(2).sum().item()
+    return {k: v ** 0.5 for k, v in sums.items()}
+
 class StepTrainer:
     """
     Responsible for training for one step.
@@ -187,12 +203,16 @@ class StepTrainer:
             
             # back propagation
             loss.backward()
-            
+
             # logging
             dd[key + ": weighted sum loss"] = loss
-            
+
             model = globals.MODELS[key]
-            
+
+            # per-component grad norms, captured before clipping rescales everything
+            for component, norm in GradNormsByComponent(model.get_model()).items():
+                dd[f"{key}: grad_norm/{component}"] = norm
+
             # if clipping the gradients
             if self.grad_norm > 0: 
                 norms = torch.nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=self.grad_norm) #type:ignore

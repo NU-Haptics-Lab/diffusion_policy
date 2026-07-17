@@ -7,9 +7,9 @@ description: "aiet_erlenmeyer_flask_2: training for the aiet erlenmeyer flask ta
 debug: false #
 single_thread: false 
 use_compiled_policy: false
-total_num_epochs: 2001
+total_num_epochs: 4001
 batches_per_epoch: 100
-batch_size: 128
+batch_size: 64
 val_every: 20
 
 action_key: joint_commands
@@ -27,7 +27,7 @@ resume: false
 # should be the same as this file's name (sans .yaml)
 run_tag: aiet_erlenmeyer_flask_2
 
-resume_tag: step=0004648
+resume_tag: step=0166399
 output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_2
 
 tasks_to_use:
@@ -39,17 +39,20 @@ tasks_to_use:
 obs_keys_to_use:
   - joint_states
   - wrist_cam_features
-  - overhead_cam_features
+  # - overhead_cam_features
   - overhead_roi_features
   - biotac_lh
 
-# which obs the sarsa_sampler will load from the replay buffer
+
+# which obs the sarsa_sampler will load from the replay buffer, and used by the batch loader
 obs_keys_to_load:
   - joint_states
   - wrist_cam_features
-  - overhead_cam_features
+  # - overhead_cam_features
   - overhead_roi_features
   - biotac_lh
+  - wrist_cam_patch_features
+  - overhead_roi_patch_features
 
 models_to_train:
   - actor
@@ -81,7 +84,8 @@ clamp: false # clamp actions (and diffusion noise)
 ###################################################
 ###################################################
 ###################################################
-action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
+# action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
 
@@ -132,6 +136,18 @@ shape_meta:
   biotac_lh:
     shape:
     - 5
+
+  wrist_cam_patch_features:
+    shape:
+      - 14
+      - 14
+      - 1024
+
+  overhead_roi_patch_features:
+    shape:
+      - 14
+      - 14
+      - 1024
 
 
 training:
@@ -280,14 +296,14 @@ common_dataset:
   val_ratio: 0.02
   max_train_episodes: null
   use_weighted_dataloader: false # NOTE: doesn't seem to work when all weights are 1.0 ...???
-  preload_to_gpu: false # will override options
+  preload_to_gpu: false # will override options. makes bigger impact when policy is small
 
   options:
     common:
       batch_size: ${batch_size}
       timeout: 0 # 0 means no timeout
     train:
-      num_workers: 8
+      num_workers: 16
       persistent_workers: true
       pin_memory: true
       shuffle: true # can't use with use_weighted_dataloader
@@ -340,13 +356,18 @@ models:
 
           # diffusion transformer?
           model_type: dexnex_transformer
-          transformer_n_layer: 16
-          transformer_n_emb: 1024
-          transformer_n_cond_layers: 16
+          transformer_n_layer: 4
+          transformer_n_emb: 512 # I chose to make this the same size as the dinov3 output so we don't lose any img features
+          transformer_n_cond_layers: 8
+          diagnostics_every_n_steps: 50
+          transformer_droppable_token_keys: null
+          transformer_p_drop_token: 0.25
 
           # co-train?
           embed_task_id: true
           num_tasks: 26
+
+          patch_keys_to_use: ['wrist_cam_patch_features', 'overhead_roi_patch_features']
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -371,7 +392,7 @@ models:
             - 0.95
             - 0.999
           eps: 1.0e-08
-          lr: 5e-4 # 1e-4
+          lr: 1e-4 # 1e-4
           weight_decay: 1.0e-06
 
 
