@@ -123,15 +123,15 @@ shape_meta:
 
   wrist_cam_features:
     shape:
-    - 1024 # dinov3 large
+    - 384 # dinov3 large
 
   overhead_cam_features:
     shape:
-    - 1024 # dinov3 large
+    - 384 # dinov3 large
 
   overhead_roi_features:
     shape:
-    - 1024 # dinov3 large
+    - 384 # dinov3 large
     
   biotac_lh:
     shape:
@@ -141,13 +141,13 @@ shape_meta:
     shape:
       - 14
       - 14
-      - 1024
+      - 384
 
   overhead_roi_patch_features:
     shape:
       - 14
       - 14
-      - 1024
+      - 384
 
 
 training:
@@ -188,15 +188,15 @@ common_obs_encoder:
       
     wrist_cam_features:
       shape:
-      - 1024 # dinov3 large
+      - 384 # dinov3 large
 
     overhead_cam_features:
       shape:
-      - 1024 # dinov3 large
+      - 384 # dinov3 large
 
     overhead_roi_features:
       shape:
-      - 1024 # dinov3 large
+      - 384 # dinov3 large
       
     biotac_lh:
       shape:
@@ -358,7 +358,7 @@ models:
           # diffusion transformer?
           model_type: dexnex_transformer
           transformer_n_layer: 4
-          transformer_n_emb: 512 # I chose to make this the same size as the dinov3 output so we don't lose any img features
+          transformer_n_emb: 384 # I chose to make this the same size as the dinov3 output so we don't lose any img features
           transformer_n_cond_layers: 8
           diagnostics_every_n_steps: 50
           transformer_droppable_token_keys: null
