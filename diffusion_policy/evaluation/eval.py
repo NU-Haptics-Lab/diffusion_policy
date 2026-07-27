@@ -46,11 +46,8 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import JointState
 from haptx_interfaces.msg import BiotacNormalized
-from ros2_to_rlds_msgs.msg import Float64array
 
 # moveit for FK
-from moveit.core.robot_model import RobotModel
-from moveit.core.robot_state import RobotState
 
 from diffusion_policy.evaluation.simple_inference import SimpleInference  # noqa: E402
 
@@ -481,6 +478,8 @@ class EvalDexNex(Node, EvalMixin, Inference):
     def setup_moveit(self):
         # moveit, if FK is needed
         if self.use_fingertip_pos:
+            from moveit.core.robot_model import RobotModel
+            from moveit.core.robot_state import RobotState
             # load the robot model for FK
             self.robot_model = RobotModel(self.urdf_xml_path, self.srdf_xml_path)
             self.robot_state = RobotState(self.robot_model)

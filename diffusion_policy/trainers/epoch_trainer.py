@@ -7,7 +7,7 @@ import tqdm
 import numpy as np
 from diffusion_policy.rollout import Rollout
 
-import avatar_drake_sim.sims.sandbox.sandbox_common as commons
+# import avatar_drake_sim.sims.sandbox.sandbox_common as commons
 
 class Epoch:
     """
@@ -128,7 +128,7 @@ class EpochTrainer(Epoch):
 
             # update the global step count
             globals.STEP += 1
-            commons.CURRENT_PARAMS.rl_step = globals.STEP
+            # commons.CURRENT_PARAMS.rl_step = globals.STEP
             
             
             ## end of step logging

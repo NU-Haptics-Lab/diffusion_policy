@@ -1,6 +1,4 @@
 from diffusion_policy import utils
-import avatar_drake_sim.rl.learning.sac
-from avatar_drake_sim.utils.utils import load_yaml_config
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.globals as globals
 import diffusion_policy.model
@@ -24,9 +22,6 @@ import torch
 import yaml
 from omegaconf import OmegaConf
 
-from avatar_drake_sim.sims.sandbox.classes.simple_scheduling import (
-    SimpleLinearScheduler,
-)
 
 
 class RolloutEnv:
@@ -138,6 +133,10 @@ class Rollout:
                 self.critic_ops = critic.critic.MakeOptions(self.evaluator.task_id)
                 
         if self.use_freq_schedule:
+            from avatar_drake_sim.sims.sandbox.classes.simple_scheduling import (
+                SimpleLinearScheduler,
+            )
+
             # xa, ya, xb, yb
             self.freq_scheduler = SimpleLinearScheduler(0.0, 10.0, 25000.0, 50.0)
 

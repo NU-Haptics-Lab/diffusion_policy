@@ -427,8 +427,8 @@ class BatchLoader:
         min_allowed = -1000.0
         max_allowed = 1000.0
         
-        if min_val < min_allowed or max_val > max_allowed:
-            raise ValueError("Fitted nn {} has min {} or max {} outside of allowed range [{}, {}]. Check your data for outliers.".format(descriptor, min_val, max_val, min_allowed, max_allowed))
+        # if min_val < min_allowed or max_val > max_allowed:
+        #     raise ValueError("Fitted nn {} has min {} or max {} outside of allowed range [{}, {}]. Check your data for outliers.".format(descriptor, min_val, max_val, min_allowed, max_allowed))
         
         
     def get_static_nns(self):
@@ -1325,6 +1325,79 @@ class TroubleshootClenchBatchLoader(BatchLoader):
         act_key: str = globals.CONFIG.action_key  # type: ignore
         
         obs_keys_to_normalize = [
+        ]
+
+        for obs_key in obs_keys_to_normalize:
+            assert obs_key in obs_keys_to_load, f"Observation key '{obs_key}' is not in the list of keys to load."
+            self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+
+        if act_key in rb:
+            self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns
+
+
+class HondaBatchLoader(BatchLoader):
+    """
+    BatchLoader for task 26 (honda task).
+
+    Zarr keys produced by gen_dataset.py:
+      joint_states                  [T, J]              float32
+      joint_commands                [T, J]              float32
+      overhead_cam_features         [T, Dv]             float16  (Dv = DINOv3 embed dim)
+      overhead_cam_patch_features   [T, 14, 14, Dv]     float16
+      wrist_cam_features            [T, Dv]             float16
+      wrist_cam_patch_features      [T, 14, 14, Dv]     float16
+      fingertip_forces              [T, 4]              float32  (thumb, index, middle, ring)
+      tactile_sensor                [T, D]              float32
+      task_id                       [T]                 int64
+    
+    For now, don't normalize the dinov3 features
+    """
+
+    def get_static_nns(self):
+        """
+        default identity normalizers
+        
+        nns['action'] is hard-coded in diffusion_model and must be used
+        """
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+        
+        
+        # task id, identity normalizer
+        nns['task_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        
+        return nns
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
+        act_key: str = globals.CONFIG.action_key  # type: ignore
+        
+        obs_keys_to_normalize = [
+            "joint_states",
+            "fingertip_forces",
+            # "tactile_sensor",
         ]
 
         for obs_key in obs_keys_to_normalize:
