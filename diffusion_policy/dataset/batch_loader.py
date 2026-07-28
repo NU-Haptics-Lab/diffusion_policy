@@ -1351,14 +1351,14 @@ class HondaBatchLoader(BatchLoader):
       fingertip_forces              [T, 4]              float32  (thumb, index, middle, ring)
       tactile_sensor                [T, D]              float32
       task_id                       [T]                 int64
-    
+
     For now, don't normalize the dinov3 features
     """
 
     def get_static_nns(self):
         """
         default identity normalizers
-        
+
         nns['action'] is hard-coded in diffusion_model and must be used
         """
         nns = {}
@@ -1378,13 +1378,13 @@ class HondaBatchLoader(BatchLoader):
         )
 
         nns['obs'] = obs
-        
-        
+
+
         # task id, identity normalizer
         nns['task_id'] = get_identity_normalizer_from_stat(
             {'min': np.array([0], dtype=np.float32)}
         )
-        
+
         return nns
 
     def get_fitted_nns(self):
@@ -1393,7 +1393,7 @@ class HondaBatchLoader(BatchLoader):
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
         obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
         act_key: str = globals.CONFIG.action_key  # type: ignore
-        
+
         obs_keys_to_normalize = [
             "joint_states",
             "fingertip_forces",
@@ -1406,5 +1406,115 @@ class HondaBatchLoader(BatchLoader):
 
         if act_key in rb:
             self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns
+
+
+def _nested_cat(a, b, dim=0):
+    """Recursively torch.cat matching leaves of two nested dicts/tensors."""
+    if isinstance(a, dict):
+        return {k: _nested_cat(a[k], b[k], dim=dim) for k in a}
+    return torch.cat([a, b], dim=dim)
+
+
+class Honda2BatchLoader(HondaBatchLoader):
+    """
+    BatchLoader for the honda_2 (jar lid rotate, sim+real co-train) task.
+
+    Draws a sub-batch from `sim_rb_id` and one from `real_rb_id` every step
+    and concatenates them into a single batch. Each underlying dataloader's
+    own batch_size (set in honda_2.yaml via `sim_batch_size`/`real_batch_size`)
+    must already equal the desired per-domain sample count -- this class does
+    not slice/resize, it only concatenates two already-correctly-sized batches.
+
+    Normalizer stats (get_fitted_nns) are fit from sim and real combined,
+    since there's no single 'all' rb_id to fall back on here.
+    """
+    def __init__(self, sim_rb_id, real_rb_id, sim_ratio, train_or_val, use_dataloader=True, strict=True):
+        super().__init__(rb_id=sim_rb_id, train_or_val=train_or_val, use_dataloader=use_dataloader, strict=strict)
+        self.sim_rb_id = sim_rb_id
+        self.real_rb_id = real_rb_id
+        self.sim_ratio = sim_ratio
+        self.sim_dataloaders = None
+        self.real_dataloaders = None
+        self.sim_iterator = None
+        self.real_iterator = None
+
+    def setup(self):
+        if self.use_dataloader:
+            self.sim_dataloaders: TrainAndVal = globals.DATALOADERS[self.sim_rb_id]  # type: ignore
+            self.real_dataloaders: TrainAndVal = globals.DATALOADERS[self.real_rb_id]  # type: ignore
+
+        self.nested_data_array = NestedDataArray("top-level", strict=self.strict)
+
+        device_type: str = globals.CONFIG.device  # type: ignore
+        self.device = torch.device(device_type)
+
+        self.init_normalizers()
+
+        self.reset()
+
+        self.is_setup = True
+
+    def reset(self):
+        self.count = 0
+        if self.use_dataloader and self.sim_dataloaders is not None and self.real_dataloaders is not None:
+            sim_dl = self.sim_dataloaders[self.train_or_val]
+            real_dl = self.real_dataloaders[self.train_or_val]
+            self.sim_iterator = iter(sim_dl) if sim_dl is not None else None
+            self.real_iterator = iter(real_dl) if real_dl is not None else None
+        else:
+            self.sim_iterator = None
+            self.real_iterator = None
+
+    def _next_from(self, which):
+        """which is 'sim' or 'real'. Re-inits only that domain's iterator on exhaustion."""
+        iterator = getattr(self, f"{which}_iterator")
+        assert iterator is not None
+        try:
+            return next(iterator)
+        except Exception:
+            dataloaders = getattr(self, f"{which}_dataloaders")
+            iterator = iter(dataloaders[self.train_or_val])
+            setattr(self, f"{which}_iterator", iterator)
+            return next(iterator)
+
+    def get_batch(self):
+        sim_batch = self._next_from("sim")
+        real_batch = self._next_from("real")
+
+        batch = _nested_cat(sim_batch, real_batch, dim=0)
+
+        ndata = self.transfer_and_norm(batch)
+
+        def fn(x):
+            if not torch.isfinite(x).all():
+                raise ValueError("Batch contains non-finite values.")
+        pytorch_util.dict_apply_inplace(ndata, fn)
+
+        return ndata
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        sim_rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.sim_rb_id]  # type: ignore
+        real_rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.real_rb_id]  # type: ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
+        act_key: str = globals.CONFIG.action_key  # type: ignore
+
+        obs_keys_to_normalize = [
+            "joint_states",
+            "joint_velocities",
+            "fingertip_wrench",
+        ]
+
+        for obs_key in obs_keys_to_normalize:
+            assert obs_key in obs_keys_to_load, f"Observation key '{obs_key}' is not in the list of keys to load."
+            combined = np.concatenate([sim_rb[obs_key][:], real_rb[obs_key][:]], axis=0)
+            self.fit_nn(combined, nns['obs'][obs_key], obs_key)
+
+        if act_key in sim_rb and act_key in real_rb:
+            combined_act = np.concatenate([sim_rb[act_key][:], real_rb[act_key][:]], axis=0)
+            self.fit_nn(combined_act, nns['action'], act_key)
 
         return nns
