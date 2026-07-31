@@ -181,6 +181,73 @@ class BatchLoss:
 """ alias """
 class BC(BatchLoss):
     pass
+
+
+class Honda1BatchLoss(BatchLoss):
+    """
+    BatchLoss for honda_1: upweights samples per subtask_weights (subtask_id -> loss
+    weight multiplier); any subtask_id not listed keeps weight 1.0. Requires a
+    batch_loader (Honda1BatchLoader) whose batches carry a 'subtask_id' key -- see
+    Honda1Sampler.
+
+    Uses a weighted average (sum(w*l) / sum(w)), not mean(w*l), so the overall loss
+    scale doesn't drift with how many upweighted samples happen to land in a batch.
+    """
+    def __init__(self,
+            batch_loader: BatchLoader,
+            eta: float = 0.0,
+            use_bc_loss = True,
+            freqs = {},
+            loss_clip_value = 1.0,
+            remove_outlier_losses = False,
+            subtask_weights = {1: 2.0},
+        ):
+        super().__init__(batch_loader, eta, use_bc_loss, freqs, loss_clip_value, remove_outlier_losses)
+        self.subtask_weights = {int(k): float(v) for k, v in subtask_weights.items()}
+
+    def get_subtask_weights(self, batch):
+        subtask_id = torch.reshape(batch['subtask_id'], [-1]).round().long()
+        weights = torch.ones_like(subtask_id, dtype=torch.float32)
+        for sid, w in self.subtask_weights.items():
+            weights[subtask_id == sid] = w
+        return weights
+
+    def log_subtask_losses(self, sample_loss):
+        """
+        Break the (unweighted) per-sample BC loss down by subtask_id, so a subtask
+        that's rarely sampled or upweighted doesn't hide behind an OK-looking
+        aggregate loss -- mirrors diffusion_model.py's per-task_id loss breakdown.
+        """
+        with torch.no_grad():
+            subtask_id = torch.reshape(self.current_batch['subtask_id'], [-1]).round().long()
+            for sid in torch.unique(subtask_id).tolist():
+                mask = subtask_id == sid
+                n = mask.sum()
+                if n > 0:
+                    globals.LOGGER.log_one(f"BC/{self.rb_id}: subtask_{sid}_loss", sample_loss[mask].mean())
+                    globals.LOGGER.log_one(f"BC/{self.rb_id}: subtask_{sid}_count", n)
+
+    def compute_loss(self):
+        """
+        Train for one batch.
+        """
+        self.get_next_batch()
+
+        actor_loss = utils.InitZeroTensorOnDevice()
+        losses = self.init_losses()
+
+        if self.use_bc_loss:
+            sample_loss, a0, timesteps = self.compute_sample_loss()
+
+            self.a0 = a0
+
+            weights = self.get_subtask_weights(self.current_batch)
+            actor_loss = (sample_loss * weights).sum() / weights.sum()
+
+            self.save_bc_loss(losses, actor_loss)
+            self.log_subtask_losses(sample_loss)
+
+        return losses
     
     
 class TTREfficiencyWeightedBatchLoss(BatchLoss):

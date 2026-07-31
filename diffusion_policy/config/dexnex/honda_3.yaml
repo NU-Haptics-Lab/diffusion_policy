@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "honda_2: co-train sim and real, jar lid rotate task"
+description: "honda_3: train on real data only"
 # global controls
 debug: false #
 single_thread: false
@@ -13,11 +13,11 @@ batch_size: 64
 val_every: 20
 
 # fraction of each training batch drawn from the sim replay buffer (rounded to the nearest int); the rest comes from real
-sim_data_ratio: 0.9
+sim_data_ratio: 0.0
 # exact per-domain sub-batch sizes Honda2BatchLoader concatenates into one batch of size ${batch_size}.
 # NOTE: must be kept in sync by hand -- sim_batch_size = round(batch_size * sim_data_ratio), real_batch_size = batch_size - sim_batch_size
-sim_batch_size: 58
-real_batch_size: 6
+sim_batch_size: 0
+real_batch_size: 64
 
 action_key: joint_commands
 
@@ -32,10 +32,10 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: honda_2
+run_tag: honda_3
 
 resume_tag: step=0030001
-output_dir: /home/northwestern/models/honda_2
+output_dir: /home/northwestern/models/honda_3
 
 tasks_to_use:
   - all
@@ -285,7 +285,7 @@ common_dataset:
   val_ratio: 0.02
   max_train_episodes: null
   use_weighted_dataloader: false # NOTE: doesn't seem to work when all weights are 1.0 ...???
-  preload_to_gpu: false # will override options. makes bigger impact when policy is small
+  preload_to_gpu: true # will override options. makes bigger impact when policy is small
 
   options:
     common:

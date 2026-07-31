@@ -63,6 +63,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             n_cond_layers: int = 4,
             p_drop_token: float = 0.0,
             droppable_token_keys: Optional[List[str]] = None,
+            use_progress_token: bool = False,
         ) -> None:
         """
         cond_dims: obs key -> feature dim, for single-token (fused) obs keys.
@@ -90,9 +91,12 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             group: num_patches for group, (num_patches, _) in (patch_group_dims or {}).items()
         }
         self.embed_task_id = num_tasks > 0
+        self.use_progress_token = use_progress_token
         T_cond = 1  # timestep token
         if self.embed_task_id:
             T_cond += 1  # task-id token
+        if self.use_progress_token:
+            T_cond += 1  # progress token
         if obs_as_cond:
             T_cond += len(self.cond_keys)
         T_cond += sum(self.patch_group_num_patches.values())
@@ -107,6 +111,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         # for free once patch groups are in use, no separate mechanism needed.
         all_token_names = (['timestep']
             + (['task_id'] if self.embed_task_id else [])
+            + (['progress'] if self.use_progress_token else [])
             + self.cond_keys
             + self.patch_group_names)
         if droppable_token_keys is None:
@@ -138,6 +143,14 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         self.task_id_emb = None
         if self.embed_task_id:
             self.task_id_emb = nn.Embedding(num_tasks, n_emb)
+
+        # progress token: a continuous scalar (fraction through the episode), so a
+        # plain linear projection makes sense (unlike task_id's nominal categories).
+        # Only meaningful for full-task samples -- see forward()'s progress_valid
+        # masking, which zeroes this token's embedding for samples it doesn't apply to.
+        self.progress_emb = None
+        if self.use_progress_token:
+            self.progress_emb = nn.Linear(1, n_emb)
 
         # patch-group embedding stem: one shared (weight-tied) projection per
         # group applied to every patch in that group, a learned per-patch
@@ -367,6 +380,8 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         cond: Optional[Dict[str, torch.Tensor]]=None,
         patches: Optional[Dict[str, torch.Tensor]]=None,
         task_ids: Optional[torch.Tensor]=None,
+        progress: Optional[torch.Tensor]=None,
+        progress_valid: Optional[torch.Tensor]=None,
         log_attn: bool=False, **kwargs):
         """
         x: (B,T,input_dim)
@@ -375,6 +390,16 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         patches: dict mapping patch-group name -> (B,num_patches,patch_feature_dim);
             each patch becomes its own token, sharing one projection per group
         task_ids: (B,) long tensor of task indices; becomes its own token
+        progress: (B,) or (B,1) float tensor, fraction through the episode; becomes
+            its own token when use_progress_token=True. If None while
+            use_progress_token is True, treated as all-invalid (see progress_valid).
+        progress_valid: (B,) float/bool tensor, 1/True where `progress` is meaningful
+            for that sample (e.g. full-task samples) and 0/False where it isn't (e.g.
+            subtask samples) -- invalid samples get their progress token embedding
+            zeroed out, same spirit as p_drop_token's keep_mask but data-driven
+            instead of random, and NOT gated on self.training (it's not a
+            regularizer, the value is genuinely undefined for those samples).
+            If None while use_progress_token is True, treated as all-invalid.
         log_attn: if True, captures the last decoder layer's cross-attention
             weights (trajectory -> obs memory) for diagnostics; see
             `last_cross_attn_entropy` / `last_cross_attn_token_names` afterwards.
@@ -402,6 +427,20 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             # (B,1,n_emb)
             cond_embeddings = torch.cat([cond_embeddings, task_emb], dim=1)
             cond_token_names.append('task_id')
+        if self.use_progress_token:
+            assert self.progress_emb is not None
+            B = cond_embeddings.shape[0]
+            if progress is None:
+                progress = torch.zeros(B, 1, device=cond_embeddings.device)
+            if progress_valid is None:
+                progress_valid = torch.zeros(B, device=cond_embeddings.device)
+            progress_in = torch.reshape(progress, [-1, 1]).to(cond_embeddings.dtype)
+            progress_emb = self.progress_emb(progress_in).unsqueeze(1)
+            # (B,1,n_emb)
+            valid = torch.reshape(progress_valid, [-1]).to(cond_embeddings.dtype).view(-1, 1, 1)
+            progress_emb = progress_emb * valid
+            cond_embeddings = torch.cat([cond_embeddings, progress_emb], dim=1)
+            cond_token_names.append('progress')
         if self.obs_as_cond:
             assert self.cond_obs_emb is not None and cond is not None
             key_tokens = [self.cond_obs_emb[key](cond[key]).unsqueeze(1) for key in self.cond_keys]

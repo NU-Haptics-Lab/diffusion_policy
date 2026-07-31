@@ -141,21 +141,39 @@ class SimpleInference:
         return obs
 
 
-    def RunInference(self, obs_dict_np):
+    def RunInference(self, obs_dict_np, progress=None, progress_valid=None):
 
         # run inference
         with torch.no_grad():
             nobs_torch = self.norm_gpu_obs(obs_dict_np)
 
+            device = next(self.policy.model.parameters()).device
+            progress_t = None
+            progress_valid_t = None
+            if progress is not None:
+                # (1,1) -- same convention as self.task_id, batch size 1 for ROS inference
+                progress_t = torch.tensor([[progress]], dtype=torch.float32, device=device)
+            if progress_valid is not None:
+                progress_valid_t = torch.tensor([[progress_valid]], dtype=torch.float32, device=device)
+
             # inside predict_action -> conditional_sample is where the iteration occurs. `for t in scheduler.timesteps`
-            naction_gpu, all_nactions_gpu = self.policy.infer(nobs_torch, task_id=self.task_id)
+            naction_gpu, all_nactions_gpu = self.policy.infer(
+                nobs_torch, task_id=self.task_id,
+                progress=progress_t, progress_valid=progress_valid_t)
 
             future_actions = self.unnorm_cpu_action(naction_gpu)
             all_actions = self.unnorm_cpu_action(all_nactions_gpu)
 
             return future_actions, all_actions
 
-    def infer(self):
+    def infer(self, progress=None, progress_valid=None):
+        """
+        progress: fraction through the episode (0..1), or None if this
+            checkpoint wasn't trained with a progress token.
+        progress_valid: whether `progress` is meaningful for this rollout
+            (e.g. False for sub-task-only checkpoints) -- see
+            Honda1Sampler/DexNexTransformerForDiffusion's use_progress_token.
+        """
         # get observation
         obs_dict_np = self.GetObs()
 
@@ -170,7 +188,7 @@ class SimpleInference:
 
         # run inference
         tic = utils.tic()
-        action, all_actions = self.RunInference(obs_dict_np)
+        action, all_actions = self.RunInference(obs_dict_np, progress=progress, progress_valid=progress_valid)
         toc = utils.toc(tic)
         globals.log_one_if_exists("profiling/SimpleInference.RunInference", toc)
 

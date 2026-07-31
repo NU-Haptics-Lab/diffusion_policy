@@ -1410,11 +1410,53 @@ class HondaBatchLoader(BatchLoader):
         return nns
 
 
+class Honda1BatchLoader(HondaBatchLoader):
+    """
+    HondaBatchLoader + subtask_id + progress/progress_valid, for honda_1's
+    full_task_rotate_lid.zarr specifically -- not all honda zarrs have these
+    keys, so this stays separate from HondaBatchLoader.
+
+    Each needs its own identity normalizer entry (like task_id) purely so
+    NestedDataArray.set() doesn't KeyError on the extra keys Honda1Sampler adds
+    to every sample. subtask_id is loss-weighting metadata (see Honda1BatchLoss);
+    progress/progress_valid feed the diffusion transformer's progress token
+    (see DexNexTransformerForDiffusion's use_progress_token) -- none of the
+    three are model obs inputs in the normal obs_encoder sense.
+    """
+
+    def get_static_nns(self):
+        nns = super().get_static_nns()
+        nns['subtask_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        nns['progress'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        nns['progress_valid'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        return nns
+
+
 def _nested_cat(a, b, dim=0):
     """Recursively torch.cat matching leaves of two nested dicts/tensors."""
     if isinstance(a, dict):
         return {k: _nested_cat(a[k], b[k], dim=dim) for k in a}
     return torch.cat([a, b], dim=dim)
+
+
+def _clip_outliers_for_fit(data, low_pct=0.5, high_pct=99.5):
+    """
+    Clip each channel to its [low_pct, high_pct] percentile range before fitting a
+    limits-mode normalizer. mode='limits' fits scale/offset from the raw min/max, so a
+    handful of extreme spikes (e.g. sim contact-force transients) blow up the fitted
+    range and squash the bulk of real, in-range data into a tiny sliver near 0.
+    """
+    arr = np.asarray(data[:])
+    lo, hi = np.percentile(arr, [low_pct, high_pct], axis=0)
+
+    print("lo, hi: ", lo.min(), hi.max())
+    return np.clip(arr, lo, hi)
 
 
 class Honda2BatchLoader(HondaBatchLoader):
@@ -1427,8 +1469,12 @@ class Honda2BatchLoader(HondaBatchLoader):
     must already equal the desired per-domain sample count -- this class does
     not slice/resize, it only concatenates two already-correctly-sized batches.
 
-    Normalizer stats (get_fitted_nns) are fit from sim and real combined,
-    since there's no single 'all' rb_id to fall back on here.
+    Sim and real are normalized SEPARATELY, each with its own fitted stats
+    (self.sim_nested_data_array for sim, self.nested_data_array for real) --
+    each sub-batch is normalized before concatenation, not after. `self.nested_data_array`
+    (the inherited generic normalize_batch/unnormalize_batch entry point, used by
+    e.g. unnorm_and_transfer() during real-robot inference) is backed by the real
+    normalizer, since deployment is always on the real robot.
     """
     def __init__(self, sim_rb_id, real_rb_id, sim_ratio, train_or_val, use_dataloader=True, strict=True):
         super().__init__(rb_id=sim_rb_id, train_or_val=train_or_val, use_dataloader=use_dataloader, strict=strict)
@@ -1439,13 +1485,17 @@ class Honda2BatchLoader(HondaBatchLoader):
         self.real_dataloaders = None
         self.sim_iterator = None
         self.real_iterator = None
+        self.sim_nested_data_array = None
 
     def setup(self):
         if self.use_dataloader:
             self.sim_dataloaders: TrainAndVal = globals.DATALOADERS[self.sim_rb_id]  # type: ignore
             self.real_dataloaders: TrainAndVal = globals.DATALOADERS[self.real_rb_id]  # type: ignore
 
-        self.nested_data_array = NestedDataArray("top-level", strict=self.strict)
+        # self.nested_data_array backs the generic normalize_batch/unnormalize_batch
+        # entry points (e.g. unnorm_and_transfer during real-robot inference) -- real only
+        self.nested_data_array = NestedDataArray("real", strict=self.strict)
+        self.sim_nested_data_array = NestedDataArray("sim", strict=self.strict)
 
         device_type: str = globals.CONFIG.device  # type: ignore
         self.device = torch.device(device_type)
@@ -1468,9 +1518,14 @@ class Honda2BatchLoader(HondaBatchLoader):
             self.real_iterator = None
 
     def _next_from(self, which):
-        """which is 'sim' or 'real'. Re-inits only that domain's iterator on exhaustion."""
+        """
+        which is 'sim' or 'real'. Re-inits only that domain's iterator on exhaustion.
+        Returns None if that domain has no dataloader at all (e.g. its batch_size is 0
+        and TrainAndVal.whether_to_use was set false for it) -- not an error, just "skip".
+        """
         iterator = getattr(self, f"{which}_iterator")
-        assert iterator is not None
+        if iterator is None:
+            return None
         try:
             return next(iterator)
         except Exception:
@@ -1479,26 +1534,41 @@ class Honda2BatchLoader(HondaBatchLoader):
             setattr(self, f"{which}_iterator", iterator)
             return next(iterator)
 
+    def _normalize_with(self, nda: NestedDataArray, batch):
+        """Transfer one domain's raw batch to GPU and normalize it with that domain's own NestedDataArray."""
+        batch_gpu = self.transfer_to_gpu(batch)
+        nda.reset()
+        nda.set(batch_gpu)
+        nda.normalize()
+        return nda.get()
+
     def get_batch(self):
         sim_batch = self._next_from("sim")
         real_batch = self._next_from("real")
 
-        batch = _nested_cat(sim_batch, real_batch, dim=0)
+        normed = []
+        if sim_batch is not None:
+            normed.append(self._normalize_with(self.sim_nested_data_array, sim_batch))
+        if real_batch is not None:
+            normed.append(self._normalize_with(self.nested_data_array, real_batch))
+        assert normed, "Honda2BatchLoader: both sim and real are disabled (batch_size 0) -- at least one must be active"
 
-        ndata = self.transfer_and_norm(batch)
+        batch = normed[0]
+        for b in normed[1:]:
+            batch = _nested_cat(batch, b, dim=0)
 
         def fn(x):
             if not torch.isfinite(x).all():
                 raise ValueError("Batch contains non-finite values.")
-        pytorch_util.dict_apply_inplace(ndata, fn)
+        pytorch_util.dict_apply_inplace(batch, fn)
 
-        return ndata
+        return batch
 
-    def get_fitted_nns(self):
+    def get_fitted_nns_for(self, rb_id):
+        """Fit normalizer stats from a single rb_id (sim or real), not combined."""
         nns = self.get_static_nns()
 
-        sim_rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.sim_rb_id]  # type: ignore
-        real_rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.real_rb_id]  # type: ignore
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[rb_id]  # type: ignore
         obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
         act_key: str = globals.CONFIG.action_key  # type: ignore
 
@@ -1510,11 +1580,13 @@ class Honda2BatchLoader(HondaBatchLoader):
 
         for obs_key in obs_keys_to_normalize:
             assert obs_key in obs_keys_to_load, f"Observation key '{obs_key}' is not in the list of keys to load."
-            combined = np.concatenate([sim_rb[obs_key][:], real_rb[obs_key][:]], axis=0)
-            self.fit_nn(combined, nns['obs'][obs_key], obs_key)
+            self.fit_nn(_clip_outliers_for_fit(rb[obs_key]), nns['obs'][obs_key], obs_key)
 
-        if act_key in sim_rb and act_key in real_rb:
-            combined_act = np.concatenate([sim_rb[act_key][:], real_rb[act_key][:]], axis=0)
-            self.fit_nn(combined_act, nns['action'], act_key)
+        if act_key in rb:
+            self.fit_nn(_clip_outliers_for_fit(rb[act_key]), nns['action'], act_key)
 
         return nns
+
+    def init_normalizers(self):
+        self.nested_data_array.set_normalizers(self.get_fitted_nns_for(self.real_rb_id))
+        self.sim_nested_data_array.set_normalizers(self.get_fitted_nns_for(self.sim_rb_id))

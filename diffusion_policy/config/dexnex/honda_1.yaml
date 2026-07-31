@@ -7,7 +7,7 @@ description: "honda_1: based on aiet...-2.yaml"
 debug: false #
 single_thread: false 
 use_compiled_policy: false # currently doesn't do anything 
-total_num_epochs: 1001
+total_num_epochs: 2001
 batches_per_epoch: 100
 batch_size: 64
 val_every: 20
@@ -22,12 +22,12 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
 run_tag: honda_1
 
-resume_tag: step=0009318
+resume_tag: step=0075001
 output_dir: /home/northwestern/models/honda_1
 
 tasks_to_use:
@@ -39,7 +39,7 @@ tasks_to_use:
 obs_keys_to_use:
   - joint_states
   - wrist_cam_features
-  - overhead_cam_features
+  # - overhead_cam_features
   - fingertip_forces
   # - tactile_sensor
 
@@ -48,11 +48,11 @@ obs_keys_to_use:
 obs_keys_to_load:
   - joint_states
   - wrist_cam_features
-  - overhead_cam_features
+  # - overhead_cam_features
   - fingertip_forces
   # - tactile_sensor
   - wrist_cam_patch_features
-  - overhead_cam_patch_features
+  # - overhead_cam_patch_features
 
 models_to_train:
   - actor
@@ -75,6 +75,10 @@ step_freqs:
 use_bc_loss: true
 action_relative_to_state: false
 use_denoise: false # false for residual actor
+# subtask_id -> loss weight multiplier; any subtask_id not listed here stays at 1.0
+subtask_weights:
+  1: 2.0
+  2: 1.5
 ### End Global Control Panel ###
 
 num_inference_steps: 25
@@ -133,9 +137,9 @@ shape_meta:
     shape:
     - 4
 
-  tactile_sensor:
-    shape:
-    - 288
+  # tactile_sensor:
+  #   shape:
+  #   - 288
 
   wrist_cam_patch_features:
     shape:
@@ -221,14 +225,14 @@ replay_buffer_loader:
 
   # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
-    all: /home/northwestern/datasets/real.zarr
+    all: /home/northwestern/datasets/full_task_rotate_lid.zarr
 
   modes:
     all: r
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
-  _target_: diffusion_policy.dataset.batch_loader.HondaBatchLoader
+  _target_: diffusion_policy.dataset.batch_loader.Honda1BatchLoader
   rb_id: "default" # forces a load
   train_or_val: eval # unnecessary during inference
   use_dataloader: false # must be false during inference
@@ -269,15 +273,16 @@ common_wbatch_loss:
 
   # children
   batch_loss:
-    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    _target_: diffusion_policy.losses.batch_loss.Honda1BatchLoss
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
+    subtask_weights: ${subtask_weights}
 
     # children
     # for normalizing
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.HondaBatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.Honda1BatchLoader
       rb_id: default # forces a load
       train_or_val: train
 
@@ -293,7 +298,7 @@ common_dataset:
   val_ratio: 0.02
   max_train_episodes: null
   use_weighted_dataloader: false # NOTE: doesn't seem to work when all weights are 1.0 ...???
-  preload_to_gpu: true # will override options. makes bigger impact when policy is small
+  preload_to_gpu: false # will override options. makes bigger impact when policy is small
 
   options:
     common:
@@ -315,7 +320,7 @@ common_dataset:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: default
 
-    ep_sampler_class_str: diffusion_policy.samplers.honda_sampler.HondaSampler
+    ep_sampler_class_str: diffusion_policy.samplers.honda_sampler.Honda1Sampler
 
     # child
 
@@ -354,17 +359,22 @@ models:
           # diffusion transformer?
           model_type: dexnex_transformer
           transformer_n_layer: 4
-          transformer_n_emb: 64 # I chose to make this the same size as the dinov3 output so we don't lose any img features
+          transformer_n_emb: 128
           transformer_n_cond_layers: 4
           diagnostics_every_n_steps: 50
           transformer_droppable_token_keys: null
           transformer_p_drop_token: 0.25
 
           # co-train?
-          embed_task_id: true
+          embed_task_id: false
           num_tasks: 30
 
-          patch_keys_to_use: ['wrist_cam_patch_features', 'overhead_cam_patch_features']
+          # progress (fraction through episode) token -- only meaningful/used for
+          # full-task samples (subtask_id == -1); masked out for subtask samples.
+          # See Honda1Sampler (computes progress/progress_valid per sample).
+          use_progress_token: false
+
+          patch_keys_to_use: ['wrist_cam_patch_features']
 
       ema:
         _target_: diffusion_policy.model.model.Ema

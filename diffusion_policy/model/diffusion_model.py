@@ -110,8 +110,8 @@ class DexNexTransformerAdapter(nn.Module):
         super().__init__()
         self.transformer = transformer
 
-    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, log_attn=False, **kwargs):
-        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, log_attn=log_attn)
+    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, log_attn=False, progress=None, progress_valid=None, **kwargs):
+        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, log_attn=log_attn, progress=progress, progress_valid=progress_valid)
 
     def get_optim_groups(self, weight_decay: float=1e-3):
         return self.transformer.get_optim_groups(weight_decay=weight_decay)
@@ -197,6 +197,7 @@ class DiffusionModel(BaseImagePolicy):
             transformer_n_cond_layers = 4,
             transformer_p_drop_token = 0.0, # whole-token (modality) dropout probability
             transformer_droppable_token_keys = None, # obs/task_id keys eligible for whole-token dropout; None = all except timestep
+            use_progress_token = False, # add a progress (fraction through episode) token; dexnex_transformer only. Read from nbatch['progress']/['progress_valid']; masked out per-sample where progress_valid is falsy.
             patch_keys_to_use = None, # obs keys that are unpooled patch-token grids (e.g. DINOv3 patches); dexnex_transformer only. Read directly from nbatch['obs'], bypassing obs_encoder, since ObservationEncoder always flattens per-key output and would destroy the patch grid.
             diagnostics_every_n_steps = 50, # gate for the pricier periodic diagnostics (attn entropy, task embedding stats)
             # parameters passed to step
@@ -237,6 +238,7 @@ class DiffusionModel(BaseImagePolicy):
         self.transformer_n_cond_layers = transformer_n_cond_layers
         self.transformer_p_drop_token = transformer_p_drop_token
         self.transformer_droppable_token_keys = transformer_droppable_token_keys
+        self.use_progress_token = use_progress_token
         self.patch_keys_to_use = patch_keys_to_use or []
         self.diagnostics_every_n_steps = diagnostics_every_n_steps
 
@@ -334,6 +336,7 @@ class DiffusionModel(BaseImagePolicy):
                 n_cond_layers=self.transformer_n_cond_layers,
                 p_drop_token=self.transformer_p_drop_token,
                 droppable_token_keys=self.transformer_droppable_token_keys,
+                use_progress_token=self.use_progress_token,
             )
             model = DexNexTransformerAdapter(transformer)
 
@@ -443,6 +446,8 @@ class DiffusionModel(BaseImagePolicy):
             patches=None,
             generator=None,
             task_id = None,
+            progress = None,
+            progress_valid = None,
             # keyword arguments to scheduler.step
             **kwargs
             ):
@@ -464,7 +469,8 @@ class DiffusionModel(BaseImagePolicy):
             model_output = self.model(trajectory,
                                       t,
                                       task_id,
-                local_cond=local_cond, global_cond=global_cond, patches=patches)
+                local_cond=local_cond, global_cond=global_cond, patches=patches,
+                progress=progress, progress_valid=progress_valid)
             
             # tree?
             if self.use_tree:
@@ -486,23 +492,24 @@ class DiffusionModel(BaseImagePolicy):
         return trajectory
     
     @torch.no_grad()
-    def infer(self, nobs_dict: dict, task_id=None, noise_scheduler=None):
+    def infer(self, nobs_dict: dict, task_id=None, noise_scheduler=None, progress=None, progress_valid=None):
         """
         setup for predict_action. Squeeze all tensors, then add the appropriate dimensions
         """
         # for key, val in nobs_dict.items():
         #     val = torch.squeeze(val)
-            
+
         #     # predict_action expects a batch dimension, and a history dimension, so add two axes
         #     val = torch.reshape(val, [1, 1] + list(val.shape))
-            
+
         #     nobs_dict[key] = val
-        
+
         if noise_scheduler is None:
             noise_scheduler = self.noise_scheduler
-            
+
         self.eval()
-        nresult = self.predict_action_impl(nobs_dict, task_id=task_id, noise_scheduler=noise_scheduler)
+        nresult = self.predict_action_impl(nobs_dict, task_id=task_id, noise_scheduler=noise_scheduler,
+            progress=progress, progress_valid=progress_valid)
         self.train()
         
         # naction doesn't include past actions
@@ -527,20 +534,27 @@ class DiffusionModel(BaseImagePolicy):
     def predict_action(self, # type:ignore
                        nobs_dict: Dict[str, torch.Tensor],
                         task_id = None,
-                       ) -> Dict[str, torch.Tensor]: 
+                        progress = None,
+                        progress_valid = None,
+                       ) -> Dict[str, torch.Tensor]:
         return self.predict_action_impl(
             nobs_dict,
             self.noise_scheduler,
             task_id=task_id,
+            progress=progress,
+            progress_valid=progress_valid,
             )
-        
-    def denoise(self, 
+
+    def denoise(self,
             nobs_dict,
             noise_scheduler,
             task_id = None,
+            progress = None,
+            progress_valid = None,
             ):
         """ alias for predict_action_impl """
-        return self.predict_action_impl(nobs_dict, noise_scheduler , task_id=task_id)
+        return self.predict_action_impl(nobs_dict, noise_scheduler, task_id=task_id,
+            progress=progress, progress_valid=progress_valid)
     
     def get_future_actions(self, all_actions):
         start = np.argmax(np.array(self.action_rel_indices) >= 0)
@@ -548,10 +562,12 @@ class DiffusionModel(BaseImagePolicy):
         future_actions = all_actions[:, start:]
         return future_actions
 
-    def predict_action_impl(self, 
+    def predict_action_impl(self,
             nobs_dict: Dict[str, torch.Tensor],
             noise_scheduler,
             task_id = None,
+            progress = None,
+            progress_valid = None,
             ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -605,6 +621,8 @@ class DiffusionModel(BaseImagePolicy):
             global_cond=global_cond,
             patches=patches,
             task_id = task_id,
+            progress = progress,
+            progress_valid = progress_valid,
             **self.kwargs)
         
         # unnormalize elsewhere
@@ -655,13 +673,15 @@ class DiffusionModel(BaseImagePolicy):
     def get_val_action_mse_error(self, nbatch, task_id=None):
         if self.action_relative_to_state:
             nbatch = self.ActionRelativeToState(nbatch)
-            
+
         # ground truth action
         nobs = nbatch['obs']
         gt_action = nbatch['action']
-        
+        progress = nbatch['progress'] if 'progress' in nbatch else None
+        progress_valid = nbatch['progress_valid'] if 'progress_valid' in nbatch else None
+
         # denoise
-        nresult = self.predict_action(nobs, task_id=task_id)
+        nresult = self.predict_action(nobs, task_id=task_id, progress=progress, progress_valid=progress_valid)
         
         # extract the predicted action
         pred_action = nresult['naction_pred']
@@ -776,6 +796,8 @@ class DiffusionModel(BaseImagePolicy):
         
         # for cotraining, we normalize when we construct the batch
         task_id = nbatch['task_id'] if 'task_id' in nbatch else None
+        progress = nbatch['progress'] if 'progress' in nbatch else None
+        progress_valid = nbatch['progress_valid'] if 'progress_valid' in nbatch else None
         nobs = nbatch['obs']
         nactions = nbatch['action']
         batch_size = nactions.shape[0]
@@ -841,7 +863,8 @@ class DiffusionModel(BaseImagePolicy):
 
         # Predict the noise residual
         pred = self.model(noisy_trajectory, timesteps, task_id,
-            local_cond=local_cond, global_cond=global_cond, patches=patches, log_attn=do_diagnostics)
+            local_cond=local_cond, global_cond=global_cond, patches=patches, log_attn=do_diagnostics,
+            progress=progress, progress_valid=progress_valid)
 
         # tree?
         if self.use_tree:

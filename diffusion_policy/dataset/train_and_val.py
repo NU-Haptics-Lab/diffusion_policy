@@ -203,6 +203,9 @@ class TrainAndVal:
         self.use_val_set = use_val_set
         self.preload_to_gpu = preload_to_gpu
 
+        # safe default so __getitem__ works even if whether_to_use=False and init() never populates this
+        self.dd = {"all": None, "train": None, "val": None}
+
         self.is_setup = False
         
     def setup(self):
