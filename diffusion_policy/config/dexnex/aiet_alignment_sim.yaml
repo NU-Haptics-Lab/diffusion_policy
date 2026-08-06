@@ -2,17 +2,17 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_erlenmeyer_flask_2: training for the aiet erlenmeyer flask task. left side only. switch to diffusion transformer"
+description: "aiet_alignment_sim: sim-only training for the pellet alignment sub-task. no vision, state + target pellet location only."
 # global controls
 debug: false #
-single_thread: false 
-use_compiled_policy: false # currently doesn't do anything 
-total_num_epochs: 3001
+single_thread: false
+use_compiled_policy: false # currently doesn't do anything
+total_num_epochs: 1001
 batches_per_epoch: 100
-batch_size: 64
+batch_size: 1024
 val_every: 20
 
-action_key: joint_commands
+action_key: joint_positions
 
 ### Global Control Panel ###
 to_load:
@@ -22,13 +22,13 @@ to_load:
   - globals
 
 # hack
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_erlenmeyer_flask_2
+run_tag: aiet_alignment_sim
 
-resume_tag: step=0105957
-output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_2
+resume_tag: latest
+output_dir: /media/dexnex_ssd/models/aiet_alignment_sim
 
 tasks_to_use:
   - all
@@ -37,22 +37,13 @@ tasks_to_use:
 
 # which obs the obs_encoder will use
 obs_keys_to_use:
-  - joint_states
-  - wrist_cam_features
-  # - overhead_cam_features
-  - overhead_roi_features
-  - biotac_lh
-
+  - joint_positions
+  - target_pellet_location
 
 # which obs the sarsa_sampler will load from the replay buffer, and used by the batch loader
 obs_keys_to_load:
-  - joint_states
-  - wrist_cam_features
-  # - overhead_cam_features
-  - overhead_roi_features
-  - biotac_lh
-  - wrist_cam_patch_features_7x7
-  - overhead_roi_patch_features_7x7
+  - joint_positions
+  - target_pellet_location
 
 models_to_train:
   - actor
@@ -85,13 +76,8 @@ clamp: false # clamp actions (and diffusion noise)
 ###################################################
 ###################################################
 action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 0 is current idx, negative number is in the past, positive number is in the future
-# action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6] # 0 is current idx, negative number is in the past, positive number is in the future
 obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
 gradient_accumulate_every: 1 # may move this to ModelandEma later
-
-# global_checkpointer:
-#   _target_: diffusion_policy.common.checkpointer.GlobalCheckpointer
-
 
 checkpoint:
   _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
@@ -108,60 +94,17 @@ checkpoint:
   # required if resuming
   resume: ${resume}
   resume_tag: ${resume_tag}
-  # output_dir: "/media/dexnex_ssd/models/${now:%Y.%m.%d}/${now:%H.%M.%S}"
   output_dir: ${output_dir}
 
-# common data 
+# common data
 shape_meta:
-  joint_states:
-    shape:
-    - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
-    
-  joint_commands:
+  joint_positions:
     shape:
     - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
 
-  wrist_cam_features:
+  target_pellet_location:
     shape:
-    - 384 # dinov3 large
-
-  overhead_cam_features:
-    shape:
-    - 384 # dinov3 large
-
-  overhead_roi_features:
-    shape:
-    - 384 # dinov3 large
-    
-  biotac_lh:
-    shape:
-    - 5
-
-  wrist_cam_patch_features:
-    shape:
-      - 14
-      - 14
-      - 384
-
-  overhead_roi_patch_features:
-    shape:
-      - 14
-      - 14
-      - 384
-
-  wrist_cam_patch_features_7x7:
-    shape:
-      - 7
-      - 7
-      - 384
-
-  overhead_roi_patch_features_7x7:
-    shape:
-      - 7
-      - 7
-      - 384
-
-
+    - 3 # xyz
 
 training:
   max_train_steps: null
@@ -184,7 +127,8 @@ logging:
     resume: true # wandb automatic resume
     tags:
     - diffusion
-    - cotrain
+    - sim
+    - alignment
     - default
 
 common_obs_encoder:
@@ -195,25 +139,13 @@ common_obs_encoder:
   cw: null
 
   lowdims:
-    joint_states:
+    joint_positions:
       shape:
       - 30 # gofa (6), wr (2), th (5), ff (4), mf (4), rf (4), lf (5)
-      
-    wrist_cam_features:
-      shape:
-      - 384 # dinov3 large
 
-    overhead_cam_features:
+    target_pellet_location:
       shape:
-      - 384 # dinov3 large
-
-    overhead_roi_features:
-      shape:
-      - 384 # dinov3 large
-      
-    biotac_lh:
-      shape:
-      - 5
+      - 3 # xyz
 
 
 
@@ -227,8 +159,8 @@ common_indices:
   pad_before: 0
   pad_after: 0
   debug: ${debug}
-  use_zero_padding: false # should be true if the action is torque or vel, should be false if the action is position. Think about action_rel_indices and obs_rel_indices. Will work without any extra code so long as obs_rel_indices is [0]. Otherwise, will have to specify per key
-  restrict_to_valid_future: true # if true, excludes "current" indices near the end of an episode whose action_rel_indices future window would run past the true episode end -- otherwise those future actions get forward-filled (repeating the last valid action)
+  use_zero_padding: false # position control -- should be false, per the erlenmeyer task's convention
+  restrict_to_valid_future: true # exclude "current" indices near episode end whose action_rel_indices future window would run past the true episode end
 
 
 
@@ -236,16 +168,15 @@ common_indices:
 replay_buffer_loader:
   _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
 
-  # NOTE -- the keys in these zarr datasets are ["img", "img2", "state", "action", "reward"]
   rb_paths:
-    all: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    all: /home/omnid/dexnex/ws_avatar_drake/src/avatar_master/avatar_intelligence/avatar_intelligence/sims/aiet_alignment/combined.zarr
 
   modes:
     all: r
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
-  _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlaskBatchLoader
+  _target_: diffusion_policy.dataset.batch_loader.AIETAlignmentSimBatchLoader
   rb_id: "default" # forces a load
   train_or_val: eval # unnecessary during inference
   use_dataloader: false # must be false during inference
@@ -255,17 +186,17 @@ default_batch_loader:
 session_trainer:
   _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
   nb_epochs: ${total_num_epochs} # testing
-  
+
   # children
   epoch_trainer:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
     nb_batches: ${batches_per_epoch}
 
     # children
-    step_trainer: 
+    step_trainer:
       _target_: diffusion_policy.trainers.step_trainer.StepTrainer
       grad_norm: 1.0
-    
+
       # weighted batch loss dict
       w_batch_losses:
         all: ${common_wbatch_loss}
@@ -290,21 +221,18 @@ common_wbatch_loss:
     use_bc_loss: ${use_bc_loss}
     freqs: ${step_freqs}
     eta: 1.0
-    subtask_weights: # per-sample loss weight by subtask_id
-      0: 1.0
-      1: 3.0
 
     # children
     # for normalizing
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlaskBatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.AIETAlignmentSimBatchLoader
       rb_id: default # forces a load
       train_or_val: train
 
 dataloaders:
   _target_: diffusion_policy.dataset.train_and_val.DataLoaders
 
-  d: 
+  d:
     all: ${common_dataset}
 
 common_dataset:
@@ -312,8 +240,8 @@ common_dataset:
   seed: 42
   val_ratio: 0.02
   max_train_episodes: null
-  use_weighted_dataloader: false # NOTE: doesn't seem to work when all weights are 1.0 ...???
-  preload_to_gpu: false # will override options. makes bigger impact when policy is small
+  use_weighted_dataloader: false
+  preload_to_gpu: false # still slow
 
   options:
     common:
@@ -347,19 +275,16 @@ models:
     actor:
       _target_: diffusion_policy.model.model.ModelEmaOptim
 
-      # # checkpointer
-      # checkpointer: ${common_checkpoint}
-
       model:
         _target_: diffusion_policy.model.model.Model
         model:
           _target_: diffusion_policy.model.diffusion_model.DiffusionModel
-          action_shape: ${shape_meta.joint_commands.shape}
+          action_shape: ${shape_meta.joint_positions.shape}
           noise_scheduler: ${common_noise_scheduler}
           obs_encoder_maker: ${common_obs_encoder}
-          eval_fixed_crop: true
+          eval_fixed_crop: false
           obs_as_global_cond: true
-          obs_encoder_group_norm: true
+          obs_encoder_group_norm: false
           n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
           down_dims: # must be divisible by nb_groups (8)
             - 256
@@ -371,20 +296,14 @@ models:
           use_tree: false
           use_simple_model: false
 
-          # diffusion transformer?
+          # diffusion transformer? sim-only, no vision -- no patch_keys_to_use, no cotraining task_id
           model_type: dexnex_transformer
           transformer_n_layer: 4
-          transformer_n_emb: 128 # I chose to make this the same size as the dinov3 output so we don't lose any img features
-          transformer_n_cond_layers: 8
+          transformer_n_emb: 128
+          transformer_n_cond_layers: 4
           diagnostics_every_n_steps: 50
-          transformer_droppable_token_keys: ['wrist_cam_patch_features_7x7', 'overhead_roi_patch_features_7x7']
-          transformer_p_drop_token: 0.1
 
-          # co-train?
-          embed_task_id: true
-          num_tasks: 26
-
-          patch_keys_to_use: ['wrist_cam_patch_features_7x7', 'overhead_roi_patch_features_7x7']
+          embed_task_id: false
 
       ema:
         _target_: diffusion_policy.model.model.Ema
@@ -409,7 +328,7 @@ models:
             - 0.95
             - 0.999
           eps: 1.0e-08
-          lr: 1e-4 # 1e-4
+          lr: 1e-4
           weight_decay: 1.0e-06
 
 
@@ -422,17 +341,17 @@ common_noise_scheduler:
   clip_sample: true # apparently you want this true when prediction_type is sample. NOTE: THIS CLIPS TO -CLIP_SAMPLE_RANGE, CLIP_SAMPLE_RANGE SO MAKE SURE YOU NORMALIZE THE ACTIONS TO THAT RANGE
   num_train_timesteps: 100
   prediction_type: sample # epsilon or sample
-     
+
 device: cuda:0
 
 override:
   session_trainer:
     epoch_trainer:
-      step_trainer: 
+      step_trainer:
         w_batch_losses:
           all:
             weight: 1.0
-            batch_loss: 
+            batch_loss:
               batch_loader:
                 rb_id: all
               use_bc_loss: ${use_bc_loss}
@@ -440,7 +359,7 @@ override:
       w_batch_losses:
         all:
           weight: 1.0
-          batch_loss: 
+          batch_loss:
             batch_loader:
               rb_id: all
               train_or_val: val

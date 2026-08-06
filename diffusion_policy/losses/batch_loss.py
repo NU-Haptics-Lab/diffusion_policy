@@ -34,6 +34,7 @@ class BatchLoss:
             freqs = {}, # training frequencies, units: steps
             loss_clip_value = 1.0,
             remove_outlier_losses = False, # use carefully
+            subtask_weights = None, # optional: {subtask_id: weight}, applied per-sample to the bc loss and logged separately. No-op if nbatch has no 'subtask_id'.
         ):
         self.batch_loader = batch_loader
         self.eta = eta
@@ -41,6 +42,7 @@ class BatchLoss:
         self.freqs = freqs
         self.loss_clip_value = loss_clip_value
         self.remove_outlier_losses = remove_outlier_losses
+        self.subtask_weights = subtask_weights
         
     def __len__(self):
         return len(self.batch_loader)
@@ -89,16 +91,44 @@ class BatchLoss:
         
         globals.LOGGER.log_one("BC/" + self.rb_id + ": bc_actor_loss", actor_loss)
     
+    def log_and_weight_by_subtask(self, nbatch, sample_loss):
+        """
+        Log each subtask_id's (raw, unweighted) loss separately, then apply
+        self.subtask_weights per-sample before returning. No-op if the batch
+        has no 'subtask_id' key.
+        """
+        if 'subtask_id' not in nbatch:
+            return sample_loss
+
+        subtask_id = torch.reshape(nbatch['subtask_id'], [-1])
+
+        with torch.no_grad():
+            for sid in torch.unique(subtask_id).tolist():
+                mask = subtask_id == sid
+                if mask.any():
+                    globals.LOGGER.log_one(f"BC/{self.rb_id}: subtask_{int(sid)}_loss", sample_loss[mask].mean())
+
+        if self.subtask_weights is None:
+            return sample_loss
+
+        weights = torch.ones_like(sample_loss)
+        for sid, w in self.subtask_weights.items():
+            weights[subtask_id == int(sid)] = w
+
+        return sample_loss * weights
+
     def compute_sample_loss(self):
         # get the batch from the batch loader
         nbatch = self.current_batch
-        
+
         # compute loss
         actor_loss, a0, timesteps = self.actor.loss(nbatch, self.rb_id)
-        
+
         sample_loss = torch.mean(actor_loss, dim=(1, 2))
         sample_loss = sample_loss.squeeze()
-        
+
+        sample_loss = self.log_and_weight_by_subtask(nbatch, sample_loss)
+
         return sample_loss, a0, timesteps
 
     def compute_loss(self):

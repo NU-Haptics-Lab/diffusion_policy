@@ -117,14 +117,28 @@ class GPUCachedDataset(torch.utils.data.Dataset):
     __getitem__ then returns directly from the pre-loaded tensors with no
     zarr / numpy overhead per step.
     """
-    def __init__(self, dataset: 'DexNexDataset', device: torch.device):
+    def __init__(self, dataset: 'DexNexDataset', device: torch.device, num_workers: int = 0):
         self._source = dataset  # kept for attribute delegation
         self._len = len(dataset)
         if self._len == 0:
             self._data = None
             return
         print(f"Preloading {self._len} samples to {device} ...")
-        samples = [dataset[i] for i in tqdm(range(self._len), desc="gpu-preload")]
+        if num_workers > 0:
+            # parallelize the CPU-bound per-sample construction (zarr reads,
+            # astype, torch.from_numpy) across worker processes, same
+            # mechanism as normal training dataloading -- only the final
+            # GPU stack/transfer below stays in the main process.
+            loader = torchDataLoader(
+                dataset,
+                batch_size=1,
+                num_workers=num_workers,
+                collate_fn=lambda batch: batch[0],
+                shuffle=False,
+            )
+            samples = [s for s in tqdm(loader, desc="gpu-preload", total=self._len)]
+        else:
+            samples = [dataset[i] for i in tqdm(range(self._len), desc="gpu-preload")]
         self._data = _nested_stack_to_device(samples, device)
 
     def __len__(self):
@@ -366,7 +380,7 @@ class TrainAndVal:
         base = DexNexDataset(self.train_sampler)
         if self.preload_to_gpu:
             device = torch.device(globals.CONFIG.device if globals.CONFIG is not None and hasattr(globals.CONFIG, 'device') else 'cuda')  # type: ignore
-            self.train_dataset = GPUCachedDataset(base, device)
+            self.train_dataset = GPUCachedDataset(base, device, num_workers=self.options.train.num_workers) #type:ignore
         else:
             self.train_dataset = base
 
@@ -463,7 +477,7 @@ class TrainAndVal:
         if self.preload_to_gpu:
             # Load the full dataset once, then create zero-copy views for train/val.
             device = torch.device(globals.CONFIG.device if globals.CONFIG is not None and hasattr(globals.CONFIG, 'device') else 'cuda')  # type: ignore
-            self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device)
+            self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device, num_workers=self.options.train.num_workers) #type:ignore
             train_indices = np.where(train_mask)[0]
             val_indices = np.where(val_mask)[0]
             self.train_dataset = GPUDatasetView(self.all_dataset, train_indices)

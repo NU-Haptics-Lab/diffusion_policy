@@ -37,6 +37,12 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
         try:
             sample["task_id"] = self.get_key_sample("task_id", ep_idx)
         except KeyError:
-            sample["task_id"] = 24
+            sample["task_id"] = np.array([24], dtype=np.float32)
+
+        # subtask id (e.g. 0 = normal, 1 = alignment-focused). 0 if the sample doesn't have one.
+        try:
+            sample["subtask_id"] = self.get_key_sample("subtask_id", ep_idx)
+        except KeyError:
+            sample["subtask_id"] = np.array([0], dtype=np.float32)
 
         return sample

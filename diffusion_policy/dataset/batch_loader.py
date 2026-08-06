@@ -1251,7 +1251,12 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
         nns['task_id'] = get_identity_normalizer_from_stat(
             {'min': np.array([0], dtype=np.float32)}
         )
-        
+
+        # subtask id, identity normalizer -- must not be touched by normalization
+        nns['subtask_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+
         return nns
 
     def get_fitted_nns(self):
@@ -1273,7 +1278,69 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
             self.fit_nn(rb[act_key], nns['action'], act_key)
 
         return nns
-    
+
+
+class AIETAlignmentSimBatchLoader(BatchLoader):
+    """
+    BatchLoader for the sim-only pellet alignment task.
+
+    Zarr keys:
+      joint_positions        [T, 30] -- gofa(6)+wrist(2)+th(5)+ff(4)+mf(4)+rf(4)+lf(5);
+                                         used as both an obs key and the action key
+      target_pellet_location [T, 3]  -- xyz location of the target pellet
+
+    Sim-only, no images/vision features. No known a-priori limits for this
+    sim setup (unlike JOINT_LIMITS for the real robot), so both obs keys and
+    the action are fit directly from the dataset (mode='limits') in get_fitted_nns.
+    """
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+
+        # the shared AIETErlenmeyerFlaskSampler always emits task_id/subtask_id
+        # (with fallback defaults when a dataset doesn't have them, as here) --
+        # register identity normalizers so NestedDataArray has somewhere to put
+        # them. Harmless: embed_task_id is false for this sim-only task.
+        nns['task_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        nns['subtask_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+
+        return nns
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
+        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
+        act_key: str = globals.CONFIG.action_key  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+
+        if act_key in rb:
+            self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns
+
 
 class TroubleshootClenchBatchLoader(BatchLoader):
     """
