@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_alignment_sim: sim-only training for the pellet alignment sub-task. Two-stage architecture: a PelletLocalizer (DINOv3 wrist-camera patch tokens + joint_positions + wrist_camera_pose_xyz_rpy -> spatial softmax -> predicted pellet xyz + has-pellet classifier, trained by its own losses, detached before conditioning) feeds its predicted xyz AND has-pellet probability into the main diffusion transformer alongside joint_positions + wrist_camera_pose_xyz_rpy -- the transformer never sees vision directly. See diffusion_policy.model.pellet_localizer.PelletLocalizer and DiffusionModel._maybe_run_pellet_localizer."
+description: "aiet_alignment_sim_2: sim-only training for the pellet alignment sub-task. Simpler single-stage architecture than aiet_alignment_sim.yaml: DINOv3 wrist-camera patch tokens are fed straight into the main diffusion transformer as a spatial-softmax patch group (same mechanism as aiet_erlenmeyer_flask_3's DINO patch keys), alongside joint_positions + wrist_camera_pose_xyz_rpy. No PelletLocalizer, no aux losses (no keypoint/xyz/classifier supervision) -- pure end-to-end diffusion BC, letting the transformer's own spatial softmax learn whatever it needs directly from the BC gradient."
 # global controls
 debug: false #
 single_thread: false
@@ -22,38 +22,35 @@ to_load:
   - globals
 
 # hack
-resume: false
+resume: true
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_alignment_sim
+run_tag: aiet_alignment_sim_2
 
-resume_tag: step=0015052
-output_dir: /media/dexnex_ssd/models/aiet_alignment_sim
+resume_tag: latest
+output_dir: /media/dexnex_ssd/models/aiet_alignment_sim_2
 
 tasks_to_use:
   - all
   # - success
   # - failure
 
-# which obs the obs_encoder will use -- these are the MAIN transformer's
-# conditioning keys. wrist_camera_patch_features and target_pellet_location
-# are deliberately excluded here (and from common_obs_encoder.lowdims
-# below): the transformer never sees vision or the ground-truth pellet
-# location directly, only the localizer's predictions (pellet_xyz_pred,
-# has_pellet_pred -- synthetic obs keys injected at runtime by
-# DiffusionModel._maybe_run_pellet_localizer, never loaded from the replay
-# buffer -- see shape_meta below).
+# which obs the obs_encoder will use -- wrist_camera_patch_features is
+# deliberately excluded here (and from common_obs_encoder.lowdims below):
+# it's a raw DINOv3 patch-token grid, routed via patch_keys_to_use/
+# spatial_softmax_patch_keys below, bypassing obs_encoder entirely, same as
+# aiet_erlenmeyer_flask_3's DINO patch keys not appearing in ITS
+# obs_keys_to_use either.
 obs_keys_to_use:
   - joint_positions
   - wrist_camera_pose_xyz_rpy
-  - pellet_xyz_pred
-  - has_pellet_pred
 
-# which obs the sarsa_sampler will load from the replay buffer, and used by the
-# batch loader. wrist_camera_patch_features feeds the pellet localizer only
-# (bypasses obs_encoder, same idea as aiet_erlenmeyer_flask_3's DINO patch
-# keys); target_pellet_location is the localizer's xyz-regression aux-loss
-# target, not a model input.
+# which obs the sarsa_sampler will load from the replay buffer, and used by
+# the batch loader. target_pellet_location is loaded but unused (no model
+# input, no aux loss) -- kept here only because AIETAlignmentSimBatchLoader
+# unconditionally fits a normalizer for it; harmless, matches the same
+# "loaded but excluded from obs_keys_to_use" pattern wrist_camera_patch_features
+# already uses.
 obs_keys_to_load:
   - joint_positions
   - wrist_camera_patch_features
@@ -125,25 +122,11 @@ shape_meta:
 
   target_pellet_location:
     shape:
-    - 3 # xyz -- PelletLocalizer's xyz-regression aux-loss target, not a model input (see obs_keys_to_use)
+    - 3 # xyz -- loaded but unused, see obs_keys_to_load
 
   wrist_camera_pose_xyz_rpy:
     shape:
     - 6 # xyz + roll/pitch/yaw
-
-  # synthetic obs keys: PelletLocalizer's predicted pellet xyz and has-pellet
-  # probability, injected into nobs at runtime
-  # (DiffusionModel._maybe_run_pellet_localizer) -- never loaded from the
-  # replay buffer (absent from obs_keys_to_load), but still need a
-  # shape_meta entry since ObsEncoderMaker.setup() looks shapes up from here
-  # for every key in common_obs_encoder.lowdims
-  pellet_xyz_pred:
-    shape:
-    - 3
-
-  has_pellet_pred:
-    shape:
-    - 1
 
 training:
   max_train_steps: null
@@ -185,14 +168,6 @@ common_obs_encoder:
     wrist_camera_pose_xyz_rpy:
       shape:
       - 6 # xyz + roll/pitch/yaw
-
-    pellet_xyz_pred:
-      shape:
-      - 3
-
-    has_pellet_pred:
-      shape:
-      - 1
 
 
 
@@ -271,29 +246,11 @@ common_wbatch_loss:
     freqs: ${step_freqs}
     eta: 1.0
 
-    # aux losses, sourced from the pellet localizer's forward pass (see
-    # PelletLocalizer / DiffusionModel._maybe_run_pellet_localizer):
-    #
-    # 1. pellet_xyz: MSE between the localizer's predicted xyz and the
-    #    ground-truth target_pellet_location (normalized -- see
-    #    AIETAlignmentSimBatchLoader.OBS_KEYS_TO_FIT), masked to samples
-    #    where target_pellet_valid says a pellet is actually present (the
-    #    ground-truth label, not the classifier's own prediction -- see
-    #    compute_pellet_xyz_loss's docstring).
-    # 2. pellet_classifier: BCE for the localizer's has-pellet logit against
-    #    target_pellet_valid, supervised on every sample (valid or not).
-    #
-    # keypoint_loss_weight is deliberately left at 0 (disabled, the
-    # default): match_and_compute_keypoint_loss (supervising the
-    # intermediate spatial-softmax keypoints against pixel-space
-    # wrist_pellet_keypoints_px/_valid) was the only supervision available
-    # before the localizer existed. Now that pellet_xyz directly supervises
-    # the actual target (3D world position) against real ground truth, the
-    # pixel-space intermediate loss is redundant -- it just adds the
-    # ambiguous per-sample nearest-neighbor matching problem for no benefit.
-    keypoint_source: pellet_localizer
-    pellet_xyz_loss_weight: 1.0
-    pellet_classifier_loss_weight: 1.0
+    # no aux loss -- keypoint_loss_weight / pellet_xyz_loss_weight /
+    # pellet_classifier_loss_weight all default to 0.0 (disabled). Pure
+    # diffusion BC training; the transformer's own spatial softmax over
+    # wrist_camera_patch_features is trained purely by the BC gradient, same
+    # as aiet_erlenmeyer_flask_3's patch keys.
 
     # children
     # for normalizing
@@ -329,20 +286,17 @@ common_dataset:
   val_ratio: 0.02
   max_train_episodes: null
   use_weighted_dataloader: false
-  # preload_to_gpu off: wrist_camera_image makes this dataset large enough
-  # (see aiet_alignment_drake_sim.py's data generation) that an eager bulk
-  # GPU load isn't worth it -- regular num_workers-based per-batch loading
-  # (with the zarr LRUStoreCache + fancy-indexing read path) instead.
+  # preload_to_gpu off: wrist_camera_patch_features makes this dataset large
+  # enough (14x14x384 floats per sample) that an eager bulk GPU load isn't
+  # worth it -- regular num_workers-based per-batch loading (with the zarr
+  # LRUStoreCache + fancy-indexing read path) instead.
   #
-  # NOTE: if preload_to_gpu is ever turned back on, do NOT also enable
-  # preload_vectorized -- that fast-load path (_vectorized_load_dataset)
-  # only knows about obs/action/task_id/subtask_id/data_source, not
-  # wrist_pellet_keypoints_px/_valid (AIETAlignmentSimSampler's extra
-  # top-level fields for the keypoint aux loss), so it would silently build
-  # a preloaded batch missing them, silently zeroing the keypoint loss with
-  # no error.
-  preload_to_gpu: true
-  preload_vectorized: true
+  # NOTE: if preload_to_gpu is ever turned back on, preload_vectorized is
+  # safe to enable too here (unlike some other aiet_alignment_sim variants):
+  # _vectorized_load_dataset now generically discovers whichever top-level
+  # fields AIETAlignmentSimSampler emits (wrist_pellet_keypoints_px/_valid,
+  # target_pellet_valid) rather than assuming a fixed field set.
+  preload_to_gpu: false
 
   options:
     common:
@@ -397,34 +351,23 @@ models:
           use_tree: false
           use_simple_model: false
 
-          # diffusion transformer, sim-only -- no cotraining task_id, no vision
-          # or patch tokens at all: conditions only on joint_positions,
-          # wrist_camera_pose_xyz_rpy, and pellet_xyz_pred (the localizer's synthetic
-          # prediction, injected at runtime -- see pellet_localizer_* below).
+          # diffusion transformer, sim-only -- no cotraining task_id.
+          # wrist_camera_patch_features (DINOv3 patch grid) is reduced to
+          # one token via spatial softmax, directly inside the transformer
+          # -- same mechanism as aiet_erlenmeyer_flask_3's DINO patch keys,
+          # no upstream PelletLocalizer/aux losses here.
           model_type: dexnex_transformer
           transformer_n_layer: 4
           transformer_n_emb: 128
           transformer_n_cond_layers: 4
           diagnostics_every_n_steps: 50
 
-          embed_task_id: false
+          patch_keys_to_use: ['wrist_camera_patch_features']
+          spatial_softmax_patch_keys: ['wrist_camera_patch_features']
+          spatial_softmax_num_keypoints: 16
+          spatial_softmax_temperature_init: 1.0
 
-          # upstream module: predicts pellet xyz from DINOv3 wrist-camera
-          # patch tokens + joint_positions + wrist_camera_pose_xyz_rpy, via spatial
-          # softmax -> MLP (+ a has-pellet classifier head). Its (detached)
-          # xyz prediction and has-pellet probability become this
-          # transformer's pellet_xyz_pred / has_pellet_pred obs keys --
-          # has_pellet_pred matters because pellet_xyz_pred alone can't
-          # distinguish a confident localization from "no pellet visible,
-          # this is just extrapolated" -- see
-          # diffusion_policy.model.pellet_localizer.PelletLocalizer.
-          pellet_localizer_patch_key: wrist_camera_patch_features
-          pellet_localizer_lowdim_keys: ['joint_positions', 'wrist_camera_pose_xyz_rpy']
-          pellet_localizer_pred_obs_key: pellet_xyz_pred
-          pellet_localizer_has_pellet_obs_key: has_pellet_pred
-          pellet_localizer_num_keypoints: 16
-          pellet_localizer_hidden_dim: 128
-          pellet_localizer_temperature_init: 1.0
+          embed_task_id: false
 
       ema:
         _target_: diffusion_policy.model.model.Ema

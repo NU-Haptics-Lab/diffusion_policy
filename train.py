@@ -74,11 +74,18 @@ def main(cfg: DictConfig):
         # no resuming
         # cfg.resume = False # type:ignore
         
-        cfg.common_dataset.options.common.batch_size = 4 # type: ignore
+        # apply to every dataset node -- most configs have a single
+        # "common_dataset", but multi-dataset cotraining configs (e.g.
+        # aiet_erlenmeyer_flask_3) split it into "common_dataset_<rb_id>" per
+        # data source, so hardcoding the single "common_dataset" key would
+        # KeyError on those.
+        for key in cfg.keys(): # type: ignore
+            if str(key).startswith('common_dataset'):
+                cfg[key].options.common.batch_size = 4 # type: ignore
+                cfg[key].options.train.num_workers = 0 # type: ignore
+                cfg[key].options.train.persistent_workers = False # type: ignore
         cfg.total_num_epochs = 99999
         cfg.batches_per_epoch = 4 # type: ignore
-        cfg.common_dataset.options.train.num_workers = 0 # type: ignore
-        cfg.common_dataset.options.train.persistent_workers = False # type: ignore
         # cfg.common_noise_scheduler.num_train_timesteps = 10 # type: ignore
         # cfg.models.models.critic.num_inference_steps = 4 # type: ignore
         

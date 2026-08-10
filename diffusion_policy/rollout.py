@@ -1,3 +1,4 @@
+import os
 from diffusion_policy import utils
 import avatar_drake_sim.rl.learning.sac
 from avatar_drake_sim.utils.utils import load_yaml_config
@@ -705,3 +706,103 @@ class Rollout:
             # all dataloader iterators are now invalid, so each Batchloader class must now reset
             with utils.profile_section("reset_session_trainer"):
                 globals.SESSION_TRAINER.reset()
+
+
+class AietAlignmentSimRollout:
+    """
+    Periodic online-eval rollout for aiet_alignment_sim: builds the
+    aiet_alignment Drake sim once (via aiet_alignment_drake_sim.build_sim),
+    then every `freq` training steps (past `warmup_nb_steps`) runs
+    `num_rollouts_per_trigger` episodes with the CURRENT, live, in-memory
+    training policy through AietAlignmentSim.run_episode_with_policy --
+    its own already-self-contained per-episode inference loop (repeated
+    DDIM sampling + outlier-rejecting average, waypoint interpolation,
+    contact-based termination) -- and logs the resulting success rate.
+
+    Deliberately does NOT subclass Rollout above: that class (and its
+    RolloutEnv/env_maker machinery) is built around a gym-style env +
+    step_trajectory/infer_action/eval_actions (critic-preferred actions,
+    energy-limited actions, VecEnv) tailored to the older
+    ManipAnything/sandbox rollout pattern -- none of which fits
+    run_episode_with_policy's design, which already handles its own
+    inference loop end to end. This class only duck-types what
+    EpochTrainer.rollouts actually calls: .setup() once, then .run() after
+    every training step (see epoch_trainer.py).
+    """
+
+    def __init__(self,
+                 freq: int = 500,
+                 warmup_nb_steps: int = 0,
+                 num_rollouts_per_trigger: int = 5,
+                 max_duration_s: float = 10.0,
+                 ddim_steps: int = 16,
+                 use_ema_model: bool = True,
+                 task_id: int = 24,
+                 which_model_to_use_for_inference: str = "actor",
+                 save_video: bool = True, # saves a video of the LAST of num_rollouts_per_trigger's episodes each trigger, via the sim's fixed environmental (table-view) camera -- see AietAlignmentSim.run_episode_with_policy's record_video_path
+                 video_filename: str = "latest_rollout.mp4", # relative to globals.CONFIG.output_dir; overwritten every trigger, so it's always the most recent rollout
+                 ) -> None:
+        self.freq = freq
+        self.warmup_nb_steps = warmup_nb_steps
+        self.num_rollouts_per_trigger = num_rollouts_per_trigger
+        self.max_duration_s = max_duration_s
+        self.ddim_steps = ddim_steps
+        self.use_ema_model = use_ema_model
+        self.task_id = task_id
+        self.which_model_to_use_for_inference = which_model_to_use_for_inference
+        self.save_video = save_video
+        self.video_filename = video_filename
+
+        self.sim = None
+
+    def setup(self):
+        # local import: avatar_intelligence pulls in Drake, which is heavy
+        # and irrelevant to every OTHER training config that doesn't rollout
+        from avatar_intelligence.sims.aiet_alignment.aiet_alignment_drake_sim import build_sim
+
+        # no meshcat (headless, runs alongside training), no verbose per-step
+        # prints, and realtime_rate=0.0 -- unlike REALTIME_RATE's 1.0 default
+        # (meant for watching a live Meshcat demo), 0.0 means "as fast as
+        # possible" (same convention _data_collection_worker uses), since
+        # nothing's watching these rollouts live and they're stealing wall
+        # clock from training either way
+        self.sim = build_sim(enable_meshcat=False, verbose=False, realtime_rate=0.0)
+
+        # debug mode: exercise the rollout path on every single step instead
+        # of waiting `freq` steps, so a broken rollout fails fast instead of
+        # 500 steps into a debug run
+        if globals.CONFIG is not None and getattr(globals.CONFIG, "debug", False):  # type: ignore
+            print(f"[AietAlignmentSimRollout] debug mode -- overriding freq={self.freq} -> 1")
+            self.freq = 1
+
+    def run(self):
+        if utils.StepFreqTrigger(self.freq) and globals.STEP > self.warmup_nb_steps:
+            from avatar_intelligence.sims.aiet_alignment.aiet_alignment_drake_sim import DiffusionPolicyController
+
+            policy_holder = globals.MODELS[self.which_model_to_use_for_inference]  # type:ignore
+            policy = policy_holder.get_ema_model() if self.use_ema_model else policy_holder.get_model()
+
+            controller = DiffusionPolicyController.from_live_policy(
+                policy, task_id=self.task_id, ddim_steps=self.ddim_steps
+            )
+
+            tic = utils.tic()
+            successes = 0
+            for i in range(self.num_rollouts_per_trigger):
+                assert self.sim is not None
+                # only the LAST episode of this trigger gets recorded --
+                # overwrites the same path every time, so it's always the
+                # most recent rollout, not an ever-growing pile of videos
+                record_video_path = None
+                if self.save_video and i == self.num_rollouts_per_trigger - 1:
+                    record_video_path = os.path.join(globals.CONFIG.output_dir, self.video_filename)  # type: ignore
+                if self.sim.run_episode_with_policy(
+                    controller, max_duration_s=self.max_duration_s, record_video_path=record_video_path
+                ):
+                    successes += 1
+            toc = utils.toc(tic)
+
+            success_rate = successes / self.num_rollouts_per_trigger
+            globals.log_one_if_exists("rollout/success_rate", success_rate)
+            print(f"[AietAlignmentSimRollout] step {globals.STEP}: {successes}/{self.num_rollouts_per_trigger} "
+                  f"successful ({success_rate:.2f}) in {toc:.1f}s")

@@ -1,4 +1,5 @@
 import copy
+from collections import OrderedDict
 from omegaconf import OmegaConf
 
 from typing import Dict
@@ -111,35 +112,290 @@ def _nested_index(data, idx):
     return data[idx]
 
 
+def _detect_zero_fill_obs_keys(dataset):
+    """
+    Returns the subset of obs_keys_to_load that this dataset's sampler
+    zero-fills rather than reading from the replay buffer (EpisodeSampler.
+    resolve_rb_key returns None for these -- see AIETErlenmeyerFlask3SimSampler/
+    RealSampler). Returns None if that can't be determined (sampler doesn't
+    expose get_ep_list/episode samplers).
+
+    GPUCachedDataset uses this to avoid ever materializing these as full
+    (N, 1, *shape) tensors -- some zero-filled keys use the OTHER data
+    source's shape (e.g. sim zero-fills the 14x14x384 vision patch keys it
+    has no use for), so naively stacking/concatenating them across the whole
+    dataset can dwarf the size of the actual data by orders of magnitude.
+    They're synthesized instead, cheaply, per __getitem__ call.
+    """
+    sampler = dataset.sampler
+    if not hasattr(sampler, 'get_ep_list'):
+        return None
+    eps = list(sampler.get_ep_list())
+    if not eps:
+        return None
+    obs_keys_to_load = list(globals.CONFIG.obs_keys_to_load)  # type: ignore
+    return {key for key in obs_keys_to_load if eps[0].resolve_rb_key(key) is None}
+
+
+def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
+    """
+    Fast path for GPUCachedDataset. dataset[i] independently re-extracts and
+    re-converts each sample's action window, but adjacent samples' windows
+    (per action_rel_indices) overlap almost entirely -- redundant work. This
+    instead loads each raw replay-buffer array once per episode and gathers
+    ALL of that episode's valid obs/action windows with a handful of
+    vectorized numpy operations, instead of one Python-level call per sample.
+
+    Returns (data, zero_fill_obs_keys) on success, or None (caller should
+    fall back to the per-sample path) if the sampler isn't the expected
+    DatasetSampler-of-EpisodeSamplers shape, OR if a key still can't be found
+    in the replay buffer even after resolving it through the episode
+    sampler's resolve_rb_key/resolve_action_rb_key hooks (identity by
+    default; samplers doing custom key aliasing or zero-filling -- e.g.
+    AIETErlenmeyerFlask3SimSampler aliasing joint_positions to joint_states,
+    or zero-filling keys the other data source doesn't have -- override those
+    hooks so this fast path stays correct instead of reading the wrong data).
+
+    zero_fill_obs_keys are deliberately excluded from `data['obs']` -- see
+    GPUCachedDataset's docstring for why (a zero-filled key using the other
+    data source's shape can dwarf the real data if materialized densely for
+    every sample). The caller synthesizes them cheaply per __getitem__ instead.
+    """
+    sampler = dataset.sampler
+    if not hasattr(sampler, 'get_ep_list'):
+        return None
+
+    obs_keys_to_load = list(globals.CONFIG.obs_keys_to_load)  # type: ignore
+    action_key = globals.CONFIG.action_key  # type: ignore
+    action_rel_indices = np.array(globals.CONFIG.action_rel_indices)  # type: ignore
+
+    eps = list(sampler.get_ep_list())
+    assert len(eps) > 0
+    # all episodes share the same underlying ReplayBuffer -- load each raw
+    # array exactly ONCE, not once per episode (that was the original bug:
+    # np.asarray(rb[key]) inside the episode loop re-decompressed the whole
+    # zarr array on every single episode iteration).
+    rb = eps[0].indices.replay_buffer
+
+    # resolve each obs/action key to its actual rb key (None => zero-fill),
+    # via the episode sampler's hooks -- identity by default, overridden by
+    # samplers that alias or zero-fill keys
+    obs_key_map = {key: eps[0].resolve_rb_key(key) for key in obs_keys_to_load}
+    resolved_action_key = eps[0].resolve_action_rb_key(action_key)
+
+    raw_obs_arrays = {}
+    zero_fill_obs_keys = set()
+    try:
+        for key, rb_key in obs_key_map.items():
+            if rb_key is None:
+                zero_fill_obs_keys.add(key)
+            else:
+                raw_obs_arrays[key] = np.asarray(rb[rb_key])
+        raw_action_array = np.asarray(rb[resolved_action_key])
+    except KeyError as e:
+        print(f"_vectorized_load_dataset declining: key {e} not found in the replay buffer "
+              f"even after key-alias resolution")
+        return None
+    # task_id/subtask_id/data_source are all OPTIONAL top-level sample
+    # fields -- not every sampler emits every one of them (e.g. data_source
+    # is only set by the aiet_erlenmeyer_flask_3 cotraining Real/Sim
+    # subclasses' get_sample(); AIETAlignmentSimSampler never sets it at
+    # all). Probe a real sample once to find out which of them THIS sampler
+    # actually produces, rather than assuming all three -- building/
+    # including a field the sampler doesn't emit would both waste work and
+    # make the safety check below KeyError on expected[key].
+    probe_sample = dataset[0]
+    scalar_fields = [f for f in ("task_id", "subtask_id", "data_source") if f in probe_sample]
+
+    # some samplers hardcode these in get_sample() regardless of what's in
+    # the rb (or even when the rb has no such array at all to read a
+    # per-sample value from) -- constant_fields takes precedence over
+    # reading the rb, matching that behavior exactly instead of guessing a
+    # generic fallback that may not match (see get_constant_sample_fields's
+    # docstring; this is what caught the sim dataset's data_source being
+    # read back as 0 instead of the hardcoded 1).
+    constant_fields = eps[0].get_constant_sample_fields()
+    generic_fallback = {"task_id": 24.0, "subtask_id": 0.0, "data_source": 0.0}
+
+    def resolve_scalar_field(field_name):
+        if field_name in constant_fields:
+            return None, constant_fields[field_name]
+        try:
+            return np.asarray(rb[field_name]), None
+        except KeyError:
+            return None, generic_fallback[field_name]
+
+    raw_scalar_arrays = {}
+    scalar_fallbacks = {}
+    for field_name in scalar_fields:
+        raw_scalar_arrays[field_name], scalar_fallbacks[field_name] = resolve_scalar_field(field_name)
+
+    # any OTHER top-level fields beyond obs/action/task_id/subtask_id/
+    # data_source (e.g. AIETAlignmentSimSampler's wrist_pellet_keypoints_px/
+    # _valid/target_pellet_valid) -- assumed to be direct, unaliased rb
+    # arrays of the same name, read once and fancy-indexed per episode just
+    # like obs keys. If that assumption is wrong for some future sampler
+    # (e.g. it needs the aliasing/constant-field handling task_id/
+    # subtask_id/data_source get above), this declines to vectorize rather
+    # than risk silently building incorrect data.
+    extra_fields = [k for k in probe_sample if k not in ("obs", "action") and k not in scalar_fields]
+    raw_extra_arrays = {}
+    try:
+        for field_name in extra_fields:
+            raw_extra_arrays[field_name] = np.asarray(rb[field_name])
+    except KeyError as e:
+        print(f"_vectorized_load_dataset declining: extra top-level field {e} not found "
+              f"directly in the replay buffer")
+        return None
+
+    # zero-fill keys are never read/allocated per-sample here -- for a data
+    # source that doesn't have them at all (e.g. sim zero-filling the real
+    # side's 14x14x384 vision patch keys), a dense (N, 1, *shape) tensor of
+    # zeros can dwarf the size of the actual data by orders of magnitude.
+    # GPUCachedDataset synthesizes these on the fly in __getitem__ instead.
+    per_key_obs = {k: [] for k in obs_keys_to_load if k not in zero_fill_obs_keys}
+    action_chunks = []
+    scalar_chunks = {field_name: [] for field_name in scalar_fields}
+    extra_chunks = {field_name: [] for field_name in extra_fields}
+
+    for ep in tqdm(eps, desc="gpu-preload (vectorized, per-episode)"):
+        indices = ep.indices
+        train_idx = np.array(list(indices.get_all_train_indices()))
+        if len(train_idx) == 0:
+            continue
+        n = len(train_idx)
+
+        # obs: single "current" index per sample (obs_rel_indices == [0]).
+        # get_key_sample wraps this in a length-1 list, giving each sample a
+        # (1, D) shape (a history-length-1 axis) -- add that axis back here.
+        obs_rb_idx = indices.get_rb_indices(train_idx)  # (N,)
+        for key in per_key_obs:
+            per_key_obs[key].append(raw_obs_arrays[key][obs_rb_idx][:, None, ...])
+
+        # action: one column per action_rel_indices offset -> (N, L, *feat)
+        action_rb_idx = np.stack(
+            [indices.get_rb_indices(train_idx + off) for off in action_rel_indices],
+            axis=1,
+        )
+        action_chunks.append(raw_action_array[action_rb_idx])
+
+        # task_id / subtask_id / data_source (whichever this sampler actually
+        # emits, per scalar_fields above): (1,)-shaped value per sample,
+        # either read from the rb or filled with whichever fallback applies
+        # (the sampler's hardcoded constant, if it has one -- see above --
+        # else the generic default matching get_sample's rb-absent behavior)
+        for field_name in scalar_fields:
+            raw_array = raw_scalar_arrays[field_name]
+            if raw_array is not None:
+                scalar_chunks[field_name].append(raw_array[obs_rb_idx][:, None])
+            else:
+                scalar_chunks[field_name].append(np.full((n, 1), scalar_fallbacks[field_name], dtype=np.float32))
+
+        # extra top-level fields (e.g. wrist_pellet_keypoints_px/_valid,
+        # target_pellet_valid): same "current" indexing as obs, add back the
+        # history-length-1 axis get_key_sample would have produced
+        for field_name in extra_fields:
+            extra_chunks[field_name].append(raw_extra_arrays[field_name][obs_rb_idx][:, None, ...])
+
+    obs = {}
+    for key in per_key_obs:
+        full = np.concatenate(per_key_obs[key], axis=0).astype(np.float32)
+        if "img" in key:
+            # matches DexNexDataset._fix_obs's moveaxis(obs[key], 2, 1), shifted
+            # by one axis since a batch dim is now at position 0
+            full = np.moveaxis(full, 3, 2)
+        obs[key] = torch.from_numpy(full)
+
+    data = {
+        'obs': obs,
+        'action': torch.from_numpy(np.concatenate(action_chunks, axis=0).astype(np.float32)),
+    }
+    for field_name in scalar_fields:
+        data[field_name] = torch.from_numpy(np.concatenate(scalar_chunks[field_name], axis=0).astype(np.float32))
+    for field_name in extra_fields:
+        data[field_name] = torch.from_numpy(np.concatenate(extra_chunks[field_name], axis=0).astype(np.float32))
+
+    # safety check: this bypasses the normal per-sample path entirely, so
+    # verify it against the known-correct dataset[i] for a handful of random
+    # indices before trusting it for training.
+    rng = np.random.default_rng(0)
+    check_idx = rng.choice(len(dataset), size=min(20, len(dataset)), replace=False)
+    for i in tqdm(check_idx, desc="gpu-preload (verifying against per-sample path)"):
+        expected = dataset[int(i)]
+        for key, val in data.items():
+            if key == 'obs':
+                for obs_key, obs_val in val.items():
+                    if not torch.allclose(obs_val[i], expected['obs'][obs_key]):
+                        raise RuntimeError(
+                            f"_vectorized_load_dataset mismatch at sample {i}, obs key '{obs_key}': "
+                            f"vectorized={obs_val[i]} expected={expected['obs'][obs_key]}")
+            elif not torch.allclose(val[i], expected[key]):
+                raise RuntimeError(
+                    f"_vectorized_load_dataset mismatch at sample {i}, key '{key}': "
+                    f"vectorized={val[i]} expected={expected[key]}")
+
+    return dict_apply(data, lambda t: t.to(device)), zero_fill_obs_keys
+
+
 class GPUCachedDataset(torch.utils.data.Dataset):
     """
     Loads an entire DexNexDataset into GPU memory up front.
     __getitem__ then returns directly from the pre-loaded tensors with no
     zarr / numpy overhead per step.
+
+    Obs keys the sampler zero-fills (EpisodeSampler.resolve_rb_key returns
+    None -- e.g. sim zero-filling the real side's vision keys) are never
+    stacked/concatenated into a full (N, 1, *shape) tensor: for a zero-filled
+    key that uses the OTHER data source's shape, that dense tensor can be
+    orders of magnitude bigger than the dataset's actual data (observed: a
+    250k-sample sim dataset that's ~30MB of real data ballooned past 50GB of
+    host RAM and got OOM-killed trying to materialize two zero-filled
+    14x14x384 vision keys it has no use for). These keys are synthesized as
+    small zero tensors per __getitem__ call instead.
     """
-    def __init__(self, dataset: 'DexNexDataset', device: torch.device, num_workers: int = 0):
+    def __init__(self, dataset: 'DexNexDataset', device: torch.device, num_workers: int = 0, vectorized: bool = False):
         self._source = dataset  # kept for attribute delegation
+        self.device = device
         self._len = len(dataset)
+        self.zero_fill_obs_keys = set()
         if self._len == 0:
             self._data = None
             return
         print(f"Preloading {self._len} samples to {device} ...")
-        if num_workers > 0:
-            # parallelize the CPU-bound per-sample construction (zarr reads,
-            # astype, torch.from_numpy) across worker processes, same
-            # mechanism as normal training dataloading -- only the final
-            # GPU stack/transfer below stays in the main process.
-            loader = torchDataLoader(
-                dataset,
-                batch_size=1,
-                num_workers=num_workers,
-                collate_fn=lambda batch: batch[0],
-                shuffle=False,
-            )
-            samples = [s for s in tqdm(loader, desc="gpu-preload", total=self._len)]
-        else:
-            samples = [dataset[i] for i in tqdm(range(self._len), desc="gpu-preload")]
-        self._data = _nested_stack_to_device(samples, device)
+
+        self._data = None
+        if vectorized:
+            result = _vectorized_load_dataset(dataset, device)
+            if result is None:
+                print("_vectorized_load_dataset declined (unsupported sampler shape); falling back to per-sample loading")
+            else:
+                self._data, self.zero_fill_obs_keys = result
+
+        if self._data is None:
+            self.zero_fill_obs_keys = _detect_zero_fill_obs_keys(dataset) or set()
+
+            def strip_zero_fill(sample):
+                if self.zero_fill_obs_keys:
+                    sample = dict(sample)
+                    sample['obs'] = {k: v for k, v in sample['obs'].items() if k not in self.zero_fill_obs_keys}
+                return sample
+
+            if num_workers > 0:
+                # parallelize the CPU-bound per-sample construction (zarr reads,
+                # astype, torch.from_numpy) across worker processes, same
+                # mechanism as normal training dataloading -- only the final
+                # GPU stack/transfer below stays in the main process.
+                loader = torchDataLoader(
+                    dataset,
+                    batch_size=1,
+                    num_workers=num_workers,
+                    collate_fn=lambda batch: strip_zero_fill(batch[0]),
+                    shuffle=False,
+                )
+                samples = [s for s in tqdm(loader, desc="gpu-preload", total=self._len)]
+            else:
+                samples = [strip_zero_fill(dataset[i]) for i in tqdm(range(self._len), desc="gpu-preload")]
+            self._data = _nested_stack_to_device(samples, device)
 
     def __len__(self):
         return self._len
@@ -147,7 +403,11 @@ class GPUCachedDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         if self._data is None:
             raise IndexError("GPUCachedDataset is empty")
-        return _nested_index(self._data, idx)
+        sample = _nested_index(self._data, idx)
+        for key in self.zero_fill_obs_keys:
+            shape = globals.CONFIG.shape_meta[key].shape  # type: ignore
+            sample['obs'][key] = torch.zeros(1, *shape, dtype=torch.float32, device=self.device)
+        return sample
 
     def __getattr__(self, name):
         # Delegate any attribute not defined here to the source DexNexDataset
@@ -180,6 +440,90 @@ class GPUDatasetView(torch.utils.data.Dataset):
         return getattr(self._cache, name)
 
 
+def _nested_nbytes(data):
+    if isinstance(data, dict):
+        return sum(_nested_nbytes(v) for v in data.values())
+    return data.element_size() * data.nelement()
+
+
+def _nested_to_device(data, device):
+    if isinstance(data, dict):
+        return {k: _nested_to_device(v, device) for k, v in data.items()}
+    return data.to(device)
+
+
+class GPUSampleCache(torch.utils.data.Dataset):
+    """
+    Lazily caches each sample on GPU the first time `dataset[idx]` is
+    accessed -- decode + host-to-device transfer happens once per idx, every
+    later access to that same idx returns the already-resident GPU tensors.
+
+    Unlike GPUCachedDataset (which preloads everything up front and requires
+    the whole dataset to fit in GPU memory), this fills in lazily and can be
+    bounded to a byte budget smaller than the full dataset.
+
+    evict=True bounds memory via LRU eviction against max_bytes.
+
+    evict=False never evicts an already-cached sample. Rationale: training
+    reshuffles every epoch over a fixed episode pool, so an evicted sample
+    just gets reloaded and re-cached again later at the same cost -- LRU
+    eviction under a tight budget can end up paying the CPU/decompression
+    cost repeatedly for the same samples instead of once. With evict=False,
+    once max_bytes worth of samples are cached, NEW (never-before-seen)
+    samples are simply served uncached rather than evicting anything --
+    already-cached samples keep being served from GPU for free, growth just
+    stops. If max_bytes is None and evict=False, the cache is unbounded and
+    will grow to the size of every distinct sample ever accessed.
+
+    Must be used with num_workers=0 -- CUDA tensors can't cross a forked
+    worker process, and the whole point is a single cache shared across
+    every access from the main process.
+    """
+    def __init__(self, dataset, device, max_bytes=None, evict=True):
+        self._source = dataset
+        self.device = device
+        self.max_bytes = max_bytes
+        self.evict = evict
+        self._cache = OrderedDict()  # idx -> nested dict of GPU tensors, ordered by last access
+        self._cache_bytes = 0
+
+        if not evict and max_bytes is None:
+            print("GPUSampleCache: evict=False with no max_bytes set -- cache will grow "
+                  "unbounded (up to the full dataset's GPU footprint) as new samples are seen.")
+
+    def __len__(self):
+        return len(self._source)
+
+    def __getitem__(self, idx: int):
+        cached = self._cache.get(idx)
+        if cached is not None:
+            if self.evict:
+                self._cache.move_to_end(idx)
+            return cached
+
+        sample_gpu = _nested_to_device(self._source[idx], self.device)
+        nbytes = _nested_nbytes(sample_gpu)
+
+        if self.max_bytes is not None and self._cache_bytes + nbytes > self.max_bytes:
+            if self.evict:
+                while self._cache and self._cache_bytes + nbytes > self.max_bytes:
+                    _, oldest = self._cache.popitem(last=False)
+                    self._cache_bytes -= _nested_nbytes(oldest)
+            else:
+                # budget's full and we're not allowed to evict -- serve this
+                # sample without memoizing it, leave the existing cache intact
+                return sample_gpu
+
+        self._cache[idx] = sample_gpu
+        self._cache_bytes += nbytes
+        return sample_gpu
+
+    def __getattr__(self, name):
+        # Delegate any attribute not defined here to the source dataset
+        # (e.g. get_ep_lengths, get_qvals, get_key)
+        return getattr(self._source, name)
+
+
 class TrainAndVal:
     """
     Wrapper for a dataset sampler. Computes val and train masks and uses those to create a torch dataloader (along with a handle to a replay buffer) 
@@ -203,8 +547,14 @@ class TrainAndVal:
             use_weighted_dataloader = False,
             use_val_set = True, # if false, train_sampler == sampler, will save time during RL
             preload_to_gpu = False, # load entire dataset into GPU memory before training
+            preload_vectorized = False, # use _vectorized_load_dataset instead of per-sample loading; falls back automatically if unsupported
+            use_gpu_sample_cache = False, # lazily cache each sample on GPU on first access (GPUSampleCache); mutually exclusive with preload_to_gpu
+            gpu_sample_cache_max_bytes = None, # byte budget for the above; None = unbounded
+            gpu_sample_cache_evict = True, # LRU-evict to stay under the budget; False = never evict, just stop caching new samples once full
             ):
         assert(isinstance(sampler, sarsa_sampler.DatasetSampler))
+        assert not (preload_to_gpu and use_gpu_sample_cache), \
+            "preload_to_gpu and use_gpu_sample_cache are mutually exclusive -- both make the dataset serve samples off GPU-resident tensors"
 
         self.sampler = sampler # should be the entire dataset
         self.rb_id = sampler.rb_id
@@ -216,6 +566,10 @@ class TrainAndVal:
         self.use_weighted_dataloader = use_weighted_dataloader
         self.use_val_set = use_val_set
         self.preload_to_gpu = preload_to_gpu
+        self.preload_vectorized = preload_vectorized
+        self.use_gpu_sample_cache = use_gpu_sample_cache
+        self.gpu_sample_cache_max_bytes = gpu_sample_cache_max_bytes
+        self.gpu_sample_cache_evict = gpu_sample_cache_evict
 
         self.is_setup = False
         
@@ -328,10 +682,30 @@ class TrainAndVal:
         return weights
         
         
-    def make_dataloader(self, dataset, cfg):
+    def _resolve_device(self):
+        return torch.device(globals.CONFIG.device if globals.CONFIG is not None and hasattr(globals.CONFIG, 'device') else 'cuda')  # type: ignore
+
+    def _maybe_gpu_cache(self, base_dataset):
+        """
+        Wraps base_dataset in whichever GPU caching strategy is configured
+        (at most one of the two -- enforced in __init__), or returns it
+        unwrapped if neither is enabled.
+        """
         if self.preload_to_gpu:
-            # CUDA tensors can't be shared with forked worker processes.
-            # Workers are also pointless — data is already on GPU.
+            device = self._resolve_device()
+            return GPUCachedDataset(base_dataset, device, num_workers=self.options.train.num_workers, vectorized=self.preload_vectorized) #type:ignore
+        elif self.use_gpu_sample_cache:
+            device = self._resolve_device()
+            return GPUSampleCache(base_dataset, device, max_bytes=self.gpu_sample_cache_max_bytes, evict=self.gpu_sample_cache_evict)
+        else:
+            return base_dataset
+
+    def make_dataloader(self, dataset, cfg):
+        if self.preload_to_gpu or self.use_gpu_sample_cache:
+            # CUDA tensors can't be shared with forked worker processes, and
+            # the cache only helps if every access goes through the same
+            # cache instance in the main process. Workers are also pointless
+            # once data is served straight off the GPU.
             cfg = dict(cfg)
             cfg['num_workers'] = 0
             cfg.pop('pin_memory', None)
@@ -377,12 +751,7 @@ class TrainAndVal:
 
         # save a ref, make the dexnex dataset
         self.train_sampler = self.sampler
-        base = DexNexDataset(self.train_sampler)
-        if self.preload_to_gpu:
-            device = torch.device(globals.CONFIG.device if globals.CONFIG is not None and hasattr(globals.CONFIG, 'device') else 'cuda')  # type: ignore
-            self.train_dataset = GPUCachedDataset(base, device, num_workers=self.options.train.num_workers) #type:ignore
-        else:
-            self.train_dataset = base
+        self.train_dataset = self._maybe_gpu_cache(DexNexDataset(self.train_sampler))
 
         # train config
         train_cfg = copy.deepcopy(self.options.common) # type: ignore
@@ -406,8 +775,11 @@ class TrainAndVal:
         with utils.profile_section("reinit_no_val.reinit_all"):
             self.sampler.reinit_all()
 
-            if isinstance(self.train_dataset, GPUCachedDataset):
-                # GPU cache must be rebuilt from scratch when new episodes arrive
+            if isinstance(self.train_dataset, (GPUCachedDataset, GPUSampleCache)):
+                # both caches key/index off the underlying dataset, which is
+                # being rebuilt here (new episodes) -- must be rebuilt from
+                # scratch rather than reused, or cached entries would answer
+                # with stale data for indices that now point at different samples
                 self.train_dataset = self._maybe_gpu_cache(DexNexDataset(self.train_sampler))
             else:
                 self.train_dataset.reinit_all()
@@ -476,16 +848,19 @@ class TrainAndVal:
         # make the datasets
         if self.preload_to_gpu:
             # Load the full dataset once, then create zero-copy views for train/val.
-            device = torch.device(globals.CONFIG.device if globals.CONFIG is not None and hasattr(globals.CONFIG, 'device') else 'cuda')  # type: ignore
-            self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device, num_workers=self.options.train.num_workers) #type:ignore
+            device = self._resolve_device()
+            self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device, num_workers=self.options.train.num_workers, vectorized=self.preload_vectorized) #type:ignore
             train_indices = np.where(train_mask)[0]
             val_indices = np.where(val_mask)[0]
             self.train_dataset = GPUDatasetView(self.all_dataset, train_indices)
             self.val_dataset = GPUDatasetView(self.all_dataset, val_indices)
         else:
-            self.train_dataset = DexNexDataset(self.train_sampler)
-            self.val_dataset = DexNexDataset(self.val_sampler)
-            self.all_dataset = DexNexDataset(self.sampler)
+            # train/val samplers index disjoint sample sets, so each gets its
+            # own cache instance rather than sharing one like the preload_to_gpu
+            # zero-copy-view trick above (no overlap to de-duplicate)
+            self.train_dataset = self._maybe_gpu_cache(DexNexDataset(self.train_sampler))
+            self.val_dataset = self._maybe_gpu_cache(DexNexDataset(self.val_sampler))
+            self.all_dataset = self._maybe_gpu_cache(DexNexDataset(self.sampler))
         
         # make the train & val config
         train_cfg = copy.deepcopy(self.options.common) # type: ignore

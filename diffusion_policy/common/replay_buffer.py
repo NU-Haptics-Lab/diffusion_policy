@@ -142,8 +142,20 @@ class ReplayBuffer:
         """
         Open a on-disk zarr directly (for dataset larger than memory).
         Slower.
+
+        Read-only opens get an LRUStoreCache in front of the directory store:
+        get_sequence_by_train_indices_and_key reads one index at a time, and
+        each read decompresses the whole containing chunk (chunks span ~6-7
+        frames for the patch-feature arrays) -- without a cache, adjacent
+        indices sharing a chunk each pay a fresh decompression, both within
+        one sample's history/horizon window and across dataloader workers.
         """
-        group = zarr.open(os.path.expanduser(zarr_path), mode)
+        if mode == 'r':
+            store = zarr.DirectoryStore(os.path.expanduser(zarr_path))
+            store = zarr.LRUStoreCache(store, max_size=2**30)
+            group = zarr.open(store, mode)
+        else:
+            group = zarr.open(os.path.expanduser(zarr_path), mode)
         return cls.create_from_group(group, **kwargs)
     
     # ============= copy constructors ===============

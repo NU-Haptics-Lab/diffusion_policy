@@ -21,6 +21,77 @@ from diffusion_policy.model.diffusion_ql.attractor import EnergyPenalty
 from diffusion_policy.common.pytorch_util import dict_tensor_to
 from diffusion_policy import utils
 
+
+def match_and_compute_keypoint_loss(pred_kpts, gt_px, valid, image_size):
+    """
+    Aux loss for supervising a spatial-softmax obs key's keypoints against
+    known landmark pixel locations (e.g. pellets visible in a wrist camera
+    image) -- see BatchLoss.keypoint_loss_weight.
+
+    The keypoints aren't semantically ordered (symmetric at init; nothing
+    ties "keypoint 3" to "pellet slot 1"), and the ground-truth slots
+    (padded to a fixed count) have no consistent identity across samples
+    either -- slot 0 isn't "the leftmost pellet", just whichever pellet the
+    data-generation script happened to find first. So which keypoint should
+    track which pellet isn't fixed; it's solved per-sample by nearest-
+    neighbor matching in the model's own coordinate space, then only the
+    matched pairs get gradient.
+
+    Matching is greedy (process ground-truth slots in order, assign each to
+    its nearest not-yet-taken keypoint for that sample), not the globally
+    optimal Hungarian assignment -- simpler, fully vectorized across the
+    batch (no CPU sync), and fine for this few points (<=4) against this
+    many keypoints (16 in the current config): collisions forcing a
+    suboptimal match are rare. Matching itself runs under no_grad (it's a
+    discrete assignment); the returned loss still backpropagates through
+    pred_kpts normally via the final gather + MSE.
+
+    pred_kpts: (B, K, 2) predicted keypoints, [-1,1]^2, gradient-attached
+    gt_px:     (B, N, 2) ground-truth landmark pixel coords, 0-padded past
+               however many are valid for that sample
+    valid:     (B, N) bool/float mask, 1 = real landmark, 0 = padding
+    image_size: the image's pixel width/height (assumed square), for
+               converting gt_px into the same [-1,1]^2 convention as
+               pred_kpts (matches DexNexTransformerForDiffusion's ss_grid:
+               torch.linspace(-1, 1, image_size) per axis)
+
+    Returns a scalar: mean squared L2 distance over every valid (sample,
+    landmark) pair in the batch, or exactly 0.0 if the whole batch has no
+    valid landmarks at all.
+    """
+    B, K, _ = pred_kpts.shape
+    N = gt_px.shape[1]
+    valid = valid.bool()
+
+    gt_norm = 2.0 * gt_px / (image_size - 1) - 1.0  # (B, N, 2)
+
+    with torch.no_grad():
+        dist = torch.cdist(gt_norm, pred_kpts.detach())  # (B, N, K)
+        assigned = torch.zeros(B, N, dtype=torch.long, device=pred_kpts.device)
+        taken = torch.zeros(B, K, dtype=torch.bool, device=pred_kpts.device)
+        for n in range(N):
+            d = dist[:, n, :].masked_fill(taken, float('inf'))
+            idx = d.argmin(dim=-1)  # (B,)
+            assigned[:, n] = idx
+            # only consume a keypoint slot for samples where THIS landmark
+            # is actually valid -- otherwise a padding slot could steal the
+            # nearest keypoint away from a later real landmark in the same
+            # sample (if valid landmarks aren't all sorted before padding)
+            take_onehot = nn.functional.one_hot(idx, K).bool() & valid[:, n:n+1]
+            taken = taken | take_onehot
+
+    matched_pred = torch.gather(pred_kpts, 1, assigned.unsqueeze(-1).expand(-1, -1, 2))  # (B, N, 2)
+
+    sq_err = (matched_pred - gt_norm).pow(2).sum(dim=-1)  # (B, N)
+    valid_f = valid.float()
+    # clamp(min=1.0) instead of a zero-check + branch: avoids a per-step
+    # GPU->CPU sync (`.item()`/`if tensor:` both block on the device), and
+    # is equivalent -- when the batch has zero valid landmarks, valid_f is
+    # all zero so the numerator is already 0, and 0 / 1 == 0
+    denom = valid_f.sum().clamp(min=1.0)
+    return (sq_err * valid_f).sum() / denom
+
+
 class BatchLoss:
     """
     Responsible for computing loss for one batch.
@@ -35,6 +106,16 @@ class BatchLoss:
             loss_clip_value = 1.0,
             remove_outlier_losses = False, # use carefully
             subtask_weights = None, # optional: {subtask_id: weight}, applied per-sample to the bc loss and logged separately. No-op if nbatch has no 'subtask_id'.
+            keypoint_loss_weight = 0.0, # aux loss weight for match_and_compute_keypoint_loss; 0.0 (default) disables it entirely
+            keypoint_obs_key = None, # which spatial-softmax obs key to supervise -- only meaningful with keypoint_source="transformer" (e.g. "wrist_camera_image")
+            keypoint_image_size = 64, # pixel width/height keypoint_gt_px_key's raw coords are in (NOT the patch grid's H/W -- e.g. wrist_pellet_keypoints_px is in 64x64 pixel space even when the model reads a 14x14 DINOv3 patch grid)
+            keypoint_gt_px_key = "wrist_pellet_keypoints_px", # nbatch key: (B,1,N,2) ground-truth pixel coords
+            keypoint_valid_key = "wrist_pellet_keypoints_valid", # nbatch key: (B,1,N) validity mask
+            keypoint_source = "transformer", # "transformer" (DexNexTransformerForDiffusion.get_last_spatial_softmax_keypoints) or "pellet_localizer" (DiffusionModel.get_last_pellet_prediction)
+            pellet_xyz_loss_weight = 0.0, # aux loss weight for the pellet localizer's xyz regression; 0.0 (default) disables it. Only meaningful with keypoint_source="pellet_localizer"
+            pellet_xyz_gt_key = "target_pellet_location", # nbatch['obs'] key: (B,1,3) ground-truth pellet xyz
+            pellet_classifier_loss_weight = 0.0, # aux loss weight for the pellet localizer's has-pellet classifier; 0.0 (default) disables it
+            pellet_valid_key = "target_pellet_valid", # nbatch top-level key: (B,1) ground-truth has-pellet label; falls back to keypoint_valid_key.any(-1) if absent
         ):
         self.batch_loader = batch_loader
         self.eta = eta
@@ -43,6 +124,17 @@ class BatchLoss:
         self.loss_clip_value = loss_clip_value
         self.remove_outlier_losses = remove_outlier_losses
         self.subtask_weights = subtask_weights
+        self.keypoint_loss_weight = keypoint_loss_weight
+        self.keypoint_obs_key = keypoint_obs_key
+        self.keypoint_image_size = keypoint_image_size
+        self.keypoint_gt_px_key = keypoint_gt_px_key
+        self.keypoint_valid_key = keypoint_valid_key
+        assert keypoint_source in ("transformer", "pellet_localizer")
+        self.keypoint_source = keypoint_source
+        self.pellet_xyz_loss_weight = pellet_xyz_loss_weight
+        self.pellet_xyz_gt_key = pellet_xyz_gt_key
+        self.pellet_classifier_loss_weight = pellet_classifier_loss_weight
+        self.pellet_valid_key = pellet_valid_key
         
     def __len__(self):
         return len(self.batch_loader)
@@ -73,10 +165,111 @@ class BatchLoss:
                 'bc': utils.InitZeroTensorOnDevice(),
                 'dql': utils.InitZeroTensorOnDevice(),
                 'attractor': utils.InitZeroTensorOnDevice(),
+                'keypoint': utils.InitZeroTensorOnDevice(),
+                'pellet_xyz': utils.InitZeroTensorOnDevice(),
             }
         }
         return losses
-    
+
+    def _get_last_keypoints(self):
+        """
+        Returns the (B, K, 2) predicted keypoints (gradient-attached) to
+        supervise with match_and_compute_keypoint_loss, from whichever
+        source keypoint_source names, or None if unavailable.
+        """
+        if self.keypoint_source == "pellet_localizer":
+            _, _, keypoints = self.actor_model.get_last_pellet_prediction()
+            return keypoints
+        else:
+            transformer = getattr(self.actor_model.model, 'transformer', None)
+            if transformer is None or self.keypoint_obs_key is None:
+                return None
+            return transformer.get_last_spatial_softmax_keypoints(self.keypoint_obs_key)
+
+    def compute_keypoint_loss(self, nbatch):
+        """
+        See match_and_compute_keypoint_loss. Reuses whichever module
+        (keypoint_source) already computed the keypoints as a side effect of
+        compute_sample_loss() (via self.actor.loss(...)) on this exact
+        nbatch -- no extra forward pass. Only meaningful right after
+        compute_sample_loss() has run this step; the caller enforces that
+        ordering (see compute_loss below).
+        """
+        if self.keypoint_loss_weight <= 0.0:
+            return utils.InitZeroTensorOnDevice()
+
+        pred_kpts = self._get_last_keypoints()
+        if pred_kpts is None or self.keypoint_gt_px_key not in nbatch:
+            return utils.InitZeroTensorOnDevice()
+
+        # (B, 1, N, 2)/(B, 1, N) -- squeeze the obs-history dim (obs_rel_indices
+        # is a single "current" index for this key, same as any other obs)
+        gt_px = nbatch[self.keypoint_gt_px_key].squeeze(1)
+        valid = nbatch[self.keypoint_valid_key].squeeze(1)
+
+        # keypoint_gt_px_key's coords are in the ORIGINAL pixel image's
+        # space regardless of what grid resolution the model's spatial
+        # softmax runs over (a 14x14 DINOv3 patch grid tiles the same image
+        # edge to edge as the raw 64x64 pixels would, so both land in the
+        # same [-1,1]^2 after normalization) -- keypoint_image_size is that
+        # original pixel size, set explicitly rather than derived from
+        # shape_meta, since there may be no obs key holding the raw image
+        # at all once vision is routed through pre-extracted patch features.
+        loss = match_and_compute_keypoint_loss(pred_kpts, gt_px, valid, self.keypoint_image_size)
+        globals.LOGGER.log_one(f"BC/{self.rb_id}: keypoint_loss", loss)
+        return self.keypoint_loss_weight * loss
+
+    def compute_pellet_xyz_loss(self, nbatch):
+        """
+        Two losses from the pellet localizer's other two outputs (see
+        PelletLocalizer): an xyz regression MSE against the ground-truth
+        pellet location, and a has-pellet classifier BCE.
+
+        The xyz loss is masked to samples where a pellet is actually visible
+        (pellet_valid_key, e.g. target_pellet_valid -- the authoritative
+        ground-truth label for whether target_pellet_location means
+        anything for this sample; falls back to
+        keypoint_valid_key.any(-1) if pellet_valid_key isn't in the batch)
+        -- xyz is meaningless supervision on a frame with nothing to
+        localize. Masked by the GROUND TRUTH label, not the classifier's
+        own (possibly wrong, especially early in training) prediction, so a
+        bad classifier doesn't also corrupt the xyz loss's signal. The
+        classifier itself is supervised on every sample, valid or not --
+        that's the whole point of it.
+        """
+        if self.pellet_xyz_loss_weight <= 0.0 and self.pellet_classifier_loss_weight <= 0.0:
+            return utils.InitZeroTensorOnDevice()
+        if self.keypoint_source != "pellet_localizer":
+            return utils.InitZeroTensorOnDevice()
+
+        pred_xyz, has_pellet_logit, _ = self.actor_model.get_last_pellet_prediction()
+        if pred_xyz is None:
+            return utils.InitZeroTensorOnDevice()
+
+        has_pellet_gt = None
+        if self.pellet_valid_key in nbatch:
+            has_pellet_gt = nbatch[self.pellet_valid_key].squeeze(1).float().reshape(-1)  # (B,)
+        elif self.keypoint_valid_key in nbatch:
+            has_pellet_gt = nbatch[self.keypoint_valid_key].squeeze(1).bool().any(dim=-1).float()  # (B,)
+
+        total = utils.InitZeroTensorOnDevice()
+
+        if self.pellet_xyz_loss_weight > 0.0 and self.pellet_xyz_gt_key in nbatch['obs'] and has_pellet_gt is not None:
+            gt_xyz = nbatch['obs'][self.pellet_xyz_gt_key].squeeze(1)  # (B, 3)
+            sq_err = (pred_xyz - gt_xyz).pow(2).sum(dim=-1)  # (B,)
+            denom = has_pellet_gt.sum().clamp(min=1.0)  # avoid a GPU->CPU sync (see match_and_compute_keypoint_loss)
+            xyz_loss = (sq_err * has_pellet_gt).sum() / denom
+            globals.LOGGER.log_one(f"BC/{self.rb_id}: pellet_xyz_loss", xyz_loss)
+            total = total + self.pellet_xyz_loss_weight * xyz_loss
+
+        if self.pellet_classifier_loss_weight > 0.0 and has_pellet_gt is not None:
+            classifier_loss = nn.functional.binary_cross_entropy_with_logits(has_pellet_logit, has_pellet_gt)
+            globals.LOGGER.log_one(f"BC/{self.rb_id}: pellet_classifier_loss", classifier_loss)
+            total = total + self.pellet_classifier_loss_weight * classifier_loss
+
+        return total
+
+
     def get_next_batch(self):
         nbatch = next(self.batch_loader)
         self.current_batch = nbatch
@@ -103,10 +296,14 @@ class BatchLoss:
         subtask_id = torch.reshape(nbatch['subtask_id'], [-1])
 
         with torch.no_grad():
-            for sid in torch.unique(subtask_id).tolist():
-                mask = subtask_id == sid
-                if mask.any():
-                    globals.LOGGER.log_one(f"BC/{self.rb_id}: subtask_{int(sid)}_loss", sample_loss[mask].mean())
+            unique_subtask_ids = torch.unique(subtask_id)
+            # skip the per-subtask breakdown (and its .tolist() CPU sync) when
+            # the whole batch is one subtask -- it'd just duplicate the total
+            if unique_subtask_ids.numel() > 1:
+                for sid in unique_subtask_ids.tolist():
+                    mask = subtask_id == sid
+                    if mask.any():
+                        globals.LOGGER.log_one(f"BC/{self.rb_id}: subtask_{int(sid)}_loss", sample_loss[mask].mean())
 
         if self.subtask_weights is None:
             return sample_loss
@@ -144,17 +341,23 @@ class BatchLoss:
         if self.use_bc_loss:
             # get the BC loss
             sample_loss, a0, timesteps = self.compute_sample_loss()
-            
+
             self.a0 = a0
-            
+
             # mean it
             actor_loss = sample_loss.mean()
-            
+
             # save and log
             self.save_bc_loss(losses, actor_loss)
-            
+
+            # must run right after compute_sample_loss(): reads the spatial
+            # softmax keypoints that call's forward() pass just cached for
+            # THIS nbatch (see compute_keypoint_loss's docstring)
+            losses['actor']['keypoint'] = self.compute_keypoint_loss(self.current_batch)
+            losses['actor']['pellet_xyz'] = self.compute_pellet_xyz_loss(self.current_batch)
+
         return losses
-    
+
     def eval(self):
         loss = 0.0
         action_mse_error = 0.0

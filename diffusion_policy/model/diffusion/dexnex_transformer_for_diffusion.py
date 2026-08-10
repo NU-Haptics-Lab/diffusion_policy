@@ -54,6 +54,8 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             n_obs_steps: int = None,
             cond_dims: Optional[Dict[str, int]] = None,
             patch_group_dims: Optional[Dict[str, Tuple[int, int]]] = None,
+            spatial_softmax_group_dims: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
+            spatial_softmax_temperature_init: float = 1.0,
             num_tasks: int = 0,
             n_layer: int = 12,
             n_head: int = 12,
@@ -63,6 +65,8 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             n_cond_layers: int = 4,
             p_drop_token: float = 0.0,
             droppable_token_keys: Optional[List[str]] = None,
+            sim_only_token_keys: Optional[List[str]] = None,
+            real_only_token_keys: Optional[List[str]] = None,
         ) -> None:
         """
         cond_dims: obs key -> feature dim, for single-token (fused) obs keys.
@@ -73,6 +77,22 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             -- patches are homogeneous except for position), plus its own
             learned per-patch positional embedding and a learned per-group
             camera-identity embedding added to every patch in that group.
+        spatial_softmax_group_dims: patch-group name -> (H, W, patch_feature_dim,
+            num_keypoints). An alternative to patch_group_dims for the same
+            kind of raw spatial patch grid input, but instead of keeping every
+            patch as its own token, reduces the whole grid to ONE token via a
+            classic spatial softmax (Finn et al.): a learned per-position
+            linear reduces the channel dim to num_keypoints "heatmaps", each
+            heatmap is softmaxed over spatial position, then the expected
+            (x,y) coordinate per keypoint is computed against a fixed
+            normalized grid -- giving a (2*num_keypoints)-dim descriptor that
+            plugs into the same single-token pathway as cond_dims.
+        sim_only_token_keys / real_only_token_keys: token names that should be
+            hard-zeroed (after projection, deterministically, at both train
+            and eval time -- NOT the same mechanism as p_drop_token, which is
+            random and training-only) for samples whose data_source marks
+            them as real (0) or sim (1) respectively, e.g. for cotraining on
+            a real dataset lacking some sim-only observation, or vice versa.
         """
         super().__init__()
 
@@ -82,13 +102,29 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             n_obs_steps = horizon
 
         T = horizon
-        obs_as_cond = cond_dims is not None and len(cond_dims) > 0
-        self.cond_keys = list(cond_dims.keys()) if cond_dims is not None else []
+
         self.patch_group_names = list(patch_group_dims.keys()) if patch_group_dims is not None else []
         self.has_patch_groups = len(self.patch_group_names) > 0
         self.patch_group_num_patches = {
             group: num_patches for group, (num_patches, _) in (patch_group_dims or {}).items()
         }
+
+        self.spatial_softmax_group_dims = dict(spatial_softmax_group_dims or {})
+        self.spatial_softmax_group_names = list(self.spatial_softmax_group_dims.keys())
+        overlap = set(self.spatial_softmax_group_names) & set(self.patch_group_names)
+        assert not overlap, f"a group can't be in both patch_group_dims and spatial_softmax_group_dims: {overlap}"
+
+        # spatial-softmax-reduced groups become single-token cond keys, exactly
+        # like cond_dims -- they just get their (2*num_keypoints)-dim input
+        # computed internally from `patches` instead of supplied via `cond`.
+        combined_cond_dims = dict(cond_dims or {})
+        overlap = set(combined_cond_dims.keys()) & set(self.spatial_softmax_group_names)
+        assert not overlap, f"a key can't be in both cond_dims and spatial_softmax_group_dims: {overlap}"
+        for group, (_, _, _, num_keypoints) in self.spatial_softmax_group_dims.items():
+            combined_cond_dims[group] = num_keypoints * 2
+        self.cond_keys = list(combined_cond_dims.keys())
+        obs_as_cond = len(self.cond_keys) > 0
+
         self.embed_task_id = num_tasks > 0
         T_cond = 1  # timestep token
         if self.embed_task_id:
@@ -118,18 +154,32 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         self.p_drop_token = p_drop_token
         self.droppable_token_keys = set(droppable_token_keys)
 
+        # deterministic, always-on (train + eval) per-data-source token masking
+        # -- e.g. a sim-only obs key must be zeroed for real-robot samples and
+        # vice versa, regardless of self.training.
+        sim_only_token_keys_set: set = set(sim_only_token_keys or [])
+        real_only_token_keys_set: set = set(real_only_token_keys or [])
+        unknown = (sim_only_token_keys_set | real_only_token_keys_set) - set(all_token_names)
+        assert not unknown, f"sim_only_token_keys/real_only_token_keys contains unknown token names: {unknown}"
+        overlap = sim_only_token_keys_set & real_only_token_keys_set
+        assert not overlap, f"a token key can't be both sim_only and real_only: {overlap}"
+        self.sim_only_token_keys: set = sim_only_token_keys_set
+        self.real_only_token_keys: set = real_only_token_keys_set
+
         # trajectory embedding stem
         self.input_emb = nn.Linear(input_dim, n_emb)
         self.pos_emb = nn.Parameter(torch.zeros(1, T, n_emb))
         self.drop = nn.Dropout(p_drop_emb)
 
-        # obs/cond embedding stem: one projection per obs key, each becomes its own token
+        # obs/cond embedding stem: one projection per obs key, each becomes its own token.
+        # spatial-softmax-reduced groups share this exact pathway -- their
+        # (2*num_keypoints)-dim descriptor is computed on the fly in forward()
+        # and projected here just like any other single-token cond key.
         self.time_emb = SinusoidalPosEmb(n_emb)
         self.cond_obs_emb = None
         if obs_as_cond:
-            assert cond_dims is not None
             self.cond_obs_emb = nn.ModuleDict({
-                key: nn.Linear(cond_dims[key], n_emb) for key in self.cond_keys
+                key: nn.Linear(combined_cond_dims[key], n_emb) for key in self.cond_keys
             })
 
         # task-id token: task identity is categorical/nominal (no ordering between
@@ -162,6 +212,39 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
                 group: nn.Parameter(torch.zeros(1, 1, n_emb))
                 for group in self.patch_group_names
             })
+
+        # spatial-softmax stem: a learned per-position channel reduction to
+        # num_keypoints "heatmaps" (ss_reduce), a learned per-keypoint
+        # temperature (ss_temperature, initialized to a constant -- not
+        # randomly, so it's excluded from the usual weight init below), and a
+        # fixed (non-learnable) normalized [-1,1]^2 coordinate grid per group.
+        self.ss_reduce = None
+        self.ss_temperature = None
+        if self.spatial_softmax_group_names:
+            self.ss_reduce = nn.ModuleDict({
+                group: nn.Linear(patch_dim, num_keypoints)
+                for group, (_, _, patch_dim, num_keypoints) in self.spatial_softmax_group_dims.items()
+            })
+            self.ss_temperature = nn.ParameterDict({
+                group: nn.Parameter(torch.full((num_keypoints,), spatial_softmax_temperature_init))
+                for group, (_, _, _, num_keypoints) in self.spatial_softmax_group_dims.items()
+            })
+            for group, (H, W, _, _) in self.spatial_softmax_group_dims.items():
+                ys, xs = torch.meshgrid(
+                    torch.linspace(-1, 1, H),
+                    torch.linspace(-1, 1, W),
+                    indexing='ij'
+                )
+                grid = torch.stack([xs.reshape(-1), ys.reshape(-1)], dim=-1)  # (H*W, 2)
+                self.register_buffer(f'ss_grid_{group}', grid, persistent=False)
+
+        # populated by _spatial_softmax on every forward() call, keyed by
+        # group name -> (B, num_keypoints, 2) pre-flatten coords. Lets an
+        # auxiliary loss (e.g. supervising keypoints against known landmark
+        # pixel locations) reuse forward()'s own computation instead of
+        # running the vision stem a second time -- same pattern as
+        # last_cross_attn_entropy/last_cross_attn_token_names below.
+        self._last_ss_keypoints: Dict[str, torch.Tensor] = {}
 
         self.cond_pos_emb = nn.Parameter(torch.zeros(1, T_cond, n_emb))
 
@@ -295,6 +378,8 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         for group in self.patch_group_names:
             no_decay.add(f"patch_pos_emb.{group}")
             no_decay.add(f"patch_camera_emb.{group}")
+        for group in self.spatial_softmax_group_names:
+            no_decay.add(f"ss_temperature.{group}")
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -361,20 +446,57 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             'mean_pairwise_distance': mean_pairwise_distance,
         }
 
+    def _spatial_softmax(self, group: str, x: torch.Tensor) -> torch.Tensor:
+        """
+        Classic spatial softmax (Finn et al.), collapsing an entire patch grid
+        into one small descriptor instead of keeping every patch as its own
+        token.
+
+        x: (B, num_patches, patch_dim) where num_patches == H*W for this group.
+        Returns (B, num_keypoints*2): for each of num_keypoints learned
+        "heatmaps" (a per-position linear reduction of the channel dim),
+        softmax over spatial position, then the expected (x,y) coordinate
+        against a fixed normalized [-1,1]^2 grid.
+        """
+        assert self.ss_reduce is not None and self.ss_temperature is not None
+        feat = self.ss_reduce[group](x)  # (B, num_patches, num_keypoints)
+        feat = feat / self.ss_temperature[group]
+        weights = torch.softmax(feat, dim=1)  # softmax over spatial positions
+        grid = getattr(self, f'ss_grid_{group}')  # (num_patches, 2)
+        coords = torch.einsum('bpk,pc->bkc', weights, grid)  # (B, num_keypoints, 2)
+        self._last_ss_keypoints[group] = coords
+        return coords.reshape(coords.shape[0], -1)  # (B, num_keypoints*2)
+
+    def get_last_spatial_softmax_keypoints(self, group: str) -> Optional[torch.Tensor]:
+        """
+        Returns the (B, num_keypoints, 2) per-keypoint [-1,1]^2 coordinates
+        from the most recent forward() call's spatial-softmax reduction for
+        `group`, gradient-attached (backprop through this reaches
+        ss_reduce/ss_temperature exactly as it would through the normal
+        forward path). None if forward() hasn't run yet, or `group` isn't a
+        spatial-softmax group.
+        """
+        return self._last_ss_keypoints.get(group)
+
     def forward(self,
         sample: torch.Tensor,
         timestep: Union[torch.Tensor, float, int],
         cond: Optional[Dict[str, torch.Tensor]]=None,
         patches: Optional[Dict[str, torch.Tensor]]=None,
         task_ids: Optional[torch.Tensor]=None,
+        data_source: Optional[torch.Tensor]=None,
         log_attn: bool=False, **kwargs):
         """
         x: (B,T,input_dim)
         timestep: (B,) or int, diffusion step
         cond: dict mapping obs key -> (B,cond_dims[key]); each key becomes its own token
         patches: dict mapping patch-group name -> (B,num_patches,patch_feature_dim);
-            each patch becomes its own token, sharing one projection per group
+            each patch becomes its own token (patch_group_dims groups) or gets
+            reduced to one spatial-softmax token (spatial_softmax_group_dims groups)
         task_ids: (B,) long tensor of task indices; becomes its own token
+        data_source: (B,) tensor, 0=real 1=sim; hard-zeroes sim_only_token_keys
+            for real samples and real_only_token_keys for sim samples, always
+            (train + eval), regardless of p_drop_token
         log_attn: if True, captures the last decoder layer's cross-attention
             weights (trajectory -> obs memory) for diagnostics; see
             `last_cross_attn_entropy` / `last_cross_attn_token_names` afterwards.
@@ -403,8 +525,16 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             cond_embeddings = torch.cat([cond_embeddings, task_emb], dim=1)
             cond_token_names.append('task_id')
         if self.obs_as_cond:
-            assert self.cond_obs_emb is not None and cond is not None
-            key_tokens = [self.cond_obs_emb[key](cond[key]).unsqueeze(1) for key in self.cond_keys]
+            assert self.cond_obs_emb is not None
+            key_tokens = []
+            for key in self.cond_keys:
+                if key in self.spatial_softmax_group_names:
+                    assert patches is not None
+                    key_input = self._spatial_softmax(key, patches[key])
+                else:
+                    assert cond is not None
+                    key_input = cond[key]
+                key_tokens.append(self.cond_obs_emb[key](key_input).unsqueeze(1))
             # each (B,1,n_emb)
             cond_embeddings = torch.cat([cond_embeddings] + key_tokens, dim=1)
             cond_token_names.extend(self.cond_keys)
@@ -418,6 +548,21 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
                 p = p + self.patch_pos_emb[group] + self.patch_camera_emb[group]
                 cond_embeddings = torch.cat([cond_embeddings, p], dim=1)
                 cond_token_names.extend([group] * self.patch_group_num_patches[group])
+
+        if data_source is not None and (self.sim_only_token_keys or self.real_only_token_keys):
+            # deterministic, always-on masking (unlike p_drop_token): some
+            # tokens are structurally absent for a given data source, not
+            # randomly dropped for regularization -- applied before p_drop_token
+            # so random dropout only ever acts on tokens that are genuinely available.
+            ds = torch.reshape(data_source, [-1]).to(cond_embeddings.dtype)  # (B,) 0=real, 1=sim
+            avail = torch.ones(cond_embeddings.shape[0], cond_embeddings.shape[1],
+                device=cond_embeddings.device, dtype=cond_embeddings.dtype)
+            for i, name in enumerate(cond_token_names):
+                if name in self.sim_only_token_keys:
+                    avail[:, i] = ds
+                elif name in self.real_only_token_keys:
+                    avail[:, i] = 1.0 - ds
+            cond_embeddings = cond_embeddings * avail.unsqueeze(-1)
 
         if self.training and self.p_drop_token > 0:
             eligible = torch.tensor(

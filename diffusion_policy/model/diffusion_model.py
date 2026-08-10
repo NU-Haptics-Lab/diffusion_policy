@@ -15,6 +15,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.dexnex_transformer_for_diffusion import DexNexTransformerForDiffusion
+from diffusion_policy.model.pellet_localizer import PelletLocalizer
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.common.robomimic_config_util import get_robomimic_config
 from robomimic.algo import algo_factory
@@ -110,8 +111,8 @@ class DexNexTransformerAdapter(nn.Module):
         super().__init__()
         self.transformer = transformer
 
-    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, log_attn=False, **kwargs):
-        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, log_attn=log_attn)
+    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, data_source=None, log_attn=False, **kwargs):
+        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, data_source=data_source, log_attn=log_attn)
 
     def get_optim_groups(self, weight_decay: float=1e-3):
         return self.transformer.get_optim_groups(weight_decay=weight_decay)
@@ -198,7 +199,24 @@ class DiffusionModel(BaseImagePolicy):
             transformer_p_drop_token = 0.0, # whole-token (modality) dropout probability
             transformer_droppable_token_keys = None, # obs/task_id keys eligible for whole-token dropout; None = all except timestep
             patch_keys_to_use = None, # obs keys that are unpooled patch-token grids (e.g. DINOv3 patches); dexnex_transformer only. Read directly from nbatch['obs'], bypassing obs_encoder, since ObservationEncoder always flattens per-key output and would destroy the patch grid.
+            spatial_softmax_patch_keys = None, # subset of patch_keys_to_use to reduce via spatial softmax (one token per group) instead of keeping every patch as its own token
+            spatial_softmax_num_keypoints = 16, # per spatial_softmax_patch_keys group
+            spatial_softmax_temperature_init = 1.0,
+            sim_only_token_keys = None, # token keys hard-zeroed for real (data_source==0) samples, always (train + eval)
+            real_only_token_keys = None, # token keys hard-zeroed for sim (data_source==1) samples, always (train + eval)
             diagnostics_every_n_steps = 50, # gate for the pricier periodic diagnostics (attn entropy, task embedding stats)
+            # pellet localizer (aiet_alignment_sim): an upstream module that predicts a
+            # pellet xyz position from a patch-token grid + lowdim state, whose (detached)
+            # output is injected as an extra lowdim obs key for the main transformer --
+            # see _maybe_run_pellet_localizer. None (default) disables it entirely.
+            pellet_localizer_patch_key = None, # obs key holding the (H,W,patch_dim) patch grid, e.g. "wrist_camera_patch_features"
+            pellet_localizer_lowdim_keys = None, # list of lowdim obs keys concatenated as the localizer's non-vision input, e.g. ["joint_positions", "wrist_camera_pose"]
+            pellet_localizer_pred_obs_key = "pellet_xyz_pred", # obs key the (detached) xyz prediction is injected under -- must also be registered in common_obs_encoder.lowdims + obs_keys_to_use
+            pellet_localizer_has_pellet_obs_key = "has_pellet_pred", # obs key the (detached) has-pellet probability (sigmoid of the classifier logit) is injected under -- same registration requirement as pellet_localizer_pred_obs_key
+            pellet_localizer_num_keypoints = 16,
+            pellet_localizer_hidden_dim = 128,
+            pellet_localizer_temperature_init = 1.0,
+            pellet_localizer_output_dim = 3,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -238,10 +256,28 @@ class DiffusionModel(BaseImagePolicy):
         self.transformer_p_drop_token = transformer_p_drop_token
         self.transformer_droppable_token_keys = transformer_droppable_token_keys
         self.patch_keys_to_use = patch_keys_to_use or []
+        self.spatial_softmax_patch_keys = spatial_softmax_patch_keys or []
+        self.spatial_softmax_num_keypoints = spatial_softmax_num_keypoints
+        self.spatial_softmax_temperature_init = spatial_softmax_temperature_init
+        self.sim_only_token_keys = sim_only_token_keys
+        self.real_only_token_keys = real_only_token_keys
         self.diagnostics_every_n_steps = diagnostics_every_n_steps
+
+        self.pellet_localizer_patch_key = pellet_localizer_patch_key
+        self.pellet_localizer_lowdim_keys = pellet_localizer_lowdim_keys or []
+        self.pellet_localizer_pred_obs_key = pellet_localizer_pred_obs_key
+        self.pellet_localizer_has_pellet_obs_key = pellet_localizer_has_pellet_obs_key
+        self.pellet_localizer_num_keypoints = pellet_localizer_num_keypoints
+        self.pellet_localizer_hidden_dim = pellet_localizer_hidden_dim
+        self.pellet_localizer_temperature_init = pellet_localizer_temperature_init
+        self.pellet_localizer_output_dim = pellet_localizer_output_dim
 
         # Nones
         self.obs_encoder = None
+        self.pellet_localizer = None
+        self._last_pellet_xyz_pred = None
+        self._last_pellet_has_pellet_logit = None
+        self._last_pellet_keypoints = None
         
         
     def setup(self):
@@ -282,7 +318,24 @@ class DiffusionModel(BaseImagePolicy):
                 )
             )
             
-        # print 
+        # print
+
+        if self.pellet_localizer_patch_key is not None:
+            H, W, patch_dim = globals.CONFIG.shape_meta[self.pellet_localizer_patch_key].shape  # type:ignore
+            lowdim_dim = sum(
+                globals.CONFIG.shape_meta[key].shape[0]  # type:ignore
+                for key in self.pellet_localizer_lowdim_keys
+            )
+            self.pellet_localizer = PelletLocalizer(
+                patch_h=H,
+                patch_w=W,
+                patch_dim=patch_dim,
+                lowdim_dim=lowdim_dim,
+                num_keypoints=self.pellet_localizer_num_keypoints,
+                hidden_dim=self.pellet_localizer_hidden_dim,
+                spatial_softmax_temperature_init=self.pellet_localizer_temperature_init,
+                output_dim=self.pellet_localizer_output_dim,
+            )
 
         #### trunk
         # create diffusion model. Get first/only element from list
@@ -309,15 +362,18 @@ class DiffusionModel(BaseImagePolicy):
             # since ObservationEncoder always flattens per-key output and would destroy the
             # patch grid. Shapes come straight from shape_meta, same source ObsEncoderMaker uses.
             # shape_meta stores the raw (H, W, patch_dim) spatial grid (e.g. 14x14x1024 for
-            # DINOv3); flatten the H,W grid dims into a single num_patches axis here, since
-            # DexNexTransformerForDiffusion expects (num_patches, patch_dim).
+            # DINOv3). Keys in spatial_softmax_patch_keys get reduced to one token via a
+            # learned spatial softmax; the rest keep every patch as its own token (flatten
+            # H,W into a single num_patches axis, since DexNexTransformerForDiffusion's
+            # patch_group_dims expects (num_patches, patch_dim)).
             patch_group_dims = {}
+            spatial_softmax_group_dims = {}
             for key in self.patch_keys_to_use:
-                *grid_dims, patch_dim = globals.CONFIG.shape_meta[key].shape #type:ignore
-                num_patches = 1
-                for d in grid_dims:
-                    num_patches *= d
-                patch_group_dims[key] = (num_patches, patch_dim)
+                H, W, patch_dim = globals.CONFIG.shape_meta[key].shape #type:ignore
+                if key in self.spatial_softmax_patch_keys:
+                    spatial_softmax_group_dims[key] = (H, W, patch_dim, self.spatial_softmax_num_keypoints)
+                else:
+                    patch_group_dims[key] = (H * W, patch_dim)
             transformer = DexNexTransformerForDiffusion(
                 input_dim=self.action_dim,
                 output_dim=self.action_dim,
@@ -325,6 +381,8 @@ class DiffusionModel(BaseImagePolicy):
                 n_obs_steps=self.n_obs_steps,
                 cond_dims=cond_dims,
                 patch_group_dims=patch_group_dims if patch_group_dims else None,
+                spatial_softmax_group_dims=spatial_softmax_group_dims if spatial_softmax_group_dims else None,
+                spatial_softmax_temperature_init=self.spatial_softmax_temperature_init,
                 num_tasks=self.num_tasks if self.embed_task_id else 0,
                 n_layer=self.transformer_n_layer,
                 n_head=self.transformer_n_head,
@@ -334,6 +392,8 @@ class DiffusionModel(BaseImagePolicy):
                 n_cond_layers=self.transformer_n_cond_layers,
                 p_drop_token=self.transformer_p_drop_token,
                 droppable_token_keys=self.transformer_droppable_token_keys,
+                sim_only_token_keys=self.sim_only_token_keys,
+                real_only_token_keys=self.real_only_token_keys,
             )
             model = DexNexTransformerAdapter(transformer)
 
@@ -393,6 +453,68 @@ class DiffusionModel(BaseImagePolicy):
         ### TEST
         self.random_noise = None
 
+    def _maybe_run_pellet_localizer(self, nobs):
+        """
+        If configured (pellet_localizer_patch_key is not None), runs
+        self.pellet_localizer on the current nobs (most recent obs step) and
+        injects its DETACHED xyz prediction AND has-pellet probability
+        (sigmoid of the classifier logit) into nobs under
+        pellet_localizer_pred_obs_key / pellet_localizer_has_pellet_obs_key,
+        as if they were normal lowdim obs keys -- so both flow through the
+        SAME per-key obs_encoder tokenization as everything else in
+        _encode_obs_cond. The transformer needs has-pellet as an explicit
+        input because pellet_xyz_pred alone can't distinguish "confidently
+        localized" from "no pellet visible, this is just whatever the MLP
+        extrapolated" -- without it, the policy has no way to react
+        differently when the xyz prediction shouldn't be trusted. No-op if
+        not configured.
+
+        Also caches the prediction, has-pellet logit, and intermediate
+        keypoints (all still gradient-attached, pre-detach) for BatchLoss's
+        aux losses to read afterward -- same pattern as
+        DexNexTransformerForDiffusion's spatial-softmax/cross-attention
+        caching. Must be called before _encode_obs_cond, and before any aux
+        loss in the same step tries to read the cache.
+
+        Detached deliberately before injection: the localizer is trained
+        only by its own losses (pixel keypoint + xyz regression + has-pellet
+        classifier), not by the diffusion BC loss, so a bad early prediction
+        doesn't get "corrected" by distorting the vision pathway to fit the
+        BC objective instead of the real pellet location.
+        """
+        self._last_pellet_xyz_pred = None
+        self._last_pellet_has_pellet_logit = None
+        self._last_pellet_keypoints = None
+        if self.pellet_localizer is None:
+            return
+
+        x = nobs[self.pellet_localizer_patch_key][:, -1, ...]  # (B, H, W, patch_dim)
+        B, patch_dim = x.shape[0], x.shape[-1]
+        patches = x.reshape(B, -1, patch_dim)
+
+        lowdim = torch.cat(
+            [nobs[key][:, -1, :] for key in self.pellet_localizer_lowdim_keys], dim=-1
+        )
+
+        pred_xyz, has_pellet_logit, keypoints = self.pellet_localizer(patches, lowdim)
+        self._last_pellet_xyz_pred = pred_xyz
+        self._last_pellet_has_pellet_logit = has_pellet_logit
+        self._last_pellet_keypoints = keypoints
+
+        nobs[self.pellet_localizer_pred_obs_key] = pred_xyz.detach().unsqueeze(1)  # (B, 1, output_dim)
+        has_pellet_prob = torch.sigmoid(has_pellet_logit.detach())
+        nobs[self.pellet_localizer_has_pellet_obs_key] = has_pellet_prob.unsqueeze(-1).unsqueeze(1)  # (B, 1, 1)
+
+    def get_last_pellet_prediction(self):
+        """
+        Returns (pred_xyz, has_pellet_logit, keypoints) from the most recent
+        _maybe_run_pellet_localizer call, all gradient-attached (unlike the
+        detached copy injected into nobs) -- for BatchLoss's aux losses.
+        All None if the pellet localizer isn't configured, or this is called
+        before any forward pass.
+        """
+        return self._last_pellet_xyz_pred, self._last_pellet_has_pellet_logit, self._last_pellet_keypoints
+
     def _encode_obs_cond(self, nobs, To, B):
         """
         Flatten obs history (B,To,...) -> (B*To,...), encode, and reshape back.
@@ -441,6 +563,7 @@ class DiffusionModel(BaseImagePolicy):
             local_cond=None,
             global_cond=None,
             patches=None,
+            data_source=None,
             generator=None,
             task_id = None,
             # keyword arguments to scheduler.step
@@ -464,7 +587,7 @@ class DiffusionModel(BaseImagePolicy):
             model_output = self.model(trajectory,
                                       t,
                                       task_id,
-                local_cond=local_cond, global_cond=global_cond, patches=patches)
+                local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source)
             
             # tree?
             if self.use_tree:
@@ -486,23 +609,23 @@ class DiffusionModel(BaseImagePolicy):
         return trajectory
     
     @torch.no_grad()
-    def infer(self, nobs_dict: dict, task_id=None, noise_scheduler=None):
+    def infer(self, nobs_dict: dict, task_id=None, data_source=None, noise_scheduler=None):
         """
         setup for predict_action. Squeeze all tensors, then add the appropriate dimensions
         """
         # for key, val in nobs_dict.items():
         #     val = torch.squeeze(val)
-            
+
         #     # predict_action expects a batch dimension, and a history dimension, so add two axes
         #     val = torch.reshape(val, [1, 1] + list(val.shape))
-            
+
         #     nobs_dict[key] = val
-        
+
         if noise_scheduler is None:
             noise_scheduler = self.noise_scheduler
-            
+
         self.eval()
-        nresult = self.predict_action_impl(nobs_dict, task_id=task_id, noise_scheduler=noise_scheduler)
+        nresult = self.predict_action_impl(nobs_dict, task_id=task_id, data_source=data_source, noise_scheduler=noise_scheduler)
         self.train()
         
         # naction doesn't include past actions
@@ -527,20 +650,23 @@ class DiffusionModel(BaseImagePolicy):
     def predict_action(self, # type:ignore
                        nobs_dict: Dict[str, torch.Tensor],
                         task_id = None,
-                       ) -> Dict[str, torch.Tensor]: 
+                        data_source = None,
+                       ) -> Dict[str, torch.Tensor]:
         return self.predict_action_impl(
             nobs_dict,
             self.noise_scheduler,
             task_id=task_id,
+            data_source=data_source,
             )
-        
-    def denoise(self, 
+
+    def denoise(self,
             nobs_dict,
             noise_scheduler,
             task_id = None,
+            data_source = None,
             ):
         """ alias for predict_action_impl """
-        return self.predict_action_impl(nobs_dict, noise_scheduler , task_id=task_id)
+        return self.predict_action_impl(nobs_dict, noise_scheduler, task_id=task_id, data_source=data_source)
     
     def get_future_actions(self, all_actions):
         start = np.argmax(np.array(self.action_rel_indices) >= 0)
@@ -548,10 +674,11 @@ class DiffusionModel(BaseImagePolicy):
         future_actions = all_actions[:, start:]
         return future_actions
 
-    def predict_action_impl(self, 
+    def predict_action_impl(self,
             nobs_dict: Dict[str, torch.Tensor],
             noise_scheduler,
             task_id = None,
+            data_source = None,
             ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -585,7 +712,7 @@ class DiffusionModel(BaseImagePolicy):
         global_cond = None
         if self.obs_as_global_cond:
             # condition through global feature
-            
+            self._maybe_run_pellet_localizer(nobs)
             global_cond = self._encode_obs_cond(nobs, To, B)
             patches = self._encode_patch_groups(nobs)
             # empty data for action
@@ -604,6 +731,7 @@ class DiffusionModel(BaseImagePolicy):
             local_cond=local_cond,
             global_cond=global_cond,
             patches=patches,
+            data_source=data_source,
             task_id = task_id,
             **self.kwargs)
         
@@ -678,10 +806,12 @@ class DiffusionModel(BaseImagePolicy):
                 per_sample_mse = torch.nn.functional.mse_loss(pred_action, gt_action, reduction='none')
                 per_sample_mse = per_sample_mse.mean(dim=tuple(range(1, per_sample_mse.dim())))
                 task_id_flat = torch.reshape(task_id, [-1])
-                for tid in torch.unique(task_id_flat).tolist():
-                    task_mask = task_id_flat == tid
-                    if task_mask.any():
-                        globals.LOGGER.log_one(f"val_action_mse/task_{tid}", per_sample_mse[task_mask].mean())
+                unique_task_ids = torch.unique(task_id_flat)
+                if unique_task_ids.numel() > 1:
+                    for tid in unique_task_ids.tolist():
+                        task_mask = task_id_flat == tid
+                        if task_mask.any():
+                            globals.LOGGER.log_one(f"val_action_mse/task_{tid}", per_sample_mse[task_mask].mean())
 
         # move to cpu
         action_mse_error = mse.item()
@@ -776,6 +906,7 @@ class DiffusionModel(BaseImagePolicy):
         
         # for cotraining, we normalize when we construct the batch
         task_id = nbatch['task_id'] if 'task_id' in nbatch else None
+        data_source = nbatch['data_source'] if 'data_source' in nbatch else None
         nobs = nbatch['obs']
         nactions = nbatch['action']
         batch_size = nactions.shape[0]
@@ -798,6 +929,7 @@ class DiffusionModel(BaseImagePolicy):
         cond_data = trajectory
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T ...
+            self._maybe_run_pellet_localizer(nobs)
             global_cond = self._encode_obs_cond(nobs, To, batch_size)
             patches = self._encode_patch_groups(nobs)
         # else:
@@ -841,7 +973,7 @@ class DiffusionModel(BaseImagePolicy):
 
         # Predict the noise residual
         pred = self.model(noisy_trajectory, timesteps, task_id,
-            local_cond=local_cond, global_cond=global_cond, patches=patches, log_attn=do_diagnostics)
+            local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source, log_attn=do_diagnostics)
 
         # tree?
         if self.use_tree:
@@ -890,12 +1022,16 @@ class DiffusionModel(BaseImagePolicy):
 
             if task_id is not None:
                 task_id_flat = torch.reshape(task_id, [-1])
-                for tid in torch.unique(task_id_flat).tolist():
-                    task_mask = task_id_flat == tid
-                    n = task_mask.sum()
-                    if n > 0:
-                        globals.LOGGER.log_one(f"diffusion_loss/task_{tid}", per_sample_loss[task_mask].mean())
-                        globals.LOGGER.log_one(f"task_counts/task_{tid}", n)
+                unique_task_ids = torch.unique(task_id_flat)
+                # skip the per-task breakdown (and its .tolist() CPU sync) when
+                # the whole batch is one task -- it'd just duplicate "total"
+                if unique_task_ids.numel() > 1:
+                    for tid in unique_task_ids.tolist():
+                        task_mask = task_id_flat == tid
+                        n = task_mask.sum()
+                        if n > 0:
+                            globals.LOGGER.log_one(f"diffusion_loss/task_{tid}", per_sample_loss[task_mask].mean())
+                            globals.LOGGER.log_one(f"task_counts/task_{tid}", n)
 
             # bucket loss by diffusion timestep (low/mid/high noise) -- a flat average can
             # hide whether the model has learned the easy (low-noise) end but is still

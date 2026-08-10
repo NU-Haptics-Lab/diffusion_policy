@@ -274,17 +274,12 @@ class Indices:
         # get this key's data from the r.b.
         assert(self.replay_buffer is not None)
         input_arr = self.replay_buffer[key] # way faster this way vs getting the ep
-        
-        # # setup the item getter, more efficient than a for loop -- itemgetter doesn't maintain dimensions when the rb_indices is 1-long, so just use a for loop for simplicity
-        # ig = itemgetter(*list(rb_indices))
-        ls = []
-        for i in rb_indices:
 
-            ls.append(input_arr[i])
-
-        # index the sample
-        # sequence = np.array(ig(input_arr))
-        sequence = np.array(ls)
+        # single fancy-index read instead of a per-index Python loop: zarr
+        # services one indexing call by touching each needed chunk once, so
+        # indices sharing a chunk (e.g. a sample's obs history / action
+        # horizon window) no longer each pay a separate chunk decompression
+        sequence = np.array(input_arr[rb_indices])
         
         # limit outliers? here? idk.
         
@@ -551,6 +546,46 @@ class EpisodeSampler:
         assert(i < len(self))
 
         return i + self.rb_episode_start_idx
+
+    def resolve_rb_key(self, obs_key):
+        """
+        Maps a requested obs key to the actual replay-buffer key backing it.
+        Default: identity (obs_key IS the rb key, read via get_key_sample).
+
+        Override when get_obs_sample does something more custom than that --
+        e.g. aliasing one rb key under a different obs key name, or
+        zero-filling an obs key not present in this rb at all (return None
+        to signal "zero-fill this one"). See AIETErlenmeyerFlask3SimSampler /
+        AIETErlenmeyerFlask3RealSampler for both cases. Used by
+        train_and_val._vectorized_load_dataset's fast preload path to stay
+        correct for samplers with custom key handling instead of silently
+        declining to vectorize (or reading the wrong data).
+        """
+        return obs_key
+
+    def resolve_action_rb_key(self, action_key):
+        """
+        Same idea as resolve_rb_key but for the (single) action key. Default: identity.
+        """
+        return action_key
+
+    def get_constant_sample_fields(self):
+        """
+        Fields get_sample() always hardcodes to a fixed value in Python,
+        rather than reading (or falling back to a default when absent) from
+        the replay buffer -- e.g. AIETErlenmeyerFlask3SimSampler always sets
+        data_source=1 regardless of the rb's contents, since the sim rb has
+        no "data_source" array at all to read a per-sample value OR a
+        meaningful absence-fallback from.
+
+        Returns {field_name: constant_value}. Default: {} (no overrides --
+        train_and_val._vectorized_load_dataset's generic "read from rb, or
+        fall back to a hardcoded default if absent" logic is correct as-is).
+        Override when get_sample() sets a field unconditionally, so the
+        vectorized fast path uses the same constant instead of guessing a
+        generic fallback that may not match.
+        """
+        return {}
 
     def __len__(self):
         """ the training set length """

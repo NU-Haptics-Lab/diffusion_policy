@@ -15,6 +15,8 @@ def CalcSumLoss(w_batch_losses):
             'bc': torch.tensor([0.0], requires_grad=True),
             'dql': torch.tensor([0.0], requires_grad=True),
             'attractor': torch.tensor([0.0], requires_grad=True),
+            'keypoint': torch.tensor([0.0], requires_grad=True),
+            'pellet_xyz': torch.tensor([0.0], requires_grad=True),
         },
         'res_actor': utils.InitZeroTensorOnDevice(),
         'critic': torch.tensor([0.0], requires_grad=True),

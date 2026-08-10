@@ -110,7 +110,27 @@ class SimpleInference:
         # flatten and destroy the grid) but still must survive this filtering step.
         patch_keys_to_use: list = list(getattr(self.policy, "patch_keys_to_use", []) or [])
 
-        keys_to_keep = obs_keys_to_use + patch_keys_to_use
+        # pellet localizer (aiet_alignment_sim): its patch-token input
+        # (e.g. wrist_camera_patch_features) is likewise never in
+        # obs_keys_to_use, but IS required externally -- same treatment as
+        # patch_keys_to_use above. Its OUTPUTS (pellet_xyz_pred,
+        # has_pellet_pred) are the opposite case: they're IN obs_keys_to_use
+        # (the main transformer conditions on them) but are synthesized
+        # inside the model's own forward pass
+        # (DiffusionModel._maybe_run_pellet_localizer, which runs later,
+        # inside predict_action_impl) -- never supplied by the caller, so
+        # they must be excluded from the required-external-input set here
+        # or this assert fails on every rollout.
+        pellet_localizer_patch_key = getattr(self.policy, "pellet_localizer_patch_key", None)
+        pellet_localizer_synthetic_keys = {
+            getattr(self.policy, "pellet_localizer_pred_obs_key", None),
+            getattr(self.policy, "pellet_localizer_has_pellet_obs_key", None),
+        }
+
+        keys_to_keep = [key for key in obs_keys_to_use if key not in pellet_localizer_synthetic_keys]
+        keys_to_keep += patch_keys_to_use
+        if pellet_localizer_patch_key is not None and pellet_localizer_patch_key not in keys_to_keep:
+            keys_to_keep.append(pellet_localizer_patch_key)
 
         # confirm all keys are in obs
         for key in keys_to_keep:

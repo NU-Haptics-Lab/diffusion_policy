@@ -1280,18 +1280,24 @@ class AIETErlenmeyerFlaskBatchLoader(BatchLoader):
         return nns
 
 
-class AIETAlignmentSimBatchLoader(BatchLoader):
+class AIETErlenmeyerFlask3BatchLoader(BatchLoader):
     """
-    BatchLoader for the sim-only pellet alignment task.
+    Shared BatchLoader for aiet_erlenmeyer_flask_3's cotraining of the real
+    erlenmeyer-flask dataset with the sim alignment dataset -- used for BOTH
+    rb_ids (real and sim), just pointed at different rb_id/sampler pairs in
+    the yaml. Registers identity normalizers for the UNION of every key
+    either data source's sampler emits (AIETErlenmeyerFlask3RealSampler /
+    AIETErlenmeyerFlask3SimSampler), including the shared joint_states key
+    and the new data_source tag, so nbatch has a uniform schema regardless of
+    which data source produced it -- the model masks out data-source-inapplicable
+    tokens itself (sim_only_token_keys/real_only_token_keys), this loader
+    just needs every key to exist so normalization doesn't KeyError.
 
-    Zarr keys:
-      joint_positions        [T, 30] -- gofa(6)+wrist(2)+th(5)+ff(4)+mf(4)+rf(4)+lf(5);
-                                         used as both an obs key and the action key
-      target_pellet_location [T, 3]  -- xyz location of the target pellet
-
-    Sim-only, no images/vision features. No known a-priori limits for this
-    sim setup (unlike JOINT_LIMITS for the real robot), so both obs keys and
-    the action are fit directly from the dataset (mode='limits') in get_fitted_nns.
+    joint_states is fit from whichever rb_id this specific loader instance is
+    attached to (self.rb_id) -- real and sim each get their own fit, since
+    they're two different underlying datasets sharing one conceptual key.
+    Everything else uses identity normalizers, same "for now, don't
+    normalize" precedent as AIETErlenmeyerFlaskBatchLoader's vision features.
     """
 
     def get_static_nns(self):
@@ -1313,6 +1319,80 @@ class AIETAlignmentSimBatchLoader(BatchLoader):
 
         nns['obs'] = obs
 
+        for key in ['task_id', 'subtask_id', 'data_source']:
+            nns[key] = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+            )
+
+        return nns
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]  # type: ignore
+        if "joint_states" in rb:
+            self.fit_nn(rb["joint_states"], nns['obs']["joint_states"], "joint_states")
+        elif "joint_positions" in rb:
+            # sim rb: joint_states is aliased from joint_positions by the sampler
+            self.fit_nn(rb["joint_positions"], nns['obs']["joint_states"], "joint_states")
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        if act_key in rb:
+            self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns
+
+
+class AIETAlignmentSimBatchLoader(BatchLoader):
+    """
+    BatchLoader for the sim-only pellet alignment task.
+
+    Zarr keys (relevant obs subset -- see aiet_alignment_sim.yaml for the
+    full obs_keys_to_load, and AIETAlignmentSimSampler for the pellet
+    keypoint/validity fields, which are top-level sample fields, not obs):
+      joint_positions             [T, 30] -- gofa(6)+wr(2)+th(5)+ff(4)+mf(4)+rf(4)+lf(5);
+                                    used as both an obs key and the action key
+      wrist_camera_pose_xyz_rpy   [T, 6]  -- forearm-camera pose, xyz + roll/pitch/yaw
+      target_pellet_location      [T, 3]  -- xyz; PelletLocalizer's xyz-regression
+                                    aux-loss target, not a model input
+      wrist_camera_patch_features [T, 14, 14, 384] -- DINOv3 patch tokens, fed to
+                                    PelletLocalizer only, bypasses obs_encoder entirely
+                                    (identity-normalized -- "don't normalize the DINO
+                                    features" precedent, same as aiet_erlenmeyer_flask_3)
+
+    joint_positions, wrist_camera_pose_xyz_rpy, and target_pellet_location
+    have no known a-priori limits for this sim setup (unlike JOINT_LIMITS
+    for the real robot), so they're fit directly from the dataset
+    (mode='limits') in get_fitted_nns, same as the action.
+    """
+
+    IMAGE_OBS_KEYS = []  # nothing loaded as raw pixels anymore (wrist_camera_image was replaced by wrist_camera_patch_features)
+    OBS_KEYS_TO_FIT = ["joint_positions", "wrist_camera_pose_xyz_rpy", "target_pellet_location"]
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            if obs_key in self.IMAGE_OBS_KEYS:
+                obs[obs_key] = get_range_normalizer_from_stat(
+                    {'min': np.array([0], dtype=np.float32), 'max': np.array([255], dtype=np.float32)}
+                )
+            else:
+                nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+                obs[obs_key] = get_identity_normalizer_from_stat(
+                    {'min': np.zeros(nb, dtype=np.float32)}
+                )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+
         # the shared AIETErlenmeyerFlaskSampler always emits task_id/subtask_id
         # (with fallback defaults when a dataset doesn't have them, as here) --
         # register identity normalizers so NestedDataArray has somewhere to put
@@ -1324,17 +1404,32 @@ class AIETAlignmentSimBatchLoader(BatchLoader):
             {'min': np.array([0], dtype=np.float32)}
         )
 
+        # pellet-keypoint aux-loss targets (AIETAlignmentSimSampler only) --
+        # identity normalizers: these are supervision targets for
+        # BatchLoss's keypoint loss, not policy obs, and that loss does its
+        # own px -> [-1,1] conversion to match the model's spatial-softmax
+        # grid convention exactly, so nothing should rescale them here
+        nns['wrist_pellet_keypoints_px'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros((4, 2), dtype=np.float32)}
+        )
+        nns['wrist_pellet_keypoints_valid'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros((4,), dtype=np.float32)}
+        )
+        nns['target_pellet_valid'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros((1,), dtype=np.float32)}
+        )
+
         return nns
 
     def get_fitted_nns(self):
         nns = self.get_static_nns()
 
         rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
-        obs_keys_to_load: list = globals.CONFIG.obs_keys_to_load  # type: ignore
         act_key: str = globals.CONFIG.action_key  # type: ignore
 
-        for obs_key in obs_keys_to_load:
-            self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
+        for obs_key in self.OBS_KEYS_TO_FIT:
+            if obs_key in rb:
+                self.fit_nn(rb[obs_key], nns['obs'][obs_key], obs_key)
 
         if act_key in rb:
             self.fit_nn(rb[act_key], nns['action'], act_key)

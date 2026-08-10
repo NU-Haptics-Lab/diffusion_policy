@@ -134,9 +134,16 @@ def load_global_config(cfg: DictConfig | dict, cfg_key):
     
     # whether we want to run single threaded for debugging purposes
     if 'single_thread' in cfg and cfg.single_thread:
-        cfg.common_dataset.options.train.num_workers = 0 # type: ignore
-        cfg.common_dataset.options.train.persistent_workers = False # type: ignore
-        
+        # apply to every dataset node -- most configs have a single
+        # "common_dataset", but multi-dataset cotraining configs (e.g.
+        # aiet_erlenmeyer_flask_3) split it into "common_dataset_<rb_id>" per
+        # data source, so hardcoding the single "common_dataset" key would
+        # KeyError on those.
+        for key in cfg.keys(): # type: ignore
+            if str(key).startswith('common_dataset'):
+                cfg[key].options.train.num_workers = 0 # type: ignore
+                cfg[key].options.train.persistent_workers = False # type: ignore
+
         cfg.logging.use_wandb = False # type: ignore
     
     # resolve immediately so all the ${now:} resolvers

@@ -172,7 +172,10 @@ class StepTrainer:
             
             # hackish
             actor_losses = total_losses['actor']
-            loss_sum = actor_losses['dql'] + actor_losses['bc'] + actor_losses['attractor']
+            loss_sum = (
+                actor_losses['dql'] + actor_losses['bc'] + actor_losses['attractor']
+                + actor_losses['keypoint'] + actor_losses['pellet_xyz']
+            )
             
             # hack sum up losses
             total_losses['actor'] = loss_sum
