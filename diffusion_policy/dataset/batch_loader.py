@@ -519,17 +519,56 @@ class BatchLoader:
         
         
 
+    def _flatten_normalizers(self, nns, prefix=()):
+        """
+        Nested dict of {str: SingleFieldLinearNormalizer | dict} -> flat
+        {path_tuple: normalizer.state_dict()}. Mirrors the recursion
+        NestedDataArray.set_normalizers already does to tell leaves from
+        branches.
+        """
+        flat = {}
+        for key, val in nns.items():
+            path = prefix + (key,)
+            if isinstance(val, SingleFieldLinearNormalizer):
+                flat[path] = val.state_dict()
+            elif isinstance(val, dict):
+                flat.update(self._flatten_normalizers(val, path))
+        return flat
+
+    def _apply_normalizer_state_dict(self, nns, flat_state_dict, prefix=()):
+        """Inverse of _flatten_normalizers -- loads saved stats onto the
+        (unfitted, shape-only) normalizers get_static_nns() produced."""
+        for key, val in nns.items():
+            path = prefix + (key,)
+            if isinstance(val, SingleFieldLinearNormalizer):
+                if path in flat_state_dict:
+                    val.load_state_dict(flat_state_dict[path])
+            elif isinstance(val, dict):
+                self._apply_normalizer_state_dict(val, flat_state_dict, path)
+
     def init_normalizers(self):
         """
         Structure, must be same as the shape_meta structure.
 
+        Fitting (get_fitted_nns) requires the real dataset/sampler machinery
+        and can be slow (e.g. AIETAlignmentSim3BatchLoader's action
+        normalizer walks every episode) -- so the first time each BatchLoader
+        subclass actually fits, its stats are cached in
+        globals.NORMALIZER_STATE_DICTS (checkpointed by TopKCheckpointManager,
+        see checkpointer.py). Later instantiations of the same class -- e.g.
+        default_batch_loader during standalone testing/inference, after a
+        checkpoint has been loaded -- reuse those cached stats instead of
+        re-fitting from scratch.
         """
-        if False:
+        cache_key = type(self).__name__
+
+        if cache_key in globals.NORMALIZER_STATE_DICTS:
             nns = self.get_static_nns()
+            self._apply_normalizer_state_dict(nns, globals.NORMALIZER_STATE_DICTS[cache_key])
         else:
             nns = self.get_fitted_nns()
-            
-        
+            globals.NORMALIZER_STATE_DICTS[cache_key] = self._flatten_normalizers(nns)
+
         self.nested_data_array.set_normalizers(nns)
         
     def reset(self):
@@ -1433,6 +1472,241 @@ class AIETAlignmentSimBatchLoader(BatchLoader):
 
         if act_key in rb:
             self.fit_nn(rb[act_key], nns['action'], act_key)
+
+        return nns
+
+
+class AIETAlignmentSim3BatchLoader(BatchLoader):
+    """
+    BatchLoader for the lh_forearm-only sim (no abb gofa), single-stage
+    diffusion transformer, no aux losses.
+
+    Zarr keys used (see aiet_alignment_sim_3.yaml):
+      palm_pose_xyz_rpy           [T, 6] -- world pose of lh_palm, xyz + roll/pitch/yaw.
+                                    NOT a model input (see AIETAlignmentSim3Sampler) --
+                                    only used here/there to compute the action's
+                                    relative-pose component; absent from obs_keys_to_use.
+      gripper_value               [T]    -- single [0, 1] "how closed" scalar, stays
+                                    absolute (both obs input and action component)
+      wrist_camera_patch_features [T, 14, 14, 384] -- DINOv3 patch tokens, fed to
+                                    the diffusion transformer's own spatial softmax,
+                                    bypasses obs_encoder entirely (identity-normalized,
+                                    same "don't normalize DINO features" precedent as
+                                    aiet_erlenmeyer_flask_3 / aiet_alignment_sim_2)
+
+    combined.zarr has no single "action" field -- config.action_key ("action")
+    is a placeholder. The action is [rel_palm_pose_xyz_rpy (6), gripper_value (1)],
+    built by relative-pose subtraction + concatenation in AIETAlignmentSim3Sampler
+    for the actual per-sample trajectory used during training; get_fitted_nns below
+    fits the normalizer over the same per-sample logic, aggregated across every
+    episode via AIETAlignmentSim3Sampler.get_all_action_components (NOT
+    reimplemented by hand-slicing the raw replay buffer -- the rb only has flat
+    per-step arrays, not per-sample trajectories).
+    """
+
+    OBS_KEYS_TO_FIT = ["gripper_value"]
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+
+        # the shared AIETErlenmeyerFlaskSampler always emits task_id/subtask_id
+        # (with fallback defaults when a dataset doesn't have them, as here)
+        nns['task_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+        nns['subtask_id'] = get_identity_normalizer_from_stat(
+            {'min': np.array([0], dtype=np.float32)}
+        )
+
+        return nns
+
+    def get_all_action_components(self):
+        """
+        Delegates to AIETAlignmentSim3Sampler.get_all_action_components on
+        every episode in the 'all' dataloader's sampler -- i.e. runs the
+        exact same per-sample action-window logic real training samples go
+        through (fill-back/fill-forward indexing, episode boundaries, the
+        restrict_to_valid_future mask, etc., all courtesy of the real
+        Indices/EpisodeSampler machinery), just aggregated across every
+        valid sample in the dataset instead of one at a time. Deliberately
+        NOT reimplemented by hand-slicing the raw replay buffer arrays --
+        the replay buffer only has flat per-step data, not per-sample
+        trajectories, so that reimplementation could silently drift from
+        what get_action_trajectory actually produces for real samples.
+        """
+        dls: TrainAndVal = globals.DATALOADERS['all']  # type: ignore
+        sampler = dls.sampler
+
+        rel_palms = []
+        grips = []
+        for ep in sampler.get_ep_list():
+            rel_palm, grip = ep.get_all_action_components()
+            rel_palms.append(rel_palm)
+            grips.append(grip)
+
+        return np.concatenate(rel_palms, axis=0), np.concatenate(grips, axis=0)
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER['all']  # type: ignore
+
+        for obs_key in self.OBS_KEYS_TO_FIT:
+            if obs_key in rb:
+                # rb[obs_key] (gripper_value) is 1-D [T] -- fit_nn's reshape(-1, dim)
+                # takes dim from the LAST axis, which for a 1-D array is T itself,
+                # not the 1-element feature dim. Add the trailing axis explicitly.
+                self.fit_nn(rb[obs_key][:][:, None], nns['obs'][obs_key], obs_key)
+
+        if "palm_pose_xyz_rpy" in rb and "gripper_value" in rb:
+            # rel_palm/grip are computed over every valid sample's full
+            # action_rel_indices window, so they aren't the same length as
+            # each other row-for-row -- but SingleFieldLinearNormalizer.fit
+            # computes min/max/scale/offset independently per (last-dim)
+            # column, so fitting the two components separately and
+            # concatenating their params is equivalent to fitting one array
+            # with matching row counts.
+            rel_palm, grip = self.get_all_action_components()
+            palm_nn = get_identity_normalizer_from_stat({'min': np.zeros(6, dtype=np.float32)})
+            self.fit_nn(rel_palm, palm_nn, "rel_palm_pose_xyz_rpy")
+
+            grip_nn = get_identity_normalizer_from_stat({'min': np.zeros(1, dtype=np.float32)})
+            self.fit_nn(grip[:, None], grip_nn, "gripper_value (action)")  # same 1-D trailing-axis fix as above
+
+            for param_name in ["scale", "offset"]:
+                nns['action'].params_dict[param_name] = torch.cat([
+                    palm_nn.params_dict[param_name], grip_nn.params_dict[param_name],
+                ])
+            for stat_name in ["min", "max", "mean", "std"]:
+                nns['action'].params_dict['input_stats'][stat_name] = torch.cat([
+                    palm_nn.params_dict['input_stats'][stat_name],
+                    grip_nn.params_dict['input_stats'][stat_name],
+                ])
+
+        return nns
+
+
+class AIETErlenmeyerFlask4BatchLoader(BatchLoader):
+    """
+    Shared BatchLoader for aiet_erlenmeyer_flask_4's 3-way cotrain (real
+    erlenmeyer, real full-avatar-cotrain, sim alignment) -- used for ALL
+    THREE rb_ids, just pointed at a different rb_id/sampler pair per source
+    in the yaml. Unlike aiet_erlenmeyer_flask_3 (which needed two different
+    BatchLoader classes because its sim leg's action was joint-space while
+    the real legs' wasn't), all three of `_4`'s sources now share the exact
+    same schema and the exact same relative-palm-pose+gripper action
+    (AIETErlenmeyerFlask4Real1Sampler/Real2Sampler/SimSampler are all thin
+    AIETAlignmentSim3Sampler subclasses) -- so one BatchLoader class
+    generalizing AIETAlignmentSim3BatchLoader's fitting logic from the
+    hardcoded rb_id 'all' to self.rb_id suffices for every source.
+
+    gripper_value and palm_pose_xyz_rpy are both fit per-rb_id (each source
+    has its own precomputed gripper_value array -- see add_gripper_value.py --
+    and its own palm_pose_xyz_rpy scale, fit per-dimension so xyz translation
+    and rpy rotation each get their own independent [-1,1] range rather than
+    being squashed by one shared scale across mismatched units). The
+    relative-palm-pose+gripper action is fit the same way
+    AIETAlignmentSim3BatchLoader does: delegate to this rb_id's own sampler's
+    get_all_action_components (NOT hand-sliced from the raw replay buffer --
+    see that method's docstring for why). Every other obs key (the two
+    patch-feature keys, biotac_lh) is identity-normalized, same "don't
+    normalize DINO features" precedent as every other aiet_* BatchLoader.
+    """
+
+    OBS_KEYS_TO_FIT = [
+        "palm_pose_xyz_rpy",
+        "gripper_value"]
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_load = globals.CONFIG.obs_keys_to_load  # type: ignore
+
+        for obs_key in obs_keys_to_load:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': np.zeros(nb, dtype=np.float32)}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': np.zeros(nb_act, dtype=np.float32)}
+        )
+
+        nns['obs'] = obs
+
+        for key in ['task_id', 'subtask_id', 'data_source']:
+            nns[key] = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+            )
+
+        return nns
+
+    def get_all_action_components(self):
+        """
+        Same delegation as AIETAlignmentSim3BatchLoader.get_all_action_components,
+        generalized from the hardcoded rb_id 'all' to self.rb_id -- each of
+        the 3 cotrain sources fits its own action normalizer from its own
+        sampler's episodes.
+        """
+        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]  # type: ignore
+        sampler = dls.sampler
+
+        rel_palms = []
+        grips = []
+        for ep in sampler.get_ep_list():
+            rel_palm, grip = ep.get_all_action_components()
+            rel_palms.append(rel_palm)
+            grips.append(grip)
+
+        return np.concatenate(rel_palms, axis=0), np.concatenate(grips, axis=0)
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+
+        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]  # type: ignore
+
+        for obs_key in self.OBS_KEYS_TO_FIT:
+            if obs_key in rb:
+                # rb[obs_key] (gripper_value) is 1-D [T] -- fit_nn's reshape(-1, dim)
+                # takes dim from the LAST axis, which for a 1-D array is T itself,
+                # not the 1-element feature dim. Add the trailing axis explicitly.
+                self.fit_nn(rb[obs_key][:][:, None], nns['obs'][obs_key], obs_key)
+
+        if "palm_pose_xyz_rpy" in rb and "gripper_value" in rb:
+            rel_palm, grip = self.get_all_action_components()
+            palm_nn = get_identity_normalizer_from_stat({'min': np.zeros(6, dtype=np.float32)})
+            self.fit_nn(rel_palm, palm_nn, "rel_palm_pose_xyz_rpy")
+
+            grip_nn = get_identity_normalizer_from_stat({'min': np.zeros(1, dtype=np.float32)})
+            self.fit_nn(grip[:, None], grip_nn, "gripper_value (action)")
+
+            for param_name in ["scale", "offset"]:
+                nns['action'].params_dict[param_name] = torch.cat([
+                    palm_nn.params_dict[param_name], grip_nn.params_dict[param_name],
+                ])
+            for stat_name in ["min", "max", "mean", "std"]:
+                nns['action'].params_dict['input_stats'][stat_name] = torch.cat([
+                    palm_nn.params_dict['input_stats'][stat_name],
+                    grip_nn.params_dict['input_stats'][stat_name],
+                ])
 
         return nns
 

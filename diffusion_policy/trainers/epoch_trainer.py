@@ -57,29 +57,44 @@ class EpochValidator(Epoch):
             step_log = {}
             val_losses = []
             val_action_mse_errors = []
-            
+            # per-dataset (rb_id) raw, un-weighted breakdown -- the combined
+            # val/loss and val/action_mse_error above mix datasets together
+            # (weighted by each dataset's cotrain loss weight), which can
+            # hide one dataset's val performance behind another's
+            per_dataset_losses = {}
+            per_dataset_mses = {}
+
             # evaluate for a nb of batches
             for nb in tqdm.tqdm(range(self.nb_batches), desc=f"Evaluation epoch {globals.EPOCH}", leave=False):
                 # eval for one batch
-                total_evals = CalcSumEval(self.w_batch_losses)
-                
+                total_evals, per_dataset_evals = CalcSumEval(self.w_batch_losses)
+
                 # TODO: this is specific to actor eval, doesn't consider the critic eval. Must fix.
-                
+
                 # end of batch logging
                 val_losses.append(total_evals[0])
                 val_action_mse_errors.append(total_evals[1])
+
+                for rb_id, (raw_loss, raw_mse) in per_dataset_evals.items():
+                    per_dataset_losses.setdefault(rb_id, []).append(raw_loss)
+                    per_dataset_mses.setdefault(rb_id, []).append(raw_mse)
 
             # finish logging
             if len(val_losses) > 0:
                 val_loss = torch.mean(torch.tensor(val_losses)).item()
                 # log epoch average validation loss
                 step_log['val/loss'] = val_loss
-                
+
             if len(val_action_mse_errors) > 0:
                 val_action_mse_error = torch.mean(torch.tensor(val_action_mse_errors)).item()
                 # log epoch average validation loss
                 step_log['val/action_mse_error'] = val_action_mse_error
-            
+
+            for rb_id, vals in per_dataset_losses.items():
+                step_log[f'val/loss_{rb_id}'] = torch.mean(torch.tensor(vals)).item()
+            for rb_id, vals in per_dataset_mses.items():
+                step_log[f'val/action_mse_error_{rb_id}'] = torch.mean(torch.tensor(vals)).item()
+
             #
             globals.LOGGER.log(step_log)
         

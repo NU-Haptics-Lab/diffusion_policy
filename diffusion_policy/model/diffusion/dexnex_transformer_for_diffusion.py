@@ -36,6 +36,69 @@ class _CrossAttnLoggingDecoderLayer(nn.TransformerDecoderLayer):
         return self.dropout1(x)
 
 
+class _AdaLNDecoderLayer(_CrossAttnLoggingDecoderLayer):
+    """
+    DiT-style AdaLN-Zero timestep conditioning, as an alternative to giving
+    timestep its own cross-attention token (which is what
+    normalize_cond_tokens addresses instead -- see
+    DexNexTransformerForDiffusion.__init__). Rather than competing for
+    attention, the timestep embedding is projected (per-layer, via a
+    zero-initialized MLP so training starts identical to no conditioning) into
+    a scale/shift/gate triple for each of this layer's three sublayers
+    (self-attn, cross-attn, feedforward): `modulate(norm(x)) = norm(x)*(1+scale)
+    + shift`, with the sublayer's residual contribution multiplied by `gate`.
+    Zero-initializing the final MLP layer means every gate starts at 0, so the
+    layer is initially a no-op wrapper around the ordinary norm_first decoder
+    layer and only learns to use timestep conditioning as training progresses
+    -- the standard AdaLN-Zero stabilization trick.
+
+    `adaln_emb` (B, n_emb) must be set externally on the instance before
+    calling forward() -- nn.TransformerDecoder.forward has a fixed per-layer
+    call signature with no room for extra conditioning args, so the caller
+    sets this attribute on every layer right before invoking self.decoder(...).
+    """
+    adaln_emb: Optional[torch.Tensor] = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        d_model = self.linear1.in_features
+        self.adaln_mlp = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(d_model, 9 * d_model),
+        )
+        nn.init.zeros_(self.adaln_mlp[-1].weight)
+        nn.init.zeros_(self.adaln_mlp[-1].bias)
+        # marks this Linear so the outer model's generic _init_weights pass
+        # (which re-inits every nn.Linear to normal_(std=0.02)) skips it --
+        # otherwise it would clobber the zero-init this class depends on for
+        # AdaLN-Zero's "starts as a no-op" property
+        self.adaln_mlp[-1]._skip_generic_init = True
+
+    @staticmethod
+    def _modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+        return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None,
+            tgt_key_padding_mask=None, memory_key_padding_mask=None,
+            tgt_is_causal=None, memory_is_causal=False):
+        assert self.adaln_emb is not None, "adaln_emb must be set on this layer before forward()"
+        params = self.adaln_mlp(self.adaln_emb)  # (B, 9*d_model)
+        (shift_sa, scale_sa, gate_sa,
+            shift_ca, scale_ca, gate_ca,
+            shift_mlp, scale_mlp, gate_mlp) = params.chunk(9, dim=-1)
+
+        x = tgt
+        x = x + gate_sa.unsqueeze(1) * self._sa_block(
+            self._modulate(self.norm1(x), shift_sa, scale_sa),
+            tgt_mask, tgt_key_padding_mask, is_causal=bool(tgt_is_causal))
+        x = x + gate_ca.unsqueeze(1) * self._mha_block(
+            self._modulate(self.norm2(x), shift_ca, scale_ca),
+            memory, memory_mask, memory_key_padding_mask, is_causal=bool(memory_is_causal))
+        x = x + gate_mlp.unsqueeze(1) * self._ff_block(
+            self._modulate(self.norm3(x), shift_mlp, scale_mlp))
+        return x
+
+
 class DexNexTransformerForDiffusion(ModuleAttrMixin):
     """
     Obs tokens (including the diffusion timestep token) self-attend among
@@ -56,6 +119,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             patch_group_dims: Optional[Dict[str, Tuple[int, int]]] = None,
             spatial_softmax_group_dims: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
             spatial_softmax_temperature_init: float = 1.0,
+            separate_spatial_softmax_by_data_source: bool = False,
             num_tasks: int = 0,
             n_layer: int = 12,
             n_head: int = 12,
@@ -67,6 +131,12 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             droppable_token_keys: Optional[List[str]] = None,
             sim_only_token_keys: Optional[List[str]] = None,
             real_only_token_keys: Optional[List[str]] = None,
+            excluded_token_keys_by_data_source: Optional[Dict[int, List[str]]] = None,
+            num_data_sources: Optional[int] = None,
+            normalize_cond_tokens: bool = True,
+            use_adaln_timestep: bool = False,
+            gaussian_noise_by_data_source: Optional[Dict[int, List[str]]] = None,
+            gaussian_noise_std: float = 0.1,
         ) -> None:
         """
         cond_dims: obs key -> feature dim, for single-token (fused) obs keys.
@@ -87,12 +157,93 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             (x,y) coordinate per keypoint is computed against a fixed
             normalized grid -- giving a (2*num_keypoints)-dim descriptor that
             plugs into the same single-token pathway as cond_dims.
+        separate_spatial_softmax_by_data_source: if True, each spatial-softmax
+            group gets its own ss_reduce/ss_temperature PER data_source
+            (requires num_data_sources/excluded_token_keys_by_data_source to
+            be set) instead of one set of weights shared across every
+            cotraining source. Default False (shared) risks one source's
+            easier-to-fit gradient dominating the shared reduction and
+            starving the harder source's localization -- e.g. a precisely
+            rendered sim domain converging to real spatial tracking while a
+            noisier real domain's heatmap collapses to a flat, uninformative
+            one (always predicting the image center regardless of true
+            object position). Costs one extra Linear+temperature per group
+            per data_source, and forward() computes every source's
+            projection for every sample then selects per-sample by
+            data_source (simpler than routing samples by source, and cheap
+            since num_data_sources is small).
         sim_only_token_keys / real_only_token_keys: token names that should be
             hard-zeroed (after projection, deterministically, at both train
             and eval time -- NOT the same mechanism as p_drop_token, which is
             random and training-only) for samples whose data_source marks
             them as real (0) or sim (1) respectively, e.g. for cotraining on
             a real dataset lacking some sim-only observation, or vice versa.
+            Binary-only (2 data sources) -- kept for backward compatibility
+            with existing 2-source configs; internally converted to
+            excluded_token_keys_by_data_source = {0: sim_only_token_keys,
+            1: real_only_token_keys} when that param isn't given directly.
+        excluded_token_keys_by_data_source: generalizes the above to any
+            number of cotraining sources: data_source id -> token names that
+            must be hard-zeroed for samples tagged with that id. E.g. for a
+            3-way cotrain with data_source 0/1/2, a token only meaningful to
+            source 1 would appear in this dict under keys 0 and 2. Takes
+            precedence over sim_only_token_keys/real_only_token_keys if both
+            are given.
+        num_data_sources: how many distinct data_source ids can appear at
+            runtime (ids are 0..num_data_sources-1). Required whenever a
+            valid data_source id has NO entry in
+            excluded_token_keys_by_data_source (e.g. a 3-source cotrain where
+            only source 1 excludes anything -- inferring num_data_sources as
+            max(dict keys)+1 would silently miss source 2 and crash at
+            forward() with an out-of-bounds gather). Defaults to
+            max(excluded_token_keys_by_data_source keys)+1 if omitted (or 2
+            when only the legacy sim_only/real_only_token_keys are given) --
+            fine when every source has at least one exclusion, wrong
+            otherwise, so pass this explicitly for any cotrain with 3+
+            sources.
+        normalize_cond_tokens: if True (default), apply a per-token-name
+            LayerNorm to each cond token's embedding (timestep, task_id, each
+            cond_dims/spatial-softmax key, each patch group) right after its
+            own projection, before concatenation into the cond sequence. This
+            is separate from the encoder's internal norm_first LayerNorms:
+            those are re-applied before every self-attention sublayer, but
+            the encoder has no final `norm`, and the decoder's cross-attention
+            only normalizes the query side (not `memory`, i.e. not these cond
+            tokens) -- so without this, a token whose raw projection happens
+            to produce a larger norm (e.g. timestep, always-present and never
+            token-dropped) can dominate the QK^T dot product purely from
+            magnitude, independent of its actual informativeness.
+        use_adaln_timestep: if True, timestep is NOT given a cross-attention
+            token at all -- instead each decoder layer gets its own AdaLN-Zero
+            modulation (scale/shift/gate, zero-initialized) computed from the
+            timestep embedding, applied around that layer's self-attn,
+            cross-attn, and feedforward sublayers. See _AdaLNDecoderLayer.
+            This is the more standard fix for timestep specifically (DiT-style)
+            and is mutually exclusive with normalize_cond_tokens's handling of
+            the timestep token, since there is no timestep token in this mode.
+            Default False -- normalize_cond_tokens is the current default fix.
+        gaussian_noise_by_data_source: data_source id -> list of cond_dims/
+            spatial-softmax key names to add Gaussian noise to, for samples
+            tagged with that data_source, at training time only. Applies
+            AFTER the raw value is computed (i.e. after the spatial-softmax
+            (x,y) reduction for those groups, not to the raw patch grid) and
+            BEFORE its projection into a token -- so a spatial-softmax key's
+            noise perturbs its keypoint coordinates directly. Motivation: a
+            cotraining source whose non-vision signals (e.g. simulated,
+            noise-free proprioception) are unrealistically clean relative to
+            another source's (e.g. real sensor readings) can let the model
+            solve that source's task without leaning on vision much at all,
+            which then doesn't transfer to a source where vision genuinely
+            matters. Only cond_dims/spatial-softmax keys are supported (not
+            timestep, task_id, or raw un-pooled patch_group_dims tokens).
+            None (default) disables this entirely.
+        gaussian_noise_std: standard deviation of the noise added above,
+            shared across every (data_source, key) pair enabled by
+            gaussian_noise_by_data_source. Values are on very different
+            natural scales (radians/meters for palm pose, a [0,1] scalar for
+            gripper, normalized [-1,1] keypoint coordinates) so this is a
+            blunt, single global knob -- tune per-key manually if this turns
+            out to be too coarse.
         """
         super().__init__()
 
@@ -123,10 +274,12 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         for group, (_, _, _, num_keypoints) in self.spatial_softmax_group_dims.items():
             combined_cond_dims[group] = num_keypoints * 2
         self.cond_keys = list(combined_cond_dims.keys())
+        self._cond_key_to_idx = {key: i for i, key in enumerate(self.cond_keys)}
         obs_as_cond = len(self.cond_keys) > 0
 
+        self.use_adaln_timestep = use_adaln_timestep
         self.embed_task_id = num_tasks > 0
-        T_cond = 1  # timestep token
+        T_cond = 0 if use_adaln_timestep else 1  # timestep token (absent when AdaLN-conditioned instead)
         if self.embed_task_id:
             T_cond += 1  # task-id token
         if obs_as_cond:
@@ -141,7 +294,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         # patch group name here makes each of its patches independently
         # eligible for dropping -- i.e. this already gives per-patch dropout
         # for free once patch groups are in use, no separate mechanism needed.
-        all_token_names = (['timestep']
+        all_token_names = ((['timestep'] if not use_adaln_timestep else [])
             + (['task_id'] if self.embed_task_id else [])
             + self.cond_keys
             + self.patch_group_names)
@@ -156,15 +309,71 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
 
         # deterministic, always-on (train + eval) per-data-source token masking
         # -- e.g. a sim-only obs key must be zeroed for real-robot samples and
-        # vice versa, regardless of self.training.
-        sim_only_token_keys_set: set = set(sim_only_token_keys or [])
-        real_only_token_keys_set: set = set(real_only_token_keys or [])
-        unknown = (sim_only_token_keys_set | real_only_token_keys_set) - set(all_token_names)
-        assert not unknown, f"sim_only_token_keys/real_only_token_keys contains unknown token names: {unknown}"
-        overlap = sim_only_token_keys_set & real_only_token_keys_set
-        assert not overlap, f"a token key can't be both sim_only and real_only: {overlap}"
-        self.sim_only_token_keys: set = sim_only_token_keys_set
-        self.real_only_token_keys: set = real_only_token_keys_set
+        # vice versa, regardless of self.training. Generalized to N cotrain
+        # sources via a per-token, per-data-source allow-matrix (registered as
+        # a buffer so it moves with .to(device)/.half() automatically):
+        # allow_matrix[ds, i] == 1 iff token i is visible to samples tagged
+        # data_source == ds. forward() does one gather (allow_matrix[data_source])
+        # instead of per-key scalar arithmetic, so this isn't limited to 2 sources.
+        if excluded_token_keys_by_data_source is None:
+            excluded_token_keys_by_data_source = {}
+            if sim_only_token_keys:
+                excluded_token_keys_by_data_source[0] = list(sim_only_token_keys)  # excluded for real
+            if real_only_token_keys:
+                excluded_token_keys_by_data_source[1] = list(real_only_token_keys)  # excluded for sim
+        for ds, keys in excluded_token_keys_by_data_source.items():
+            unknown = set(keys) - set(all_token_names)
+            assert not unknown, f"excluded_token_keys_by_data_source[{ds}] contains unknown token names: {unknown}"
+        self.excluded_token_keys_by_data_source: Dict[int, List[str]] = {
+            ds: list(keys) for ds, keys in excluded_token_keys_by_data_source.items()
+        }
+        if num_data_sources is not None:
+            self.num_data_sources = num_data_sources
+        else:
+            self.num_data_sources = (max(excluded_token_keys_by_data_source.keys()) + 1
+                if excluded_token_keys_by_data_source else 0)
+        if self.num_data_sources > 0:
+            # mirror forward()'s exact cond_token_names construction (patch
+            # groups repeat their name once per patch, not once per group --
+            # unlike all_token_names above, which is only used for
+            # droppable_token_keys validation and doesn't need per-patch
+            # granularity) so this matrix's column i lines up with
+            # cond_embeddings[:, i] in forward().
+            expanded_token_names = ((['timestep'] if not use_adaln_timestep else [])
+                + (['task_id'] if self.embed_task_id else [])
+                + self.cond_keys)
+            for group in self.patch_group_names:
+                expanded_token_names.extend([group] * self.patch_group_num_patches[group])
+
+            allow_matrix = torch.ones(self.num_data_sources, len(expanded_token_names))
+            for ds, keys in self.excluded_token_keys_by_data_source.items():
+                for i, name in enumerate(expanded_token_names):
+                    if name in keys:
+                        allow_matrix[ds, i] = 0.0
+            self.register_buffer("data_source_token_allow_matrix", allow_matrix, persistent=False)
+        else:
+            self.data_source_token_allow_matrix = None
+
+        # per-(data_source, cond_key) Gaussian noise: column order matches
+        # self.cond_keys exactly (not expanded_token_names above -- this only
+        # ever applies to single-token cond_dims/spatial-softmax keys, never
+        # timestep/task_id/raw patch-group tokens).
+        self.gaussian_noise_std = gaussian_noise_std
+        if gaussian_noise_by_data_source:
+            for ds, keys in gaussian_noise_by_data_source.items():
+                unknown = set(keys) - set(self.cond_keys)
+                assert not unknown, \
+                    f"gaussian_noise_by_data_source[{ds}] contains keys that aren't " \
+                    f"cond_dims/spatial-softmax keys: {unknown}"
+            noise_nds = max(self.num_data_sources, max(gaussian_noise_by_data_source.keys()) + 1)
+            noise_allow = torch.zeros(noise_nds, max(len(self.cond_keys), 1))
+            for ds, keys in gaussian_noise_by_data_source.items():
+                for i, key in enumerate(self.cond_keys):
+                    if key in keys:
+                        noise_allow[ds, i] = 1.0
+            self.register_buffer("gaussian_noise_allow_matrix", noise_allow, persistent=False)
+        else:
+            self.gaussian_noise_allow_matrix = None
 
         # trajectory embedding stem
         self.input_emb = nn.Linear(input_dim, n_emb)
@@ -220,15 +429,31 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         # fixed (non-learnable) normalized [-1,1]^2 coordinate grid per group.
         self.ss_reduce = None
         self.ss_temperature = None
+        self.separate_spatial_softmax_by_data_source = separate_spatial_softmax_by_data_source
         if self.spatial_softmax_group_names:
-            self.ss_reduce = nn.ModuleDict({
-                group: nn.Linear(patch_dim, num_keypoints)
-                for group, (_, _, patch_dim, num_keypoints) in self.spatial_softmax_group_dims.items()
-            })
-            self.ss_temperature = nn.ParameterDict({
-                group: nn.Parameter(torch.full((num_keypoints,), spatial_softmax_temperature_init))
-                for group, (_, _, _, num_keypoints) in self.spatial_softmax_group_dims.items()
-            })
+            if self.separate_spatial_softmax_by_data_source:
+                assert self.num_data_sources > 0, \
+                    "separate_spatial_softmax_by_data_source requires num_data_sources " \
+                    "(or excluded_token_keys_by_data_source) to be set"
+                self.ss_reduce = nn.ModuleDict({
+                    f'{group}__ds{ds}': nn.Linear(patch_dim, num_keypoints)
+                    for group, (_, _, patch_dim, num_keypoints) in self.spatial_softmax_group_dims.items()
+                    for ds in range(self.num_data_sources)
+                })
+                self.ss_temperature = nn.ParameterDict({
+                    f'{group}__ds{ds}': nn.Parameter(torch.full((num_keypoints,), spatial_softmax_temperature_init))
+                    for group, (_, _, _, num_keypoints) in self.spatial_softmax_group_dims.items()
+                    for ds in range(self.num_data_sources)
+                })
+            else:
+                self.ss_reduce = nn.ModuleDict({
+                    group: nn.Linear(patch_dim, num_keypoints)
+                    for group, (_, _, patch_dim, num_keypoints) in self.spatial_softmax_group_dims.items()
+                })
+                self.ss_temperature = nn.ParameterDict({
+                    group: nn.Parameter(torch.full((num_keypoints,), spatial_softmax_temperature_init))
+                    for group, (_, _, _, num_keypoints) in self.spatial_softmax_group_dims.items()
+                })
             for group, (H, W, _, _) in self.spatial_softmax_group_dims.items():
                 ys, xs = torch.meshgrid(
                     torch.linspace(-1, 1, H),
@@ -237,6 +462,21 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
                 )
                 grid = torch.stack([xs.reshape(-1), ys.reshape(-1)], dim=-1)  # (H*W, 2)
                 self.register_buffer(f'ss_grid_{group}', grid, persistent=False)
+
+        # per-token-name LayerNorm, applied right after each token's own
+        # projection (see normalize_cond_tokens docstring above) -- one shared
+        # LayerNorm per patch group (applied identically to every patch in
+        # that group), not per individual patch.
+        self.normalize_cond_tokens = normalize_cond_tokens
+        self.cond_token_norm = None
+        if self.normalize_cond_tokens:
+            norm_names = ((['timestep'] if not use_adaln_timestep else [])
+                + (['task_id'] if self.embed_task_id else [])
+                + self.cond_keys
+                + self.patch_group_names)
+            self.cond_token_norm = nn.ModuleDict({
+                name: nn.LayerNorm(n_emb) for name in norm_names
+            })
 
         # populated by _spatial_softmax on every forward() call, keyed by
         # group name -> (B, num_keypoints, 2) pre-flatten coords. Lets an
@@ -264,7 +504,8 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         )
 
         # trajectory decoder, cross-attends to obs memory
-        decoder_layer = _CrossAttnLoggingDecoderLayer(
+        decoder_layer_cls = _AdaLNDecoderLayer if use_adaln_timestep else _CrossAttnLoggingDecoderLayer
+        decoder_layer = decoder_layer_cls(
             d_model=n_emb,
             nhead=n_head,
             dim_feedforward=4*n_emb,
@@ -305,8 +546,11 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             nn.ModuleDict,
             nn.ParameterDict,
             nn.Mish,
+            nn.SiLU,
             nn.Sequential)
-        if isinstance(module, (nn.Linear, nn.Embedding)):
+        if isinstance(module, nn.Linear) and getattr(module, '_skip_generic_init', False):
+            pass
+        elif isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
@@ -446,26 +690,97 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             'mean_pairwise_distance': mean_pairwise_distance,
         }
 
-    def _spatial_softmax(self, group: str, x: torch.Tensor) -> torch.Tensor:
+    def spatial_softmax_temperature_stats(self) -> Optional[Dict[str, Dict[str, torch.Tensor]]]:
+        """
+        Diagnostics for ss_temperature: lower temperature sharpens the
+        softmax over spatial positions (more peaked, closer to a hard
+        argmax -- tighter separation between keypoints' predicted (x,y));
+        higher temperature flattens it (closer to uniform, keypoints drift
+        toward the grid centroid regardless of input -- the same "always
+        centered" symptom a collapsed/undertrained reduction produces, so
+        this is worth watching alongside spatial_softmax_group_dims's
+        spatial_softmax_temperature_init).
+
+        Returns None if no spatial-softmax groups are in use, else a dict
+        keyed by the same names as self.ss_temperature (one per group, or
+        one per "{group}__ds{data_source}" if
+        separate_spatial_softmax_by_data_source), each a
+        {'mean', 'min', 'max'} dict of scalars over that entry's
+        num_keypoints values.
+        """
+        if self.ss_temperature is None:
+            return None
+        return {
+            name: {
+                'mean': param.detach().mean(),
+                'min': param.detach().min(),
+                'max': param.detach().max(),
+            }
+            for name, param in self.ss_temperature.items()
+        }
+
+    def _spatial_softmax(self, group: str, x: torch.Tensor,
+            data_source: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Classic spatial softmax (Finn et al.), collapsing an entire patch grid
         into one small descriptor instead of keeping every patch as its own
         token.
 
         x: (B, num_patches, patch_dim) where num_patches == H*W for this group.
+        data_source: (B,) tensor, required when separate_spatial_softmax_by_data_source
+            is True -- selects each sample's own per-data_source ss_reduce/
+            ss_temperature. Every data_source's projection is computed for
+            every sample (num_data_sources is small, so this is cheap), then
+            gathered per-sample -- simpler than sorting samples by source,
+            and correct even if a batch mixes sources.
         Returns (B, num_keypoints*2): for each of num_keypoints learned
         "heatmaps" (a per-position linear reduction of the channel dim),
         softmax over spatial position, then the expected (x,y) coordinate
         against a fixed normalized [-1,1]^2 grid.
         """
         assert self.ss_reduce is not None and self.ss_temperature is not None
-        feat = self.ss_reduce[group](x)  # (B, num_patches, num_keypoints)
-        feat = feat / self.ss_temperature[group]
+        if self.separate_spatial_softmax_by_data_source:
+            assert data_source is not None, \
+                "data_source is required when separate_spatial_softmax_by_data_source is True"
+            ds = torch.reshape(data_source, [-1]).long()  # (B,)
+            batch_idx = torch.arange(x.shape[0], device=x.device)
+            # (num_data_sources, B, num_patches, num_keypoints) -> gather each
+            # sample's own source's projection
+            feats = torch.stack(
+                [self.ss_reduce[f'{group}__ds{d}'](x) for d in range(self.num_data_sources)], dim=0)
+            feat = feats[ds, batch_idx]  # (B, num_patches, num_keypoints)
+            temps = torch.stack(
+                [self.ss_temperature[f'{group}__ds{d}'] for d in range(self.num_data_sources)], dim=0)
+            temp = temps[ds]  # (B, num_keypoints)
+            feat = feat / temp.unsqueeze(1)  # broadcast over the num_patches dim
+        else:
+            feat = self.ss_reduce[group](x)  # (B, num_patches, num_keypoints)
+            feat = feat / self.ss_temperature[group]
         weights = torch.softmax(feat, dim=1)  # softmax over spatial positions
         grid = getattr(self, f'ss_grid_{group}')  # (num_patches, 2)
         coords = torch.einsum('bpk,pc->bkc', weights, grid)  # (B, num_keypoints, 2)
         self._last_ss_keypoints[group] = coords
         return coords.reshape(coords.shape[0], -1)  # (B, num_keypoints*2)
+
+    def _maybe_add_gaussian_noise(self, key: str, value: torch.Tensor,
+            data_source: Optional[torch.Tensor]) -> torch.Tensor:
+        """
+        Adds gaussian_noise_std Gaussian noise to `value` (a cond_dims/
+        spatial-softmax key's raw value, shape (B, dim)), per-sample, for
+        whichever samples' data_source has `key` enabled in
+        gaussian_noise_by_data_source. No-op at eval time, if noise isn't
+        configured at all, or if data_source isn't provided.
+        """
+        if not self.training or self.gaussian_noise_allow_matrix is None or data_source is None:
+            return value
+        col = self._cond_key_to_idx[key]
+        ds = torch.reshape(data_source, [-1]).long()
+        allow = self.gaussian_noise_allow_matrix[ds, col]  # (B,)
+        if not bool(allow.any()):
+            return value
+        noise = torch.randn_like(value) * self.gaussian_noise_std
+        extra_dims = (1,) * (value.dim() - 1)
+        return value + noise * allow.reshape(-1, *extra_dims).to(value.dtype)
 
     def get_last_spatial_softmax_keypoints(self, group: str) -> Optional[torch.Tensor]:
         """
@@ -499,7 +814,10 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             (train + eval), regardless of p_drop_token
         log_attn: if True, captures the last decoder layer's cross-attention
             weights (trajectory -> obs memory) for diagnostics; see
-            `last_cross_attn_entropy` / `last_cross_attn_token_names` afterwards.
+            `last_cross_attn_entropy` / `last_cross_attn_token_names` /
+            `last_cross_attn_weight_by_token` / `last_cross_attn_timesteps`
+            afterwards -- the last one lets you bucket per-token attention by
+            noise level instead of only seeing a batch-wide average.
         output: (B,T,input_dim)
         """
         # 1. time
@@ -511,18 +829,28 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             timesteps = timesteps[None].to(sample.device)
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         timesteps = timesteps.expand(sample.shape[0])
-        time_emb = self.time_emb(timesteps).unsqueeze(1)
-        # (B,1,n_emb)
-
-        # 2. obs tokens: timestep token + task-id token + one token per obs key, self-attend
-        cond_embeddings = time_emb
-        cond_token_names = ['timestep']
+        raw_time_emb = self.time_emb(timesteps)  # (B,n_emb), used as AdaLN input when use_adaln_timestep
+        if self.use_adaln_timestep:
+            cond_embeddings = None
+            cond_token_names = []
+        else:
+            time_emb = raw_time_emb.unsqueeze(1)
+            # (B,1,n_emb)
+            if self.normalize_cond_tokens:
+                assert self.cond_token_norm is not None
+                time_emb = self.cond_token_norm['timestep'](time_emb)
+            # 2. obs tokens: timestep token + task-id token + one token per obs key, self-attend
+            cond_embeddings = time_emb
+            cond_token_names = ['timestep']
         if self.embed_task_id:
             assert self.task_id_emb is not None and task_ids is not None
             task_ids = torch.reshape(task_ids, [-1]).long()
             task_emb = self.task_id_emb(task_ids).unsqueeze(1)
             # (B,1,n_emb)
-            cond_embeddings = torch.cat([cond_embeddings, task_emb], dim=1)
+            if self.normalize_cond_tokens:
+                assert self.cond_token_norm is not None
+                task_emb = self.cond_token_norm['task_id'](task_emb)
+            cond_embeddings = task_emb if cond_embeddings is None else torch.cat([cond_embeddings, task_emb], dim=1)
             cond_token_names.append('task_id')
         if self.obs_as_cond:
             assert self.cond_obs_emb is not None
@@ -530,13 +858,19 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             for key in self.cond_keys:
                 if key in self.spatial_softmax_group_names:
                     assert patches is not None
-                    key_input = self._spatial_softmax(key, patches[key])
+                    key_input = self._spatial_softmax(key, patches[key], data_source=data_source)
                 else:
                     assert cond is not None
                     key_input = cond[key]
-                key_tokens.append(self.cond_obs_emb[key](key_input).unsqueeze(1))
+                key_input = self._maybe_add_gaussian_noise(key, key_input, data_source)
+                key_emb = self.cond_obs_emb[key](key_input).unsqueeze(1)
+                if self.normalize_cond_tokens:
+                    assert self.cond_token_norm is not None
+                    key_emb = self.cond_token_norm[key](key_emb)
+                key_tokens.append(key_emb)
             # each (B,1,n_emb)
-            cond_embeddings = torch.cat([cond_embeddings] + key_tokens, dim=1)
+            cond_embeddings = torch.cat(key_tokens, dim=1) if cond_embeddings is None \
+                else torch.cat([cond_embeddings] + key_tokens, dim=1)
             cond_token_names.extend(self.cond_keys)
 
         if self.has_patch_groups:
@@ -546,22 +880,26 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
                 p = self.patch_emb[group](patches[group])
                 # (B,num_patches,n_emb)
                 p = p + self.patch_pos_emb[group] + self.patch_camera_emb[group]
-                cond_embeddings = torch.cat([cond_embeddings, p], dim=1)
+                if self.normalize_cond_tokens:
+                    assert self.cond_token_norm is not None
+                    p = self.cond_token_norm[group](p)
+                cond_embeddings = p if cond_embeddings is None else torch.cat([cond_embeddings, p], dim=1)
                 cond_token_names.extend([group] * self.patch_group_num_patches[group])
 
-        if data_source is not None and (self.sim_only_token_keys or self.real_only_token_keys):
+        assert cond_embeddings is not None, \
+            "at least one non-timestep cond source (task_id/cond_keys/patch groups) is required when use_adaln_timestep=True"
+
+        if data_source is not None and self.data_source_token_allow_matrix is not None:
             # deterministic, always-on masking (unlike p_drop_token): some
             # tokens are structurally absent for a given data source, not
             # randomly dropped for regularization -- applied before p_drop_token
-            # so random dropout only ever acts on tokens that are genuinely available.
-            ds = torch.reshape(data_source, [-1]).to(cond_embeddings.dtype)  # (B,) 0=real, 1=sim
-            avail = torch.ones(cond_embeddings.shape[0], cond_embeddings.shape[1],
-                device=cond_embeddings.device, dtype=cond_embeddings.dtype)
-            for i, name in enumerate(cond_token_names):
-                if name in self.sim_only_token_keys:
-                    avail[:, i] = ds
-                elif name in self.real_only_token_keys:
-                    avail[:, i] = 1.0 - ds
+            # so random dropout only ever acts on tokens that are genuinely
+            # available. Generalizes to N sources via a gather against the
+            # per-source allow-matrix built in __init__ (column order matches
+            # cond_token_names exactly), rather than the old ds/(1-ds) binary
+            # arithmetic.
+            ds = torch.reshape(data_source, [-1]).long()  # (B,), values in [0, num_data_sources)
+            avail = self.data_source_token_allow_matrix[ds].to(cond_embeddings.dtype)  # (B, T_cond)
             cond_embeddings = cond_embeddings * avail.unsqueeze(-1)
 
         if self.training and self.p_drop_token > 0:
@@ -599,8 +937,11 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         last_decoder_layer = self.decoder.layers[-1]
         if log_attn:
             last_decoder_layer.log_attn = True
-            
-            
+
+        if self.use_adaln_timestep:
+            for layer in self.decoder.layers:
+                layer.adaln_emb = raw_time_emb
+
         # with sdpa_kernel(SDPBackend.MATH):
         #     x = self.decoder(
         #         tgt=x,
@@ -610,8 +951,11 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             tgt=x,
             memory=memory
         )
-        
-        
+
+        if self.use_adaln_timestep:
+            for layer in self.decoder.layers:
+                layer.adaln_emb = None
+
         # (B,T,n_emb)
         if log_attn:
             last_decoder_layer.log_attn = False
@@ -622,6 +966,11 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             self.last_cross_attn_entropy = entropy.mean(dim=-1)  # (B,)
             self.last_cross_attn_token_names = cond_token_names
             self.last_cross_attn_weight_by_token = attn_weights.mean(dim=1)  # (B,T_cond)
+            # per-sample diffusion timestep, so callers can bucket
+            # last_cross_attn_weight_by_token by noise level (e.g. mean weight
+            # per token within each timestep bucket) instead of only seeing an
+            # average across the whole batch's mix of noise levels
+            self.last_cross_attn_timesteps = timesteps.detach()  # (B,)
 
         # head
         x = self.ln_f(x)

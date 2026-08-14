@@ -181,7 +181,17 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     # via the episode sampler's hooks -- identity by default, overridden by
     # samplers that alias or zero-fill keys
     obs_key_map = {key: eps[0].resolve_rb_key(key) for key in obs_keys_to_load}
-    resolved_action_key = eps[0].resolve_action_rb_key(action_key)
+
+    # some samplers' action isn't a literal rb array at all -- e.g.
+    # AIETAlignmentSim3Sampler's is [rel_palm_pose_xyz_rpy, gripper_value],
+    # computed by subtracting/concatenating two DIFFERENT rb arrays, not an
+    # alias of a single one. Those samplers expose build_action_chunk(train_idx)
+    # (batched, per-episode equivalent of get_action_trajectory) instead of
+    # relying on resolve_action_rb_key's identity/single-key-alias model.
+    build_action_chunk = getattr(eps[0], "build_action_chunk", None)
+    raw_action_array = None
+    if build_action_chunk is None:
+        resolved_action_key = eps[0].resolve_action_rb_key(action_key)
 
     raw_obs_arrays = {}
     zero_fill_obs_keys = set()
@@ -191,7 +201,8 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
                 zero_fill_obs_keys.add(key)
             else:
                 raw_obs_arrays[key] = np.asarray(rb[rb_key])
-        raw_action_array = np.asarray(rb[resolved_action_key])
+        if build_action_chunk is None:
+            raw_action_array = np.asarray(rb[resolved_action_key])
     except KeyError as e:
         print(f"_vectorized_load_dataset declining: key {e} not found in the replay buffer "
               f"even after key-alias resolution")
@@ -273,11 +284,14 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
             per_key_obs[key].append(raw_obs_arrays[key][obs_rb_idx][:, None, ...])
 
         # action: one column per action_rel_indices offset -> (N, L, *feat)
-        action_rb_idx = np.stack(
-            [indices.get_rb_indices(train_idx + off) for off in action_rel_indices],
-            axis=1,
-        )
-        action_chunks.append(raw_action_array[action_rb_idx])
+        if build_action_chunk is not None:
+            action_chunks.append(ep.build_action_chunk(train_idx))
+        else:
+            action_rb_idx = np.stack(
+                [indices.get_rb_indices(train_idx + off) for off in action_rel_indices],
+                axis=1,
+            )
+            action_chunks.append(raw_action_array[action_rb_idx])
 
         # task_id / subtask_id / data_source (whichever this sampler actually
         # emits, per scalar_fields above): (1,)-shaped value per sample,
@@ -542,6 +556,7 @@ class TrainAndVal:
             options: dict,
             seed=42,
             val_ratio=0.0,
+            split_val_by_episode=False, # the split is ALWAYS whole-episode now (DatasetSampler.get_sample_mask returns a per-episode mask; there's no per-timestep sub-selection support below the episode level). If True, val episodes are chosen so their combined timestep count approximates val_ratio of the total (weighted by episode length); if False (default), val_ratio instead selects that fraction of the EPISODE COUNT directly (simpler, but the resulting timestep fraction can drift from val_ratio if episode lengths vary a lot). See DatasetSampler.get_sample_mask.
             max_train_episodes=None,
             whether_to_use = True,
             use_weighted_dataloader = False,
@@ -560,6 +575,7 @@ class TrainAndVal:
         self.rb_id = sampler.rb_id
         self.options = options
         self.val_ratio = val_ratio
+        self.split_val_by_episode = split_val_by_episode
         self.seed = seed
         self.max_train_episodes = max_train_episodes
         self.whether_to_use = whether_to_use
@@ -831,7 +847,8 @@ class TrainAndVal:
         # get the val mask
         val_mask = self.sampler.get_sample_mask(
             ratio = self.val_ratio,
-            seed = self.seed
+            seed = self.seed,
+            split_by_episode = self.split_val_by_episode,
         )
         
         # get the train mask

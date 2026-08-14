@@ -52,8 +52,18 @@ def CalcSumLoss(w_batch_losses):
 
 
 def CalcSumEval(w_batch_losses):
+    """
+    Returns (total_evals, per_dataset_evals): total_evals is the [loss, mse]
+    pair summed (weight-combined) across every dataset/rb_id in
+    w_batch_losses, as before. per_dataset_evals is a dict rb_id -> raw
+    (un-weighted) [loss, mse] for that dataset alone, from the SAME eval()
+    call used to build total_evals (not a second call -- eval() advances the
+    val dataloader, so calling it twice per rb_id would consume two different
+    batches and double the validation forward-pass cost).
+    """
     # initialize a zero loss variable? CPU
     total_evals = np.zeros(2)
+    per_dataset_evals = {}
 
     batch_loss: WeightedBatchLoss
     # iterate over the batch losses and get the total loss
@@ -61,13 +71,14 @@ def CalcSumEval(w_batch_losses):
         # len check
         if len(batch_loss) == 0:
             continue
-        
+
         # task toggle check
         if key not in globals.CONFIG.tasks_to_use:
             continue
-        
-        wevals = batch_loss.compute_weighted_eval()
 
-        total_evals += wevals
-        
-    return total_evals
+        raw_evals = np.array(batch_loss.batch_loss.eval())
+        per_dataset_evals[key] = raw_evals
+
+        total_evals += batch_loss.weight * raw_evals
+
+    return total_evals, per_dataset_evals

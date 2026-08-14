@@ -324,6 +324,13 @@ class BatchLoss:
         sample_loss = torch.mean(actor_loss, dim=(1, 2))
         sample_loss = sample_loss.squeeze()
 
+        # stashed pre-subtask-weighting, for eval()'s explicit val_loss/task_*
+        # and val_loss/subtask_* breakdown -- separate namespace from the
+        # BC/{rb_id}: subtask_{sid}_loss key logged just below, which is
+        # shared with the training step and gets overwritten by whichever
+        # call (train or val) ran most recently
+        self._last_raw_sample_loss = sample_loss.detach()
+
         sample_loss = self.log_and_weight_by_subtask(nbatch, sample_loss)
 
         return sample_loss, a0, timesteps
@@ -361,11 +368,31 @@ class BatchLoss:
     def eval(self):
         loss = 0.0
         action_mse_error = 0.0
-        
+
         # get the actor loss
         t = self.compute_loss()
         l = t['actor']['bc']
         loss = l.cpu()
+
+        # explicit val_loss/task_* and val_loss/subtask_* breakdown -- own
+        # namespace (unlike BC/{rb_id}: subtask_{sid}_loss, which is shared
+        # with the training step and gets clobbered by whichever call ran
+        # most recently), using the per-sample loss compute_sample_loss just
+        # stashed for this exact (val) batch
+        nbatch = self.current_batch
+        raw_sample_loss = getattr(self, '_last_raw_sample_loss', None)
+        if nbatch is not None and raw_sample_loss is not None:
+            with torch.no_grad():
+                for id_key, label in (('task_id', 'task'), ('subtask_id', 'subtask')):
+                    if id_key not in nbatch:
+                        continue
+                    ids = torch.reshape(nbatch[id_key], [-1])
+                    unique_ids = torch.unique(ids)
+                    if unique_ids.numel() > 1:
+                        for uid in unique_ids.tolist():
+                            mask = ids == uid
+                            if mask.any():
+                                globals.LOGGER.log_one(f"val_loss/{label}_{int(uid)}", raw_sample_loss[mask].mean())
 
         # get the action mse error
         if self.current_batch is not None:

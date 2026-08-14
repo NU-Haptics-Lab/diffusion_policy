@@ -67,6 +67,17 @@ CHECKPOINTER: TopKCheckpointManager | None
 # DEFAULT_BATCH_LOADER: batch_loader.BatchLoader
 DEFAULT_BATCH_LOADER = None
 
+"""
+Cache of fitted normalizer state dicts, keyed by BatchLoader subclass name
+-- {class_name: {leaf_path_tuple: state_dict}}. Populated the first time
+each BatchLoader class's get_fitted_nns() actually runs (e.g. during real
+training, with the full dataset available), saved into checkpoints by
+TopKCheckpointManager, and restored on load so standalone testing/inference
+(e.g. via default_batch_loader) doesn't need to recompute normalizer stats
+from the dataset -- see BatchLoader.init_normalizers.
+"""
+NORMALIZER_STATE_DICTS: dict = {}
+
 
 # SESSION_TRAINER: SessionTrainer
 SESSION_TRAINER = None
@@ -223,16 +234,20 @@ def load_global_config(cfg: DictConfig | dict, cfg_key):
         if DATALOADERS is not None:
             DATALOADERS.setup()
         
-        if DEFAULT_BATCH_LOADER is not None:
-            DEFAULT_BATCH_LOADER.setup()
-            
         if MODELS is not None:
             MODELS.setup()
-            
+
         if CHECKPOINTER is not None:
+            # must run before DEFAULT_BATCH_LOADER.setup() below -- a loaded
+            # checkpoint populates globals.NORMALIZER_STATE_DICTS, which
+            # BatchLoader.init_normalizers checks to skip re-fitting
+            # normalizer stats from the dataset (see batch_loader.py)
             CHECKPOINTER.load()
-        
-        if SESSION_TRAINER is not None:        
+
+        if DEFAULT_BATCH_LOADER is not None:
+            DEFAULT_BATCH_LOADER.setup()
+
+        if SESSION_TRAINER is not None:
             SESSION_TRAINER.setup()
         
 

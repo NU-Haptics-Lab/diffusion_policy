@@ -1,0 +1,468 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "aiet_erlenmeyer_flask_4: cotraining of the real erlenmeyer-flask
+  dataset (task_24) with the sim-only pellet alignment dataset (combined.zarr,
+  same as aiet_alignment_sim_3). The full_avatar_real_world_cotrain_dataset leg
+  is TEMPORARILY DISABLED -- its wrist camera may be mounted ~180 degrees rotated
+  relative to task_24's, which would make a shared spatial-softmax head learn
+  contradictory keypoint coordinates across sources; re-enable only after
+  confirming (or fixing, by re-running add_dinov3_patch_features.py on a rotated
+  raw image) that the two datasets' wrist-camera frames actually agree. The
+  AIETErlenmeyerFlask4Real2Sampler class / add_palm_pose_fk.py / add_gripper_value.py
+  / add_dinov3_patch_features.py precompute for full_avatar all still exist and
+  are unaffected -- only this yaml's wiring is reduced to 2 sources for now.
+  Both remaining sources share the EXACT same obs schema and action
+  representation: palm_pose_xyz_rpy + gripper_value + biotac_lh (real-only,
+  zero-filled/masked for sim) + wrist/overhead 7x7 DINOv3 patch tokens, and a
+  relative-palm-pose+gripper action (same convention as aiet_alignment_sim_3),
+  rather than raw joint-space actions -- task_24 originally only had raw
+  joint-space actions and no palm_pose_xyz_rpy/gripper_value at all; these were
+  added by one-time offline migration scripts in ws_avatar_drake
+  (avatar_intelligence/data_processing/common/add_palm_pose_fk.py -- Drake forward
+  kinematics against the left gofa+shadow-hand model -- and add_gripper_value.py --
+  an empirical per-dataset min/max proxy over finger-flexion joints, since no
+  real-robot open/closed calibration reference was found) before this config could
+  be written. Because both sources share one schema, ONE sampler base class
+  (AIETAlignmentSim3Sampler, thinly subclassed per source just to tag data_source)
+  and ONE BatchLoader class (AIETErlenmeyerFlask4BatchLoader) cover both rb_ids --
+  see aiet_erlenmeyer_flask_4_sampler.py. This also exercises
+  DexNexTransformerForDiffusion's generalized (N-source, not just binary)
+  data_source token masking, via excluded_token_keys_by_data_source (backward
+  compatible -- _3's sim_only_token_keys/real_only_token_keys is unaffected)."
+
+# global controls
+debug: false
+single_thread: false
+use_compiled_policy: false
+total_num_epochs: 20001
+batches_per_epoch: 100
+val_every: 20
+
+action_key: action # placeholder -- computed (rel_palm_pose_xyz_rpy + gripper_value), not a literal rb field, same as aiet_alignment_sim_3
+
+# 14 or 7 -- selects between the full 14x14 patch grid and the pre-downsampled
+# 7x7 grid for both active sources (task_24 already had wrist_cam_patch_features_7x7/
+# overhead_roi_patch_features_7x7 from prior work; sim's combined.zarr likewise
+# via in-sampler pooling). See AIETErlenmeyerFlaskSampler.resolve_rb_key.
+patch_grid_size: 7
+
+### Global Control Panel ###
+to_load:
+  - actor
+  - globals
+
+resume: true
+
+# should be the same as this file's name (sans .yaml)
+run_tag: aiet_erlenmeyer_flask_4
+
+resume_tag: latest
+output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_4
+
+tasks_to_use:
+  - erlenmeyer
+  - sim_alignment
+
+# fused/single-vector keys routed through the obs_encoder. The raw patch
+# grids (wrist_cam_patch_features/overhead_roi_patch_features) deliberately
+# do NOT appear here -- they bypass obs_encoder entirely via patch_keys_to_use
+# below, same as aiet_erlenmeyer_flask_3/aiet_alignment_sim_3. biotac_lh is
+# real-only: present in erlenmeyer, zero-filled + masked out for sim_alignment
+# via the model's excluded_token_keys_by_data_source.
+obs_keys_to_use:
+  - palm_pose_xyz_rpy
+  - gripper_value
+  - biotac_lh
+
+obs_keys_to_load:
+  - palm_pose_xyz_rpy
+  - wrist_cam_patch_features
+  - overhead_roi_patch_features
+  - gripper_value
+  - biotac_lh
+
+models_to_train:
+  - actor
+
+models_to_eval:
+  - actor
+
+step_freqs:
+  actor: 1
+  res_actor: 1
+  critic: 1
+  sac_actor: 1
+
+use_bc_loss: true
+action_relative_to_state: false
+use_denoise: false
+### End Global Control Panel ###
+
+num_inference_steps: 25
+clamp: false
+
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+obs_rel_indices: [0]
+gradient_accumulate_every: 1
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 50
+  checkpoint_every: 50
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false
+
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  output_dir: ${output_dir}
+
+# common data
+shape_meta:
+  palm_pose_xyz_rpy:
+    shape:
+    - 6 # world pose of lh_palm, xyz + roll/pitch/yaw
+
+  gripper_value:
+    shape:
+    - 1 # [0, 1] "how closed" scalar
+
+  biotac_lh:
+    shape:
+    - 5
+
+  wrist_cam_patch_features:
+    shape:
+      - ${patch_grid_size}
+      - ${patch_grid_size}
+      - 384 # dinov3 s_plus
+
+  overhead_roi_patch_features:
+    shape:
+      - ${patch_grid_size}
+      - ${patch_grid_size}
+      - 384 # dinov3 s_plus
+
+  action:
+    shape:
+    - 7 # rel_palm_pose_xyz_rpy (6) + gripper_value (1), same convention as aiet_alignment_sim_3
+
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online
+    name: 2026.diffusion
+    project: dexnex_diffusion
+    resume: true
+    tags:
+    - diffusion
+    - cotrain
+    - sim
+    - default
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    palm_pose_xyz_rpy:
+      shape:
+      - 6
+
+    gripper_value:
+      shape:
+      - 1
+
+    biotac_lh:
+      shape:
+      - 5
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: ${debug}
+  use_zero_padding: false
+  restrict_to_valid_future: true
+
+
+# NODE -- replay buffer loader entry point. TWO rb_ids (full_avatar disabled
+# for now -- see description above).
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    erlenmeyer: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    sim_alignment: /home/omnid/dexnex/ws_avatar_drake/src/avatar_master/avatar_intelligence/avatar_intelligence/sims/aiet_alignment/combined.zarr
+
+  modes:
+    erlenmeyer: r
+    sim_alignment: r
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+  rb_id: "erlenmeyer" # forces a load
+  train_or_val: eval
+  use_dataloader: false
+  strict: false
+
+# NODE -- training entry point. Both data sources' losses get summed each step.
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs}
+
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    step_trainer:
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+
+      w_batch_losses:
+        erlenmeyer: ${common_wbatch_loss_erlenmeyer}
+        sim_alignment: ${common_wbatch_loss_sim}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    w_batch_losses:
+      erlenmeyer: ${common_wbatch_loss_erlenmeyer}
+      sim_alignment: ${common_wbatch_loss_sim}
+
+
+common_wbatch_loss_erlenmeyer:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0 # relative weight of the on-task real erlenmeyer loss -- tune as needed
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer
+      train_or_val: train
+
+common_wbatch_loss_sim:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0 # relative weight of the sim alignment loss -- tune as needed
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: sim_alignment
+      train_or_val: train
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d:
+    erlenmeyer: ${common_dataset_erlenmeyer}
+    sim_alignment: ${common_dataset_sim}
+
+# on-task real data -- batch_size 32 per source (not the shared ${batch_size}
+# _3 used -- each source gets its own literal here, per-source batch sizing)
+common_dataset_erlenmeyer:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: false
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 32
+      timeout: 0
+    train:
+      num_workers: 8
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+
+# sim alignment data -- batch_size 16
+common_dataset_sim:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: false
+  preload_vectorized: true
+
+  options:
+    common:
+      batch_size: 16
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: sim_alignment
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4SimSampler
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: true
+          obs_as_global_cond: true
+          obs_encoder_group_norm: true
+          n_obs_steps: 1
+          down_dims:
+            - 256
+            - 512
+            - 1024
+          diffusion_step_embed_dim: 32
+
+          action_relative_to_state: ${action_relative_to_state}
+          use_tree: false
+          use_simple_model: false
+
+          model_type: dexnex_transformer
+          transformer_n_layer: 6
+          transformer_n_emb: 128
+          transformer_n_cond_layers: 6
+          diagnostics_every_n_steps: 50
+          transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value', 'biotac_lh']
+          transformer_p_drop_token: 0.3
+          transformer_normalize_cond_tokens: true # LayerNorm each cond token right after its own projection, so timestep can't dominate cross-attention purely from raw embedding magnitude. In the future solve this problem using adaLN instead
+          transformer_use_adaln_timestep: false # DiT-style AdaLN-Zero timestep conditioning instead of a timestep cross-attn token -- the more standard fix, off for now while normalize_cond_tokens is the active experiment
+
+          embed_task_id: false
+          num_tasks: 26
+
+          patch_keys_to_use: ['wrist_cam_patch_features', 'overhead_roi_patch_features']
+          spatial_softmax_patch_keys: ['wrist_cam_patch_features', 'overhead_roi_patch_features']
+          spatial_softmax_num_keypoints: 16
+          spatial_softmax_temperature_init: 1.0
+
+          # cotrain masking: data_source 0=erlenmeyer real, 1=sim. biotac_lh is
+          # real-only -- excluded (hard-zeroed) for sim samples. erlenmeyer
+          # supplies every key natively, so nothing else needs excluding.
+          excluded_token_keys_by_data_source:
+            1: ['biotac_lh']
+          num_data_sources: 2
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 1e-4
+          weight_decay: 1.0e-06
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  num_train_timesteps: 100
+  prediction_type: sample
+
+device: cuda:0
+
+override:
+  models:
+    models:
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small

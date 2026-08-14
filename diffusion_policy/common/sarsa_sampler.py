@@ -1207,32 +1207,73 @@ class DatasetSampler:
         
     #     print("{}: inlier_mask.sum(): {}".format(self.rb_id, self.inlier_mask.sum()))
         
-    def get_sample_mask(self, ratio, seed=None):
+    def get_sample_mask(self, ratio, seed=None, split_by_episode=False):
         """
-        use full dataset.
-        
+        Returns a PER-EPISODE boolean mask (length == number of episodes
+        currently included via self.ep_mask, i.e. len(self.get_ep_list())) --
+        this is what DatasetSampler.Init()/make_episodes() actually consumes
+        (`self.ep_mask[idx]` is indexed by episode, see make_episodes()).
+
+        NOTE: this used to return a mask over individual flattened timesteps
+        (length len(self)), which was silently wrong: Init()/make_episodes()
+        only ever supports whole-episode inclusion (make_episode() hardcodes
+        a per-timestep `mask = np.ones(...)` for every included episode --
+        there's no per-timestep sub-selection mechanism below the episode
+        level). A per-timestep array only "worked" by accident: Init()
+        indexed it as `mask[episode_idx]` for episode_idx in
+        range(nb_episodes), so it was really consulting nb_episodes
+        essentially-arbitrary entries from a nb_datapts-length random draw --
+        for small nb_episodes / small ratio this frequently produced an
+        all-False (or all-True) result for one side of the split, e.g. an
+        empty val set. There was never a real per-timestep split available
+        here regardless of `split_by_episode`; this rewrite makes the actual
+        (episode-level) semantics explicit and correctly sized.
+
+        split_by_episode: if False (default), select individual episodes
+            uniformly at random until `ratio` fraction of the TOTAL EPISODE
+            COUNT is reached. If True, episodes are instead accumulated
+            (in random order) until their combined TIMESTEP count reaches
+            `ratio` fraction of total timesteps -- gives a val set whose
+            size in samples more closely tracks `ratio`, at the cost of a
+            less uniform per-episode selection probability (longer episodes
+            are more likely to end up in whichever bucket fills the target
+            first). Either way, at least one episode is always held out when
+            ratio > 0.
         """
         rng = np.random.default_rng(seed=seed)
-        
-        nb_datapts = len(self)
-        
+
+        ep_lengths = np.array(self.get_ep_lengths())
+        nb_eps = len(ep_lengths)
+
         if ratio >= 1.0:
-            return np.ones((nb_datapts), dtype=bool)
-        
+            return np.ones((nb_eps), dtype=bool)
+
         elif ratio <= 0.0:
-            return np.zeros((nb_datapts), dtype=bool)
-        
+            return np.zeros((nb_eps), dtype=bool)
+
+        elif split_by_episode:
+            nb_datapts = len(self)
+            target = max(1, int(nb_datapts * ratio))
+
+            ep_order = rng.permutation(nb_eps)
+            cum_lengths = np.cumsum(ep_lengths[ep_order])
+            # smallest number of (randomly ordered) episodes whose combined
+            # length reaches the target -- at least one episode
+            nb_eps_selected = min(nb_eps, int(np.searchsorted(cum_lengths, target)) + 1)
+            selected_eps = ep_order[:nb_eps_selected]
+
+            mask = np.zeros((nb_eps), dtype=bool)
+            mask[selected_eps] = True
+            return mask
+
         else:
-            nb = int(nb_datapts * ratio)
-            
-            # at least one
-            nb = max(1, nb)
-            
-            choices = rng.choice(nb_datapts, size=nb, replace=False)
-            
-            mask = np.zeros((nb_datapts), dtype=bool)
+            nb = max(1, int(nb_eps * ratio))
+
+            choices = rng.choice(nb_eps, size=nb, replace=False)
+
+            mask = np.zeros((nb_eps), dtype=bool)
             mask[choices] = True
-        
+
             return mask
         
     def copy(self):

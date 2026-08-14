@@ -202,8 +202,15 @@ class DiffusionModel(BaseImagePolicy):
             spatial_softmax_patch_keys = None, # subset of patch_keys_to_use to reduce via spatial softmax (one token per group) instead of keeping every patch as its own token
             spatial_softmax_num_keypoints = 16, # per spatial_softmax_patch_keys group
             spatial_softmax_temperature_init = 1.0,
-            sim_only_token_keys = None, # token keys hard-zeroed for real (data_source==0) samples, always (train + eval)
-            real_only_token_keys = None, # token keys hard-zeroed for sim (data_source==1) samples, always (train + eval)
+            separate_spatial_softmax_by_data_source = False, # give each spatial-softmax group its own ss_reduce/ss_temperature PER data_source instead of one shared set -- avoids one cotraining source's easier-to-fit gradient dominating/starving another's localization. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
+            sim_only_token_keys = None, # token keys hard-zeroed for real (data_source==0) samples, always (train + eval). Binary-only; superseded by excluded_token_keys_by_data_source for >2-source cotrains.
+            real_only_token_keys = None, # token keys hard-zeroed for sim (data_source==1) samples, always (train + eval). Binary-only; superseded by excluded_token_keys_by_data_source for >2-source cotrains.
+            excluded_token_keys_by_data_source = None, # dict: data_source id -> token keys hard-zeroed for that source, always (train + eval). Generalizes sim_only_token_keys/real_only_token_keys to N cotrain sources; see DexNexTransformerForDiffusion.__init__.
+            num_data_sources = None, # how many distinct data_source ids appear; required for 3+-source cotrains where not every source has an entry in excluded_token_keys_by_data_source. See DexNexTransformerForDiffusion.__init__.
+            transformer_normalize_cond_tokens = True, # LayerNorm each cond token (timestep/task_id/obs key/patch group) right after its own projection, so no single token's raw magnitude can dominate cross-attention. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
+            transformer_use_adaln_timestep = False, # AdaLN-Zero timestep conditioning instead of a timestep cross-attention token (DiT-style, the more standard fix for timestep specifically). Mutually exclusive with normalize_cond_tokens's handling of the timestep token. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
+            gaussian_noise_by_data_source = None, # dict: data_source id -> list of cond_dims/spatial-softmax key names to add training-time Gaussian noise to for that source's samples. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
+            gaussian_noise_std = 0.1, # shared std for the above, across every (data_source, key) pair enabled.
             diagnostics_every_n_steps = 50, # gate for the pricier periodic diagnostics (attn entropy, task embedding stats)
             # pellet localizer (aiet_alignment_sim): an upstream module that predicts a
             # pellet xyz position from a patch-token grid + lowdim state, whose (detached)
@@ -259,8 +266,15 @@ class DiffusionModel(BaseImagePolicy):
         self.spatial_softmax_patch_keys = spatial_softmax_patch_keys or []
         self.spatial_softmax_num_keypoints = spatial_softmax_num_keypoints
         self.spatial_softmax_temperature_init = spatial_softmax_temperature_init
+        self.separate_spatial_softmax_by_data_source = separate_spatial_softmax_by_data_source
         self.sim_only_token_keys = sim_only_token_keys
         self.real_only_token_keys = real_only_token_keys
+        self.excluded_token_keys_by_data_source = excluded_token_keys_by_data_source
+        self.num_data_sources = num_data_sources
+        self.transformer_normalize_cond_tokens = transformer_normalize_cond_tokens
+        self.transformer_use_adaln_timestep = transformer_use_adaln_timestep
+        self.gaussian_noise_by_data_source = gaussian_noise_by_data_source
+        self.gaussian_noise_std = gaussian_noise_std
         self.diagnostics_every_n_steps = diagnostics_every_n_steps
 
         self.pellet_localizer_patch_key = pellet_localizer_patch_key
@@ -383,6 +397,7 @@ class DiffusionModel(BaseImagePolicy):
                 patch_group_dims=patch_group_dims if patch_group_dims else None,
                 spatial_softmax_group_dims=spatial_softmax_group_dims if spatial_softmax_group_dims else None,
                 spatial_softmax_temperature_init=self.spatial_softmax_temperature_init,
+                separate_spatial_softmax_by_data_source=self.separate_spatial_softmax_by_data_source,
                 num_tasks=self.num_tasks if self.embed_task_id else 0,
                 n_layer=self.transformer_n_layer,
                 n_head=self.transformer_n_head,
@@ -394,6 +409,12 @@ class DiffusionModel(BaseImagePolicy):
                 droppable_token_keys=self.transformer_droppable_token_keys,
                 sim_only_token_keys=self.sim_only_token_keys,
                 real_only_token_keys=self.real_only_token_keys,
+                excluded_token_keys_by_data_source=self.excluded_token_keys_by_data_source,
+                num_data_sources=self.num_data_sources,
+                normalize_cond_tokens=self.transformer_normalize_cond_tokens,
+                use_adaln_timestep=self.transformer_use_adaln_timestep,
+                gaussian_noise_by_data_source=self.gaussian_noise_by_data_source,
+                gaussian_noise_std=self.gaussian_noise_std,
             )
             model = DexNexTransformerAdapter(transformer)
 
@@ -787,9 +808,10 @@ class DiffusionModel(BaseImagePolicy):
         # ground truth action
         nobs = nbatch['obs']
         gt_action = nbatch['action']
-        
+        data_source = nbatch['data_source'] if 'data_source' in nbatch else None
+
         # denoise
-        nresult = self.predict_action(nobs, task_id=task_id)
+        nresult = self.predict_action(nobs, task_id=task_id, data_source=data_source)
         
         # extract the predicted action
         pred_action = nresult['naction_pred']
@@ -812,6 +834,19 @@ class DiffusionModel(BaseImagePolicy):
                         task_mask = task_id_flat == tid
                         if task_mask.any():
                             globals.LOGGER.log_one(f"val_action_mse/task_{tid}", per_sample_mse[task_mask].mean())
+
+                # same breakdown by subtask_id, when present -- e.g. distinct
+                # phases of one task (reach vs. align vs. grasp) that can have
+                # very different error even when the task-level mse looks fine
+                if 'subtask_id' in nbatch:
+                    subtask_id_flat = torch.reshape(nbatch['subtask_id'], [-1])
+                    unique_subtask_ids = torch.unique(subtask_id_flat)
+                    if unique_subtask_ids.numel() > 1:
+                        for sid in unique_subtask_ids.tolist():
+                            subtask_mask = subtask_id_flat == sid
+                            if subtask_mask.any():
+                                globals.LOGGER.log_one(
+                                    f"val_action_mse/subtask_{int(sid)}", per_sample_mse[subtask_mask].mean())
 
         # move to cpu
         action_mse_error = mse.item()
@@ -1073,9 +1108,38 @@ class DiffusionModel(BaseImagePolicy):
                     for name, ws in weight_by_name.items():
                         globals.LOGGER.log_one(f"diagnostics/cross_attn_weight_{name}", torch.stack(ws).mean())
 
+                    # same per-token breakdown, but bucketed by diffusion noise level --
+                    # a token dominating attention at every noise level (e.g. timestep
+                    # staying high even at low-noise/late-refinement steps, where the
+                    # model should be leaning on vision for precision) is a different,
+                    # more concerning story than one that only dominates at high noise
+                    attn_timesteps = transformer.last_cross_attn_timesteps
+                    attn_bucket_idx = torch.clamp(
+                        (attn_timesteps.float() / num_train_timesteps * num_buckets).long(),
+                        max=num_buckets - 1)
+                    weight_by_token = transformer.last_cross_attn_weight_by_token  # (B,T_cond)
+                    for b in range(num_buckets):
+                        bucket_mask = attn_bucket_idx == b
+                        if not bucket_mask.any():
+                            continue
+                        weight_by_name_bucket = {}
+                        for name, w in zip(transformer.last_cross_attn_token_names,
+                                            weight_by_token[bucket_mask].mean(dim=0)):
+                            weight_by_name_bucket.setdefault(name, []).append(w)
+                        for name, ws in weight_by_name_bucket.items():
+                            globals.LOGGER.log_one(
+                                f"diagnostics/cross_attn_weight_{name}_bucket_{b}", torch.stack(ws).mean())
+
                 task_stats = transformer.task_embedding_stats()
                 if task_stats is not None:
                     globals.LOGGER.log_one("diagnostics/task_emb_mean_row_norm", task_stats['mean_row_norm'])
                     globals.LOGGER.log_one("diagnostics/task_emb_mean_pairwise_distance", task_stats['mean_pairwise_distance'])
+
+                ss_temp_stats = transformer.spatial_softmax_temperature_stats()
+                if ss_temp_stats is not None:
+                    for name, stats in ss_temp_stats.items():
+                        globals.LOGGER.log_one(f"diagnostics/ss_temperature_{name}_mean", stats['mean'])
+                        globals.LOGGER.log_one(f"diagnostics/ss_temperature_{name}_min", stats['min'])
+                        globals.LOGGER.log_one(f"diagnostics/ss_temperature_{name}_max", stats['max'])
 
         return loss, a0, timesteps

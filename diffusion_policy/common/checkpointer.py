@@ -213,7 +213,11 @@ class TopKCheckpointManager:
             'step': globals.STEP,
             'epoch': globals.EPOCH,
             'models_state_dict': globals.MODELS.state_dict(),
-            'non_models_state_dicts': {}
+            'non_models_state_dicts': {},
+            # BatchLoader normalizer stats, keyed by subclass name -- see
+            # BatchLoader.init_normalizers. Lets standalone testing/inference
+            # skip re-fitting from the dataset after loading this checkpoint.
+            'normalizer_state_dicts': globals.NORMALIZER_STATE_DICTS,
         }
         
         # self.get_state_dicts(payload['non_models_state_dicts'])
@@ -228,6 +232,8 @@ class TopKCheckpointManager:
         # TODO: MOVE THIS TO THE GLOBALS LOADER
         globals.STEP = payload['step']
         globals.EPOCH = payload['epoch']
+        # older checkpoints won't have this key
+        globals.NORMALIZER_STATE_DICTS = payload.get('normalizer_state_dicts', {})
     
     def load_payload(self, payload, **kwargs):
         models_state_dict = payload['models_state_dict']

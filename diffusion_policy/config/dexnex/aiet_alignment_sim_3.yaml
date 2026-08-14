@@ -1,0 +1,430 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "aiet_alignment_sim_3: sim-only training for the lh_forearm-only pellet alignment sub-task (no abb gofa attached -- the sim now free-floats/drives just the forearm+hand). Single-stage diffusion transformer, same DINOv3-patch-token-as-spatial-softmax mechanism as aiet_alignment_sim_2. palm_pose_xyz_rpy is deliberately NOT a model input -- only the wrist-camera DINOv3 patches + gripper_value are -- to force the policy to localize off vision rather than reading its own state; the output trajectory's palm component is relative to the current palm pose (see AIETAlignmentSim3Sampler), gripper_value stays absolute. No PelletLocalizer, no aux losses -- pure end-to-end diffusion BC."
+# global controls
+debug: false #
+single_thread: false
+use_compiled_policy: false # currently doesn't do anything
+total_num_epochs: 3001
+batches_per_epoch: 100
+batch_size: 1024
+val_every: 20
+
+# placeholder -- combined.zarr has no single "action" field. The actual
+# 7-dim action ([palm pose delta from the current step, xyz+rpy] + absolute
+# gripper_value) is built in AIETAlignmentSim3Sampler / AIETAlignmentSim3BatchLoader.
+action_key: action
+
+### Global Control Panel ###
+to_load:
+  # - critic
+  - actor
+  # - res_actor
+  - globals
+
+# hack
+resume: true
+
+# should be the same as this file's name (sans .yaml)
+run_tag: aiet_alignment_sim_3
+
+resume_tag: latest
+output_dir: /media/dexnex_ssd/models/aiet_alignment_sim_3
+
+tasks_to_use:
+  - all
+  # - success
+  # - failure
+
+# which obs the obs_encoder will use -- wrist_camera_patch_features is
+# deliberately excluded here (and from common_obs_encoder.lowdims below):
+# it's a raw DINOv3 patch-token grid, routed via patch_keys_to_use/
+# spatial_softmax_patch_keys below, bypassing obs_encoder entirely, same as
+# aiet_alignment_sim_2. palm_pose_xyz_rpy is ALSO deliberately excluded --
+# it's not a model input at all here (see description above / the sampler's
+# docstring) -- it's only read directly off the replay buffer, inside
+# AIETAlignmentSim3Sampler/AIETAlignmentSim3BatchLoader, to compute the
+# action's relative-pose component.
+obs_keys_to_use:
+  - gripper_value
+
+# which obs the sarsa_sampler will load from the replay buffer, and used by
+# the batch loader. palm_pose_xyz_rpy is NOT here -- see obs_keys_to_use above.
+obs_keys_to_load:
+  - gripper_value
+  - wrist_camera_patch_features
+
+models_to_train:
+  - actor
+  # - res_actor
+  # - critic
+
+# irrelevant when using CriticBatchLoss
+models_to_eval:
+  - actor
+  # - res_actor
+  # - critic
+
+# higher value means less frequent updates
+step_freqs:
+  actor: 1
+  res_actor: 1
+  critic: 1
+  sac_actor: 1
+
+use_bc_loss: true
+action_relative_to_state: false
+use_denoise: false # false for residual actor
+### End Global Control Panel ###
+
+num_inference_steps: 25
+clamp: false # clamp actions (and diffusion noise)
+
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] # 0 is current idx, negative number is in the past, positive number is in the future
+obs_rel_indices: [0] # recall, we stack the channels for the observation history ... maybe I shouldn't. TODO: separate obs inputs (diff loss weight for each img in history)
+gradient_accumulate_every: 1 # may move this to ModelandEma later
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 50 # nb checkpoints to keep
+  checkpoint_every: 50 # how often, in epochs
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false # use ${output_dir} as the base
+
+  # required if resuming
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  output_dir: ${output_dir}
+
+# common data
+shape_meta:
+  palm_pose_xyz_rpy:
+    shape:
+    - 6 # xyz + roll/pitch/yaw, world pose of lh_palm
+
+  gripper_value:
+    shape:
+    - 1 # [0, 1] "how closed" scalar
+
+  wrist_camera_patch_features:
+    shape:
+      - 14
+      - 14
+      - 384 # DINOv3 small+, same convention as aiet_alignment_sim_2
+
+  action:
+    shape:
+    - 7 # rel_palm_pose_xyz_rpy (6, relative to current palm pose) + gripper_value (1, absolute)
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online # don't change this
+    name: 2026.diffusion
+    project: dexnex_diffusion
+    resume: true # wandb automatic resume
+    tags:
+    - diffusion
+    - sim
+    - alignment
+    - default
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    gripper_value:
+      shape:
+      - 1 # [0, 1] "how closed" scalar
+
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: ${debug}
+  use_zero_padding: false # position control -- should be false, per the erlenmeyer task's convention
+  restrict_to_valid_future: true # exclude "current" indices near episode end whose action_rel_indices future window would run past the true episode end
+
+
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: /home/omnid/dexnex/ws_avatar_drake/src/avatar_master/avatar_intelligence/avatar_intelligence/sims/aiet_alignment/combined.zarr
+
+  modes:
+    all: r
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.AIETAlignmentSim3BatchLoader
+  rb_id: "default" # forces a load
+  train_or_val: eval # unnecessary during inference
+  use_dataloader: false # must be false during inference
+  strict: false # must be false for inference
+
+# NODE -- training entry point
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs} # testing
+
+  # children
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    # children
+    step_trainer:
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+
+      # weighted batch loss dict
+      w_batch_losses:
+        all: ${common_wbatch_loss}
+
+    rollouts: ${common_rollout}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    # weighted batch loss dict
+    w_batch_losses:
+      all: ${common_wbatch_loss}
+
+
+common_wbatch_loss:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  # children
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    # no aux loss -- keypoint_loss_weight / pellet_xyz_loss_weight /
+    # pellet_classifier_loss_weight all default to 0.0 (disabled). Pure
+    # diffusion BC training; the transformer's own spatial softmax over
+    # wrist_camera_patch_features is trained purely by the BC gradient.
+
+    # children
+    # for normalizing
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETAlignmentSim3BatchLoader
+      rb_id: default # forces a load
+      train_or_val: train
+
+# NODE -- periodic online-eval rollout during training, via the Drake sim in
+# aiet_alignment_drake_sim.py (run_episode_with_policy).
+common_rollout:
+  _target_: diffusion_policy.rollout.AietAlignmentSimRollout
+  freq: 750 # every N training steps
+  warmup_nb_steps: 0 # no warmup needed -- offline BC, not seeding an online RL replay buffer
+  num_rollouts_per_trigger: 5
+  max_duration_s: 10.0
+  ddim_steps: 16 # fewer than num_inference_steps (25) -- rollouts run inline with training, keep them cheap
+  use_ema_model: true
+  task_id: 24
+  which_model_to_use_for_inference: actor
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d:
+    all: ${common_dataset}
+
+common_dataset:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  # preload_to_gpu off: wrist_camera_patch_features makes this dataset large
+  # enough (14x14x384 floats per sample) that an eager bulk GPU load isn't
+  # worth it -- regular num_workers-based per-batch loading instead.
+  preload_to_gpu: false
+  preload_vectorized: true
+
+  options:
+    common:
+      batch_size: ${batch_size}
+      timeout: 0 # 0 means no timeout
+    train:
+      num_workers: 16
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true # can't use with use_weighted_dataloader
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true # can't use with use_weighted_dataloader
+
+  # child
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: default
+
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_alignment_sim_3_sampler.AIETAlignmentSim3Sampler
+
+    # child
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: false
+          obs_as_global_cond: true
+          obs_encoder_group_norm: false
+          n_obs_steps: 1 # how many indices from the end of ${obs_rel_indices} will the diffusion model use
+          down_dims: # must be divisible by nb_groups (8)
+            - 256
+            - 512
+            - 1024
+          diffusion_step_embed_dim: 32
+
+          action_relative_to_state: ${action_relative_to_state}
+          use_tree: false
+          use_simple_model: false
+
+          # diffusion transformer, sim-only -- no cotraining task_id.
+          # wrist_camera_patch_features (DINOv3 patch grid) is reduced to
+          # one token via spatial softmax, directly inside the transformer
+          # -- same mechanism as aiet_alignment_sim_2, no upstream
+          # PelletLocalizer/aux losses here.
+          model_type: dexnex_transformer
+          transformer_n_layer: 4
+          transformer_n_emb: 128
+          transformer_n_cond_layers: 4
+          diagnostics_every_n_steps: 50
+
+          patch_keys_to_use: ['wrist_camera_patch_features']
+          spatial_softmax_patch_keys: ['wrist_camera_patch_features']
+          spatial_softmax_num_keypoints: 16
+          spatial_softmax_temperature_init: 1.0
+
+          embed_task_id: false
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        # https://huggingface.co/docs/transformers/en/main_classes/optimizer_schedules#transformers.get_cosine_schedule_with_warmup
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 1e-4
+          weight_decay: 1.0e-06
+
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true # apparently you want this true when prediction_type is sample. NOTE: THIS CLIPS TO -CLIP_SAMPLE_RANGE, CLIP_SAMPLE_RANGE SO MAKE SURE YOU NORMALIZE THE ACTIONS TO THAT RANGE
+  num_train_timesteps: 100
+  prediction_type: sample # epsilon or sample
+
+device: cuda:0
+
+override:
+  session_trainer:
+    epoch_trainer:
+      step_trainer:
+        w_batch_losses:
+          all:
+            weight: 1.0
+            batch_loss:
+              batch_loader:
+                rb_id: all
+              use_bc_loss: ${use_bc_loss}
+    epoch_evaluator:
+      w_batch_losses:
+        all:
+          weight: 1.0
+          batch_loss:
+            batch_loader:
+              rb_id: all
+              train_or_val: val
+            use_bc_loss: ${use_bc_loss}
+
+  dataloaders:
+    d:
+      all:
+        sampler:
+          rb_id: all
+
+  models:
+    models:
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small # ah, I need this here because it only exists in the DDPM scheduler, so it's not common to DDIM & DDPM
