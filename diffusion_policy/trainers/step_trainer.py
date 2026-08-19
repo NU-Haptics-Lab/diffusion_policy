@@ -5,7 +5,7 @@ import torch.nn.utils
 import diffusion_policy.globals as globals
 from diffusion_policy import utils
 
-from diffusion_policy.losses.batch_loss import WeightedBatchLoss
+from diffusion_policy.losses.batch_loss import WeightedBatchLoss, _TimedSection
 from diffusion_policy.losses.losses import Losses
 
 from .common import CalcSumLoss
@@ -157,12 +157,23 @@ class StepTrainer:
         
 
     def train(self):
-        globals.MODELS.reset() 
+        # TEMPORARY profiling (see _TimedSection in batch_loss.py) -- splits
+        # a training step into forward+loss (which itself already breaks
+        # down into per-rb_id data-fetch vs forward, via
+        # BatchLoss.compute_loss's own timing/{rb_id}_* logging) vs
+        # backward+optimizer-step per model, to see where the 6 it/s is
+        # actually going before reaching for torch.compile. Remove once
+        # answered.
+        step_timer = _TimedSection(lambda dt: globals.LOGGER.log_one("timing/step_total_s", dt))
+        step_timer.__enter__()
+
+        globals.MODELS.reset()
         # initialize a zero loss variable
-        
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            total_losses = CalcSumLoss(self.w_batch_losses)
-        
+
+        with _TimedSection(lambda dt: globals.LOGGER.log_one("timing/forward_total_s", dt)):
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                total_losses = CalcSumLoss(self.w_batch_losses)
+
         dd = {}
         
         # actor must be first, else you'll get an in-place operation error
@@ -189,53 +200,57 @@ class StepTrainer:
         # for key, loss in [('critic', total_losses['critic'])]:
         for key, loss in total_losses.items():
             # reset optimizer gradients
-            globals.MODELS.reset() 
-            
+            globals.MODELS.reset()
+
             # can skip backprop if the loss is zero (aka the loss was skipped due to freqs)
             if loss == 0.0:
                 continue
-            
+
             if key not in self.models_to_train:
                 continue
-            
+
             # nan protection
             if torch.isnan(loss):
                 print(f"Warning: NaN values found in loss for model {key}. Skipping backprop for this model.")
                 continue
                 # raise ValueError(f"Loss for {key} is NaN. Check the BatchLoss method.")
-            
-            model = globals.MODELS[key]
-            
-            # back propagation
-            loss.backward()
-
-            # logging
-            dd[key + ": weighted sum loss"] = loss
 
             model = globals.MODELS[key]
 
-            # per-component grad norms, captured before clipping rescales everything
-            for component, norm in GradNormsByComponent(model.get_model()).items():
-                dd[f"{key}: grad_norm/{component}"] = norm
+            # TEMPORARY profiling -- see note above train()'s definition
+            with _TimedSection(lambda dt, key=key: globals.LOGGER.log_one(f"timing/backward_step_{key}_s", dt)):
+                # back propagation
+                loss.backward()
 
-            # if clipping the gradients
-            if self.grad_norm > 0: 
-                norms = torch.nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=self.grad_norm) #type:ignore
+                # logging
+                dd[key + ": weighted sum loss"] = loss
 
-                if torch.any(torch.isnan(norms)):
-                    print(f"Warning: NaN values found in gradients for model {key}. Skipping training.")
-                    continue
-                else:
-                    dd[key + ": grad_norm"] = norms.max().item()
-            
-            # step
-            model.step()
-        
+                model = globals.MODELS[key]
+
+                # per-component grad norms, captured before clipping rescales everything
+                for component, norm in GradNormsByComponent(model.get_model()).items():
+                    dd[f"{key}: grad_norm/{component}"] = norm
+
+                # if clipping the gradients
+                if self.grad_norm > 0:
+                    norms = torch.nn.utils.clip_grad_norm_(model.get_model().parameters(), max_norm=self.grad_norm) #type:ignore
+
+                    if torch.any(torch.isnan(norms)):
+                        print(f"Warning: NaN values found in gradients for model {key}. Skipping training.")
+                        continue
+                    else:
+                        dd[key + ": grad_norm"] = norms.max().item()
+
+                # step
+                model.step()
+
         globals.LOGGER.log(dd)
-        
+
         # reset optimizer gradients
-        globals.MODELS.reset() 
-            
+        globals.MODELS.reset()
+
+        step_timer.__exit__(None, None, None)
+
     def reset(self):
         # reset batch losses
         for k, v in self.w_batch_losses.items():

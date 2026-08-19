@@ -41,6 +41,19 @@ from diffusion_policy.model.components.tree import Tree
 import logging
 logger = logging.getLogger(__name__)
 
+# Module-level (NOT a DiffusionModel/nn.Module attribute) cache: id(raw
+# trunk module) -> its torch.compile() wrapper. Keeping this outside any
+# nn.Module's __dict__ is deliberate -- see DiffusionModel._get_forward_model's
+# docstring for why storing the compiled wrapper as a regular attribute on
+# self would be unsafe here (Ema.setup() deepcopies the whole DiffusionModel,
+# and copy.deepcopy has no special handling for torch.compile's
+# OptimizedModule; keeping it out of self.__dict__ entirely sidesteps that
+# instead of relying on OptimizedModule's deepcopy support being reliable
+# across torch versions). Compilation happens lazily on first forward call,
+# not eagerly in setup(), so this stays empty until training/inference
+# actually runs.
+_COMPILED_MODEL_CACHE = {}
+
 class Leaf(nn.Module):
     def __init__(self, nb_action, horizon):
         super().__init__()
@@ -170,11 +183,12 @@ class SimpleModel(nn.Module):
             
 
 class DiffusionModel(BaseImagePolicy):
-    def __init__(self, 
+    def __init__(self,
             action_shape: dict,
             noise_scheduler: DDPMScheduler | DDIMScheduler,
             obs_encoder_maker: ObsEncoderMaker,
             n_obs_steps, # input time-length
+            val_noise_scheduler: DDPMScheduler | DDIMScheduler | None = None, # optional separate scheduler used ONLY by get_val_action_mse_error (e.g. a DDIMScheduler, so validation-time sampling isn't full stochastic DDPM ancestral sampling with every reverse step injecting noise -- see the val_action_variance_ratio discussion). None (default) = use `noise_scheduler` for validation too, unchanged from before. num_inference_steps (top-level config) is applied via set_timesteps() only when this is set -- otherwise validation continues to run the scheduler's default (full num_train_timesteps) step count, as it always has.
             obs_as_global_cond=True,
             diffusion_step_embed_dim=256,
             down_dims=(256,512,1024),
@@ -212,6 +226,8 @@ class DiffusionModel(BaseImagePolicy):
             gaussian_noise_by_data_source = None, # dict: data_source id -> list of cond_dims/spatial-softmax key names to add training-time Gaussian noise to for that source's samples. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
             gaussian_noise_std = 0.1, # shared std for the above, across every (data_source, key) pair enabled.
             diagnostics_every_n_steps = 50, # gate for the pricier periodic diagnostics (attn entropy, task embedding stats)
+            check_alignment_direction = True, # log val_alignment_direction_cos_sim: does the predicted relative palm-xyz action point toward this episode's own final palm pose (a no-ground-truth-needed proxy for "the true aligned position", for episodes tagged via ep_id)? See get_val_action_mse_error / _get_episode_final_palm_xyz.
+            use_compiled_policy = False, # torch.compile self.model (the inner transformer/unet trunk) for the forward calls in compute_loss/conditional_sample -- NOT self.model itself, and NOT stored as an attribute on this nn.Module (see _get_forward_model's docstring for why: Ema.setup() does copy.deepcopy(this DiffusionModel), and Optim.setup() calls this DiffusionModel.parameters() -- both need the ORIGINAL uncompiled module graph, not a torch.compile OptimizedModule wrapper).
             # pellet localizer (aiet_alignment_sim): an upstream module that predicts a
             # pellet xyz position from a patch-token grid + lowdim state, whose (detached)
             # output is injected as an extra lowdim obs key for the main transformer --
@@ -245,6 +261,7 @@ class DiffusionModel(BaseImagePolicy):
         self.use_simple_model = use_simple_model
 
         self.noise_scheduler = noise_scheduler
+        self.val_noise_scheduler = val_noise_scheduler
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
@@ -276,6 +293,8 @@ class DiffusionModel(BaseImagePolicy):
         self.gaussian_noise_by_data_source = gaussian_noise_by_data_source
         self.gaussian_noise_std = gaussian_noise_std
         self.diagnostics_every_n_steps = diagnostics_every_n_steps
+        self.check_alignment_direction = check_alignment_direction
+        self.use_compiled_policy = use_compiled_policy
 
         self.pellet_localizer_patch_key = pellet_localizer_patch_key
         self.pellet_localizer_lowdim_keys = pellet_localizer_lowdim_keys or []
@@ -576,6 +595,52 @@ class DiffusionModel(BaseImagePolicy):
             patches[key] = x.reshape(B, -1, patch_dim)  # (B, num_patches, patch_dim)
         return patches
 
+    def _get_forward_model(self):
+        """
+        Returns the callable to use for the two actual trunk-forward call
+        sites (conditional_sample's denoising loop, compute_loss's training
+        forward) -- self.model unchanged if use_compiled_policy is false,
+        otherwise a torch.compile() wrapper around self.model.
+
+        Deliberately does NOT do `self.model = torch.compile(self.model)`
+        (replacing the attribute) or `self.compiled_model = ...` (a NEW
+        attribute) -- either would register the compiled OptimizedModule
+        into this DiffusionModel's __dict__, which then gets swept up by:
+          - Ema.setup()'s `copy.deepcopy(self.model.get_model())` (model.py),
+            deepcopying the ENTIRE DiffusionModel including whatever's in
+            self.__dict__ -- OptimizedModule deepcopy support has been
+            fragile across torch versions and isn't worth relying on here.
+          - Optim.setup()'s `self.model.parameters()` -- torch.compile
+            doesn't clone parameters (the wrapper shares the exact same
+            Parameter objects as self.model), so nn.Module.parameters()'s
+            default id-based dedup means this wouldn't actually double-count,
+            but there's no upside to registering it either.
+        Instead, the compiled wrapper is cached in the module-level
+        _COMPILED_MODEL_CACHE dict, keyed by id(self.model) -- entirely
+        outside any nn.Module's __dict__, so it's simply invisible to
+        deepcopy/parameters()/to(), and EMA's deep-copied model (a distinct
+        self.model instance, different id) gets its own separate compiled
+        graph the first time IT is used for a forward call, which is correct
+        (different parameters need their own graph anyway).
+
+        Known compile-unit multipliers for this model specifically (not
+        bugs, just things that mean more than one graph gets cached rather
+        than a single one): train vs eval mode differ (self.training gates
+        p_drop_token), and compute_loss's `log_attn=do_diagnostics` flips a
+        plain Python bool every diagnostics_every_n_steps -- torch.compile
+        treats that as a compile-time constant, so this alone produces 2
+        cached graphs (True/False) rather than 1, not unbounded recompiles.
+        """
+        if not self.use_compiled_policy:
+            return self.model
+        key = id(self.model)
+        compiled = _COMPILED_MODEL_CACHE.get(key)
+        if compiled is None:
+            print("Compiling DexNex diffusion trunk (torch.compile, dynamic=True)...")
+            compiled = torch.compile(self.model, dynamic=True)
+            _COMPILED_MODEL_CACHE[key] = compiled
+        return compiled
+
     # ========= inference  ============
     def conditional_sample(self,
             condition_data,
@@ -605,7 +670,7 @@ class DiffusionModel(BaseImagePolicy):
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. predict model output (could be noise or trajectory depending on pred_type)
-            model_output = self.model(trajectory,
+            model_output = self._get_forward_model()(trajectory,
                                       t,
                                       task_id,
                 local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source)
@@ -672,10 +737,13 @@ class DiffusionModel(BaseImagePolicy):
                        nobs_dict: Dict[str, torch.Tensor],
                         task_id = None,
                         data_source = None,
+                        noise_scheduler = None, # override for self.noise_scheduler -- e.g. get_val_action_mse_error passing self.val_noise_scheduler
                        ) -> Dict[str, torch.Tensor]:
+        if noise_scheduler is None:
+            noise_scheduler = self.noise_scheduler
         return self.predict_action_impl(
             nobs_dict,
-            self.noise_scheduler,
+            noise_scheduler,
             task_id=task_id,
             data_source=data_source,
             )
@@ -801,18 +869,156 @@ class DiffusionModel(BaseImagePolicy):
         
         return loss2, a0, timesteps
             
-    def get_val_action_mse_error(self, nbatch, task_id=None):
+    @staticmethod
+    def _get_field_normalizer(batch_loader, path):
+        """
+        batch_loader stores its per-field normalizers in a NestedDataArray
+        (batch_loader.nested_data_array), NOT as a plain `.normalizer`
+        attribute on the BatchLoader itself -- each leaf is a DataArray
+        wrapping one SingleFieldLinearNormalizer. `path` is a tuple of nested
+        keys, e.g. ('action',) or ('obs', 'palm_pose_xyz_rpy'). Returns None
+        (rather than raising) if anything along the chain is missing, so
+        callers can gracefully fall back.
+        """
+        try:
+            node = batch_loader.nested_data_array
+            for key in path:
+                node = node.nest[key]
+            return node.normalizer
+        except Exception:
+            return None
+
+    def _get_full_val_gt_action_var(self, rb_id, batch_loader):
+        """
+        Ground-truth action variance over the ENTIRE held-out val set for
+        rb_id (not just whatever mini-batch get_val_action_mse_error happens
+        to be called with), computed fresh every call (NOT cached across the
+        process -- see class docstring note below for why). A tiny val set
+        (e.g. one held-out episode for a small cotrain source) makes a
+        single mini-batch's own variance a bad, easily-inflated denominator
+        for val_action_variance_ratio -- adjacent timesteps' action chunks
+        overlap heavily (see the earlier train/val episode-split discussion),
+        so a few dozen samples from one trajectory look far less varied than
+        the dataset as a whole actually is.
+
+        NOT cached: computed fresh every call so it always reflects
+        val_sampler's current split (only relevant if something ever
+        re-randomizes it mid-run, e.g. an online-rollout reinit() -- not
+        applicable to this offline-BC config, but harmless to keep cheap and
+        fresh regardless). This is only called during validation
+        (infrequent), and val sets here are small (single/low-double-digit
+        episode counts), so recomputing is cheap.
+
+        NOTE: an earlier version of this read dls.sampler (the FULL/all
+        episode set) instead of dls.val_sampler, misdiagnosing the "no ep_id
+        matched" symptom as an online-rollout reinit race. The actual cause
+        was the yaml's epoch_evaluator pointing at train_or_val: train
+        batch_loaders (see aiet_erlenmeyer_flask_6.yaml) -- eval batches were
+        really coming from the train split, so of course they never matched
+        val_sampler. Reading the full sampler "fixed" the symptom by
+        papering over it (any episode matches when you use ALL of them), but
+        made this scan the entire dataset every validation call (slow) and
+        surfaced an unrelated zarr indexing bug on some episodes never
+        exercised by the small val set. Now that the yaml is fixed, val
+        batches genuinely come from val_sampler, so read that again.
+
+        Returns None (falls back to per-batch variance) if rb_id is missing,
+        this rb_id's val_sampler isn't available, or its episode sampler
+        class doesn't implement get_all_action_components (only the aiet_*
+        AIETAlignmentSim3Sampler-family classes do).
+        """
+        if rb_id is None or batch_loader is None:
+            return None
+
+        result = None
+        try:
+            dls = globals.DATALOADERS[rb_id]  # type:ignore
+            val_sampler = getattr(dls, 'val_sampler', None)
+            action_normalizer = self._get_field_normalizer(batch_loader, ('action',))
+            if val_sampler is not None and action_normalizer is not None:
+                rel_palms, grips = [], []
+                for ep in val_sampler.get_ep_list():
+                    if not hasattr(ep, 'get_all_action_components'):
+                        rel_palms = None
+                        break
+                    rel_palm, grip = ep.get_all_action_components()
+                    rel_palms.append(rel_palm)
+                    grips.append(grip)
+                if rel_palms:
+                    raw_action = np.concatenate(
+                        [np.concatenate(rel_palms, axis=0), np.concatenate(grips, axis=0)[:, None]], axis=-1
+                    ).astype(np.float32)
+                    normed = action_normalizer.normalize(torch.from_numpy(raw_action))
+                    result = normed.var(dim=0)  # (Da,)
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"_get_full_val_gt_action_var({rb_id}) failed, falling back to per-batch variance: {e}")
+            result = None
+
+        return result
+
+    def _get_episode_final_palm_xyz(self, rb_id):
+        """
+        {ep_id -> raw final palm xyz (3,)} for every episode in rb_id's
+        held-out val set (dls.val_sampler), computed fresh every call (NOT
+        cached -- see _get_full_val_gt_action_var's docstring for the full
+        rationale, including why this reads val_sampler and not dls.sampler
+        despite an earlier version briefly doing the opposite). A per-episode
+        proxy for "the true aligned target position", used when no
+        ground-truth pellet location exists (e.g. real data) -- assumes the
+        episode's last valid timestep reflects a successfully completed
+        alignment. Raw (not action-normalized) units, since it's built
+        directly from get_all_key('palm_pose_xyz_rpy'), reading straight off
+        the replay buffer.
+
+        Returns None if rb_id is missing, its val_sampler isn't available, or
+        episodes don't carry palm_pose_xyz_rpy/ep_id (get_all_key would raise).
+        """
+        if rb_id is None:
+            return None
+
+        result = None
+        try:
+            dls = globals.DATALOADERS[rb_id]  # type:ignore
+            val_sampler = getattr(dls, 'val_sampler', None)
+            if val_sampler is not None:
+                mapping = {}
+                for ep in val_sampler.get_ep_list():
+                    final_palm = ep.get_all_key('palm_pose_xyz_rpy')[-1, :3]  # (3,), raw
+                    mapping[float(ep.rb_episode_end)] = torch.from_numpy(np.asarray(final_palm, dtype=np.float32))
+                if mapping:
+                    result = mapping
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"_get_episode_final_palm_xyz({rb_id}) failed, alignment-direction check will be skipped: {e}")
+            result = None
+
+        return result
+
+    def get_val_action_mse_error(self, nbatch, task_id=None, rb_id=None, batch_loader=None):
         if self.action_relative_to_state:
             nbatch = self.ActionRelativeToState(nbatch)
-            
+
         # ground truth action
         nobs = nbatch['obs']
         gt_action = nbatch['action']
         data_source = nbatch['data_source'] if 'data_source' in nbatch else None
 
+        # use a dedicated (e.g. DDIM) scheduler for validation sampling if one
+        # was configured, instead of self.noise_scheduler (DDPM ancestral
+        # sampling, which injects fresh stochastic noise at every reverse
+        # step -- see the val_action_variance_ratio discussion on why that
+        # confounds the diagnostic). num_inference_steps only takes effect
+        # here, via set_timesteps -- self.noise_scheduler's default step count
+        # (all of num_train_timesteps) is untouched, since that path isn't
+        # exercised at all when val_noise_scheduler is set.
+        val_scheduler = self.val_noise_scheduler
+        if val_scheduler is not None:
+            val_scheduler.set_timesteps(globals.CONFIG.num_inference_steps)  # type:ignore
+
         # denoise
-        nresult = self.predict_action(nobs, task_id=task_id, data_source=data_source)
-        
+        nresult = self.predict_action(nobs, task_id=task_id, data_source=data_source, noise_scheduler=val_scheduler)
+
         # extract the predicted action
         pred_action = nresult['naction_pred']
         
@@ -848,9 +1054,197 @@ class DiffusionModel(BaseImagePolicy):
                                 globals.LOGGER.log_one(
                                     f"val_action_mse/subtask_{int(sid)}", per_sample_mse[subtask_mask].mean())
 
+        # variance ratio: how much of the ground-truth actions' own variance
+        # the predictions actually reproduce. A policy that's collapsed
+        # toward predicting something close to the dataset mean/mode
+        # regardless of input can still show a fine aggregate MSE, but its
+        # OWN predictions will barely vary across different observations
+        # while the true demonstrated actions do -- ratio near 0 means "flat,
+        # non-responsive prediction"; near 1 means "predictions vary about as
+        # much as the real data does".
+        #
+        # IMPORTANT CAVEAT (see _get_full_val_gt_action_var's docstring and
+        # the conversation this was built from): predict_action runs a full
+        # stochastic reverse-diffusion sample, not a deterministic point
+        # estimate, so its output variance also includes generative sampling
+        # noise on top of any genuine responsiveness to the observation --
+        # unlike a deterministic regressor, there's no guarantee this ratio
+        # stays <= 1, and a HIGH ratio does NOT by itself rule out collapse
+        # (a model that ignores the observation and just adds noise around a
+        # fixed point can still show ratio > 1). A LOW ratio (near 0) is
+        # still a clean, sufficient signal of collapse either way. To
+        # actually confirm/rule out "static pose" collapse, decompose this
+        # further: repeat-sample several DIFFERENT real observations many
+        # times each, average each observation's samples to cancel out pure
+        # sampling noise, then check whether THOSE per-observation means vary
+        # across observations (collapsed if not) and correlate with the true
+        # target position (confirms it's tracking the right thing, not just
+        # varying for some unrelated reason). This ratio alone is a
+        # screening tool, not a final verdict.
+        with torch.no_grad():
+            full_val_gt_var = self._get_full_val_gt_action_var(rb_id, batch_loader)
+
+            def _log_variance_ratio(label, pred, gt):
+                if pred.shape[0] < 2:
+                    return
+                pred_var = pred.var(dim=0)
+                # prefer the full-val-set variance (computed once, over every
+                # held-out episode) over this call's own (possibly tiny,
+                # low-diversity) batch/group slice, when available
+                gt_var = full_val_gt_var if full_val_gt_var is not None else gt.var(dim=0)
+                ratio = pred_var / gt_var.clamp(min=1e-8)
+                key = f"{rb_id}_{label}" if rb_id else label
+                globals.LOGGER.log_one(f"val_action_variance_ratio/{key}", ratio.mean())
+
+            _log_variance_ratio("all", pred_action, gt_action)
+
+            if isinstance(task_id, torch.Tensor):
+                task_id_flat = torch.reshape(task_id, [-1])
+                for tid in torch.unique(task_id_flat).tolist():
+                    mask = task_id_flat == tid
+                    if mask.sum() > 1:
+                        _log_variance_ratio(f"task_{tid}", pred_action[mask], gt_action[mask])
+
+                if 'subtask_id' in nbatch:
+                    subtask_id_flat = torch.reshape(nbatch['subtask_id'], [-1])
+                    for sid in torch.unique(subtask_id_flat).tolist():
+                        mask = subtask_id_flat == sid
+                        if mask.sum() > 1:
+                            _log_variance_ratio(f"subtask_{int(sid)}", pred_action[mask], gt_action[mask])
+
+            if data_source is not None and isinstance(data_source, torch.Tensor):
+                ds_flat = torch.reshape(data_source, [-1]).long()
+                for ds in torch.unique(ds_flat).tolist():
+                    mask = ds_flat == ds
+                    if mask.sum() > 1:
+                        _log_variance_ratio(f"ds{ds}", pred_action[mask], gt_action[mask])
+
+        # alignment-direction check: does the predicted relative palm-xyz
+        # action point toward THIS episode's own final palm pose -- a
+        # no-ground-truth-needed proxy for "the true aligned target
+        # position" (assumes the episode's last timestep reflects a
+        # successfully completed alignment), used because real data has no
+        # recorded pellet-location label the way sim does. Unlike
+        # val_action_variance_ratio, this checks DIRECTION against a
+        # concrete target, not just "does it vary at all" -- see the
+        # conversation this was built from for why that distinction matters.
+        #
+        # The action is relative to the CURRENT palm pose at the
+        # observation's own timestep (rel_palm = future_palm - current_palm,
+        # see AIETAlignmentSim3Sampler.get_action_trajectory), so
+        # naction_pred's xyz is ALREADY a delta from the current pose -- only
+        # the comparison target (final_xyz - current_xyz) needs constructing,
+        # never subtract anything further from the prediction itself.
+        # this whole check has several silent-no-op guards (missing
+        # normalizer, empty mask, etc.) that previously gave zero visible
+        # signal when they tripped -- log every stage's status explicitly
+        # so a run where the metric never appears is diagnosable from wandb
+        # alone, instead of guessing blind.
+        diag_key = rb_id if rb_id else "unknown_rb_id"
+        globals.LOGGER.log_one(f"diagnostics/alignment_check_{diag_key}_reached", 1.0)
+        if self.check_alignment_direction and 'ep_id' in nbatch and batch_loader is not None:
+            with torch.no_grad():
+                try:
+                    final_xyz_map = self._get_episode_final_palm_xyz(rb_id)
+                    obs_normalizer = self._get_field_normalizer(batch_loader, ('obs', 'palm_pose_xyz_rpy'))
+                    action_normalizer = self._get_field_normalizer(batch_loader, ('action',))
+                    globals.LOGGER.log_one(
+                        f"diagnostics/alignment_check_{diag_key}_final_xyz_map_available",
+                        1.0 if final_xyz_map is not None else 0.0)
+                    globals.LOGGER.log_one(
+                        f"diagnostics/alignment_check_{diag_key}_normalizers_available",
+                        1.0 if (obs_normalizer is not None and action_normalizer is not None) else 0.0)
+                    if (final_xyz_map is not None and obs_normalizer is not None
+                            and action_normalizer is not None and 'palm_pose_xyz_rpy' in nobs):
+                        ep_id_flat = torch.reshape(nbatch['ep_id'], [-1])
+                        known = [float(e.item()) in final_xyz_map for e in ep_id_flat]
+                        known_mask = torch.tensor(known, device=ep_id_flat.device)
+
+                        # one-time raw dump: if ep_known_count is stuck at 0
+                        # despite final_xyz_map being non-empty, this is the
+                        # fastest way to see WHY -- print a few actual
+                        # per-sample ep_id values next to a few of the
+                        # cached map's keys, so a scale/precision/off-by-
+                        # something mismatch is visible directly instead of
+                        # guessed at.
+                        if not any(known) and not getattr(self, f'_alignment_debug_dumped_{diag_key}', False):
+                            setattr(self, f'_alignment_debug_dumped_{diag_key}', True)
+                            sample_ep_ids = ep_id_flat[:5].tolist()
+                            sample_map_keys = list(final_xyz_map.keys())[:5]
+                            logging.getLogger(__name__).warning(
+                                f"[alignment-direction debug, rb_id={rb_id}] no ep_id matched "
+                                f"final_xyz_map (size={len(final_xyz_map)}). "
+                                f"sample nbatch['ep_id'] values: {sample_ep_ids} -- "
+                                f"sample final_xyz_map keys: {sample_map_keys}")
+                        globals.LOGGER.log_one(
+                            f"diagnostics/alignment_check_{diag_key}_ep_known_count", float(known_mask.sum()))
+
+                        # restrict to alignment-relevant samples ONLY -- an
+                        # episode's final palm pose is only a meaningful proxy
+                        # for "the true aligned position" for alignment
+                        # episodes; a normal (non-alignment) episode's last
+                        # timestep reflects the end of a whole pick-place-pour
+                        # sequence, not an alignment endpoint. subtask_id==1
+                        # marks real alignment-focused frames (see
+                        # AIETErlenmeyerFlaskSampler); sim_alignment has no
+                        # real subtask_id concept (always falls back to 0) but
+                        # is 100% alignment data by construction, so
+                        # data_source==1 (sim) counts unconditionally.
+                        if data_source is not None and isinstance(data_source, torch.Tensor):
+                            is_sim = torch.reshape(data_source, [-1]).long() == 1
+                        else:
+                            is_sim = torch.zeros_like(known_mask, dtype=torch.bool)
+                        if 'subtask_id' in nbatch:
+                            is_real_alignment = torch.reshape(nbatch['subtask_id'], [-1]).long() == 1
+                        else:
+                            is_real_alignment = torch.zeros_like(known_mask, dtype=torch.bool)
+                        known_mask = known_mask & (is_sim | is_real_alignment)
+                        globals.LOGGER.log_one(
+                            f"diagnostics/alignment_check_{diag_key}_final_mask_count", float(known_mask.sum()))
+
+                        if known_mask.any():
+                            # (B, n_obs_steps, 6) -> (B, 6), raw physical units
+                            palm_normed = nobs['palm_pose_xyz_rpy'].reshape(nobs['palm_pose_xyz_rpy'].shape[0], -1)
+                            current_xyz_raw = obs_normalizer.unnormalize(palm_normed)[known_mask, :3]
+
+                            final_xyz_raw = torch.stack([
+                                final_xyz_map[float(e.item())] for e in ep_id_flat[known_mask]
+                            ]).to(current_xyz_raw.device, current_xyz_raw.dtype)
+
+                            d_true_raw = final_xyz_raw - current_xyz_raw  # (K,3)
+                            # pad to the 7-dim action layout (xyz + rpy + gripper) so
+                            # the action normalizer (fit on that 7-dim shape) applies;
+                            # rpy/gripper padding is discarded right after
+                            padded = torch.cat(
+                                [d_true_raw, torch.zeros(d_true_raw.shape[0], 4,
+                                                          device=d_true_raw.device, dtype=d_true_raw.dtype)],
+                                dim=-1)
+                            d_true_normed_xyz = action_normalizer.normalize(padded)[:, :3]
+
+                            # furthest-ahead offset in the predicted chunk -- the
+                            # model's most-committed near-term intention
+                            pred_xyz = pred_action[known_mask, -1, :3]
+
+                            cos_sim = F.cosine_similarity(pred_xyz, d_true_normed_xyz, dim=-1, eps=1e-8)
+                            key = f"{rb_id}_all" if rb_id else "all"
+                            globals.LOGGER.log_one(f"val_alignment_direction_cos_sim/{key}", cos_sim.mean())
+
+                            if data_source is not None and isinstance(data_source, torch.Tensor):
+                                ds_known = torch.reshape(data_source, [-1])[known_mask]
+                                for ds in torch.unique(ds_known).tolist():
+                                    ds_mask = ds_known == ds
+                                    if ds_mask.any():
+                                        ds_key = f"{rb_id}_ds{int(ds)}" if rb_id else f"ds{int(ds)}"
+                                        globals.LOGGER.log_one(
+                                            f"val_alignment_direction_cos_sim/{ds_key}", cos_sim[ds_mask].mean())
+                except Exception as e:
+                    globals.LOGGER.log_one(f"diagnostics/alignment_check_{diag_key}_exception", 1.0)
+                    logging.getLogger(__name__).warning(
+                        f"alignment-direction check failed for rb_id={rb_id}, skipping this batch: {e}")
+
         # move to cpu
         action_mse_error = mse.item()
-        
+
         return action_mse_error
     
     def ActionRelativeToState(self, nbatch0, inference=False):
@@ -1007,7 +1401,7 @@ class DiffusionModel(BaseImagePolicy):
         do_diagnostics = self.model_type == 'dexnex_transformer' and utils.StepFreqTrigger(self.diagnostics_every_n_steps)
 
         # Predict the noise residual
-        pred = self.model(noisy_trajectory, timesteps, task_id,
+        pred = self._get_forward_model()(noisy_trajectory, timesteps, task_id,
             local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source, log_attn=do_diagnostics)
 
         # tree?
@@ -1129,6 +1523,56 @@ class DiffusionModel(BaseImagePolicy):
                         for name, ws in weight_by_name_bucket.items():
                             globals.LOGGER.log_one(
                                 f"diagnostics/cross_attn_weight_{name}_bucket_{b}", torch.stack(ws).mean())
+
+                    # same per-token breakdown, but split by data_source (sim vs
+                    # real) -- lets you see e.g. whether vision-token attention
+                    # is declining for real specifically (vs uniformly across
+                    # both sources), rather than only a batch-wide average that
+                    # can hide one source's collapse behind the other's. None
+                    # if this forward call wasn't given a data_source (e.g. a
+                    # single-source batch/eval path).
+                    attn_data_source = transformer.last_cross_attn_data_source
+                    if attn_data_source is not None:
+                        ds_flat = torch.reshape(attn_data_source, [-1]).long()
+                        for ds in torch.unique(ds_flat).tolist():
+                            ds_mask = ds_flat == ds
+                            if not ds_mask.any():
+                                continue
+                            weight_by_name_ds = {}
+                            for name, w in zip(transformer.last_cross_attn_token_names,
+                                                weight_by_token[ds_mask].mean(dim=0)):
+                                weight_by_name_ds.setdefault(name, []).append(w)
+                            for name, ws in weight_by_name_ds.items():
+                                globals.LOGGER.log_one(
+                                    f"diagnostics/cross_attn_weight_{name}_ds{ds}", torch.stack(ws).mean())
+
+                    # for droppable tokens only: split attention into "kept"
+                    # (real value present) vs "dropped" (zeroed placeholder,
+                    # still competing in the softmax -- see
+                    # last_keep_mask's docstring). A droppable token's
+                    # overall/per-source average above conflates these two
+                    # very different cases; at high p_drop_token this matters
+                    # a lot, since the placeholder dominates how often that
+                    # token's slot is even present with real content.
+                    last_keep_mask = getattr(transformer, 'last_keep_mask', None)
+                    if last_keep_mask is not None:
+                        keep_names = transformer.last_keep_mask_token_names
+                        for name in set(transformer.droppable_token_keys):
+                            idxs = [i for i, n in enumerate(keep_names) if n == name]
+                            if not idxs:
+                                continue
+                            # a patch-group name can span multiple columns (one
+                            # per patch); a sample counts as "kept" for this
+                            # name if any of its columns survived (they're all
+                            # dropped/kept together per the eligible-mask draw
+                            # sharing the same per-sample-per-column rand, so
+                            # in practice these agree, but check `any` to be safe)
+                            token_keep_mask = last_keep_mask[:, idxs].any(dim=-1)
+                            for label, sample_mask in (("kept", token_keep_mask), ("dropped", ~token_keep_mask)):
+                                if not sample_mask.any():
+                                    continue
+                                w = weight_by_token[sample_mask][:, idxs].mean()
+                                globals.LOGGER.log_one(f"diagnostics/cross_attn_weight_{name}_{label}", w)
 
                 task_stats = transformer.task_embedding_stats()
                 if task_stats is not None:

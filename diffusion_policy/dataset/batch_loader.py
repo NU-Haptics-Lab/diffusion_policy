@@ -365,16 +365,18 @@ class BatchLoader:
                  train_or_val: str,
                  use_dataloader: bool = True,
                  strict: bool = True,
-                 
+                 normalizer_fit_rb_ids: 'list[str] | None' = None, # which rb_id(s) to pool together when FITTING this BatchLoader's normalizer stats (see init_normalizers/get_fitted_nns). None (default) = just this loader's own rb_id, i.e. an independent per-source fit -- the correct default for genuinely distinct-schema sources. Pass the SAME list (e.g. every cotrain rb_id) on every BatchLoader instance that should share one normalizer, so they agree on one explicit, deterministic cache key instead of accidentally sharing (or not) based on class name + construction order -- see init_normalizers's docstring for the bug this replaces.
+
             ):
         self.rb_id = rb_id
         self.train_or_val = train_or_val
         self.use_dataloader = use_dataloader
         self.strict = strict
-        
+        self.normalizer_fit_rb_ids = list(normalizer_fit_rb_ids) if normalizer_fit_rb_ids else [rb_id]
+
         self.dataloaders = None #type:ignore
         self.iterator = None
-        
+
         self.is_setup = False
         
     def __len__(self):
@@ -413,8 +415,28 @@ class BatchLoader:
         
         self.is_setup = True
     
-    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = ""):
-        nn.fit(data, mode='limits')
+    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = "", mode = 'limits'):
+        """
+        mode='limits' (default): scale+offset map the data's observed
+        min/max exactly onto [-1, 1] -- appropriate for obs keys, where you
+        want the full observed range representable.
+
+        mode='gaussian': scale+offset map to (roughly) unit variance/zero
+        mean instead (see normalizer.py's _fit -- actually 1.5 std, so ~87%
+        of a normal distribution lands inside [-1, 1], not a hard min/max
+        clamp). Better matches the actual noising process diffusion trains
+        against (DDPM's forward process adds Gaussian noise to the ACTION
+        target, so a target distribution that's already closer to Gaussian
+        is a more consistent match than one artificially stretched to fill
+        [-1, 1] by its rarest outlier). Only used for AIETErlenmeyerFlask4BatchLoader's
+        action normalizer currently -- min/max outlier values under this mode
+        can legitimately fall outside [-1, 1] (unlike 'limits'), which
+        interacts with common_noise_scheduler's clip_sample: true (clips the
+        model's predicted x0 to [-1, 1] during reverse sampling) -- a
+        long-tailed action's true target may get clipped there; worth
+        revisiting if that turns out to matter.
+        """
+        nn.fit(data, mode=mode)
         
         # print the results for min max
         input_stats_dict = nn.get_input_stats()
@@ -552,22 +574,43 @@ class BatchLoader:
 
         Fitting (get_fitted_nns) requires the real dataset/sampler machinery
         and can be slow (e.g. AIETAlignmentSim3BatchLoader's action
-        normalizer walks every episode) -- so the first time each BatchLoader
-        subclass actually fits, its stats are cached in
-        globals.NORMALIZER_STATE_DICTS (checkpointed by TopKCheckpointManager,
-        see checkpointer.py). Later instantiations of the same class -- e.g.
-        default_batch_loader during standalone testing/inference, after a
-        checkpoint has been loaded -- reuse those cached stats instead of
-        re-fitting from scratch.
+        normalizer walks every episode) -- so the first time a given
+        (class, normalizer_fit_rb_ids) combination actually fits, its stats
+        are cached in globals.NORMALIZER_STATE_DICTS (checkpointed by
+        TopKCheckpointManager, see checkpointer.py). Later instantiations
+        sharing that same combination -- e.g. default_batch_loader during
+        standalone testing/inference, after a checkpoint has been loaded, or
+        several cotrain streams deliberately sharing one normalizer -- reuse
+        those cached stats instead of re-fitting from scratch.
+
+        cache_key is (class name, sorted normalizer_fit_rb_ids) -- explicit
+        and deterministic, NOT dependent on which BatchLoader instance
+        happens to call setup() first. This replaces a previous bug: caching
+        by class name ALONE meant every BatchLoader subclass instance
+        (regardless of its own rb_id) silently shared whichever instance's
+        fit ran first -- for cotrains reusing one BatchLoader class across
+        multiple rb_ids (e.g. AIETErlenmeyerFlask4BatchLoader across
+        erlenmeyer/erlenmeyer_align/sim_alignment), this happened to already
+        match the desired "share one normalizer" outcome, purely because
+        globals.py's setup order always constructs default_batch_loader (a
+        single fixed rb_id) before the per-stream BatchLoaders -- but it was
+        an accident of construction order + shared class name, not a
+        deliberate, robust guarantee: a future subclass split, reordering, or
+        a stray rb_id-specific override would silently break it with no
+        error. normalizer_fit_rb_ids (constructor param) now makes the
+        intended sharing (or non-sharing) explicit in the yaml instead.
         """
-        cache_key = type(self).__name__
+        cache_key = f"{type(self).__name__}:{','.join(sorted(self.normalizer_fit_rb_ids))}"
 
         if cache_key in globals.NORMALIZER_STATE_DICTS:
             nns = self.get_static_nns()
             self._apply_normalizer_state_dict(nns, globals.NORMALIZER_STATE_DICTS[cache_key])
+            print(f"[BatchLoader:{self.rb_id}] reusing cached normalizer stats for group '{cache_key}'")
         else:
             nns = self.get_fitted_nns()
             globals.NORMALIZER_STATE_DICTS[cache_key] = self._flatten_normalizers(nns)
+            print(f"[BatchLoader:{self.rb_id}] fit NEW normalizer stats for group '{cache_key}' "
+                  f"(pooled from rb_ids={self.normalizer_fit_rb_ids})")
 
         self.nested_data_array.set_normalizers(nns)
         
@@ -1616,13 +1659,16 @@ class AIETErlenmeyerFlask4BatchLoader(BatchLoader):
     generalizing AIETAlignmentSim3BatchLoader's fitting logic from the
     hardcoded rb_id 'all' to self.rb_id suffices for every source.
 
-    gripper_value and palm_pose_xyz_rpy are both fit per-rb_id (each source
-    has its own precomputed gripper_value array -- see add_gripper_value.py --
-    and its own palm_pose_xyz_rpy scale, fit per-dimension so xyz translation
-    and rpy rotation each get their own independent [-1,1] range rather than
-    being squashed by one shared scale across mismatched units). The
-    relative-palm-pose+gripper action is fit the same way
-    AIETAlignmentSim3BatchLoader does: delegate to this rb_id's own sampler's
+    gripper_value and palm_pose_xyz_rpy, and the relative-palm-pose+gripper
+    action, are fit by pooling every rb_id in normalizer_fit_rb_ids together
+    (defaults to just [self.rb_id], an independent per-source fit -- pass the
+    same explicit list on multiple streams' BatchLoaders in the yaml to make
+    them deliberately share one normalizer instead, e.g. aiet_erlenmeyer_flask_8's
+    normalizer_fit_rb_ids: [erlenmeyer, erlenmeyer_align, sim_alignment] on
+    all three cotrain streams' batch_loaders AND default_batch_loader, so
+    every one of them ends up on the exact same cache_key regardless of which
+    instance's setup() happens to run first -- see BatchLoader.init_normalizers's
+    docstring for the accidental-sharing bug this replaces). Delegates to
     get_all_action_components (NOT hand-sliced from the raw replay buffer --
     see that method's docstring for why). Every other obs key (the two
     patch-feature keys, biotac_lh) is identity-normalized, same "don't
@@ -1652,7 +1698,7 @@ class AIETErlenmeyerFlask4BatchLoader(BatchLoader):
 
         nns['obs'] = obs
 
-        for key in ['task_id', 'subtask_id', 'data_source']:
+        for key in ['task_id', 'subtask_id', 'data_source', 'ep_id']:
             nns[key] = get_identity_normalizer_from_stat(
                 {'min': np.array([0], dtype=np.float32)}
             )
@@ -1662,41 +1708,65 @@ class AIETErlenmeyerFlask4BatchLoader(BatchLoader):
     def get_all_action_components(self):
         """
         Same delegation as AIETAlignmentSim3BatchLoader.get_all_action_components,
-        generalized from the hardcoded rb_id 'all' to self.rb_id -- each of
-        the 3 cotrain sources fits its own action normalizer from its own
-        sampler's episodes.
+        generalized from the hardcoded rb_id 'all' to self.normalizer_fit_rb_ids
+        -- pools EVERY rb_id in that list (defaults to just [self.rb_id], an
+        independent per-source fit) into one action normalizer. Pass the same
+        normalizer_fit_rb_ids on multiple cotrain streams' BatchLoaders (see
+        the yaml) to fit one shared normalizer across all of them instead.
         """
-        dls: TrainAndVal = globals.DATALOADERS[self.rb_id]  # type: ignore
-        sampler = dls.sampler
-
         rel_palms = []
         grips = []
-        for ep in sampler.get_ep_list():
-            rel_palm, grip = ep.get_all_action_components()
-            rel_palms.append(rel_palm)
-            grips.append(grip)
+        for rb_id in self.normalizer_fit_rb_ids:
+            dls: TrainAndVal = globals.DATALOADERS[rb_id]  # type: ignore
+            for ep in dls.sampler.get_ep_list():
+                rel_palm, grip = ep.get_all_action_components()
+                rel_palms.append(rel_palm)
+                grips.append(grip)
 
         return np.concatenate(rel_palms, axis=0), np.concatenate(grips, axis=0)
 
     def get_fitted_nns(self):
         nns = self.get_static_nns()
 
-        rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]  # type: ignore
-
         for obs_key in self.OBS_KEYS_TO_FIT:
-            if obs_key in rb:
-                # rb[obs_key] (gripper_value) is 1-D [T] -- fit_nn's reshape(-1, dim)
-                # takes dim from the LAST axis, which for a 1-D array is T itself,
-                # not the 1-element feature dim. Add the trailing axis explicitly.
-                self.fit_nn(rb[obs_key][:][:, None], nns['obs'][obs_key], obs_key)
+            # pool this obs_key's raw values across every rb_id in
+            # normalizer_fit_rb_ids that actually carries it -- e.g. sim's
+            # zarr has palm_pose_xyz_rpy/gripper_value same as the real legs,
+            # but a source missing a key entirely (rather than just having a
+            # different range) is silently skipped for that key, same as the
+            # original single-rb_id behavior's `if obs_key in rb` guard.
+            pooled = []
+            for rb_id in self.normalizer_fit_rb_ids:
+                rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[rb_id]  # type: ignore
+                if obs_key in rb:
+                    # rb[obs_key] (gripper_value) is 1-D [T] -- fit_nn's reshape(-1, dim)
+                    # takes dim from the LAST axis, which for a 1-D array is T itself,
+                    # not the 1-element feature dim. Add the trailing axis explicitly.
+                    pooled.append(np.asarray(rb[obs_key][:])[:, None])
+            if pooled:
+                self.fit_nn(np.concatenate(pooled, axis=0), nns['obs'][obs_key], obs_key)
 
-        if "palm_pose_xyz_rpy" in rb and "gripper_value" in rb:
+        # action is fit from get_all_action_components (already pools across
+        # normalizer_fit_rb_ids), gated on the FIRST rb_id having both action
+        # components -- same "does this cotrain even have palm/gripper" guard
+        # as the original single-rb_id version, just checked once rather than
+        # per source (all normalizer_fit_rb_ids members are expected to share
+        # the same schema when they're being fit together in the first place).
+        rb0: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.normalizer_fit_rb_ids[0]]  # type: ignore
+        if "palm_pose_xyz_rpy" in rb0 and "gripper_value" in rb0:
             rel_palm, grip = self.get_all_action_components()
             palm_nn = get_identity_normalizer_from_stat({'min': np.zeros(6, dtype=np.float32)})
-            self.fit_nn(rel_palm, palm_nn, "rel_palm_pose_xyz_rpy")
+            # 'gaussian', not 'limits' -- the action is what diffusion actually
+            # noises/denoises; a target distribution closer to zero-mean/unit-
+            # variance is a more consistent match for that Gaussian forward
+            # process than one min/max-stretched to fill [-1, 1] by its
+            # rarest outlier (obs keys stay 'limits', fit_nn's default, since
+            # they're not what's being noised). See fit_nn's docstring for
+            # the clip_sample interaction this trades in.
+            self.fit_nn(rel_palm, palm_nn, "rel_palm_pose_xyz_rpy", mode='gaussian')
 
             grip_nn = get_identity_normalizer_from_stat({'min': np.zeros(1, dtype=np.float32)})
-            self.fit_nn(grip[:, None], grip_nn, "gripper_value (action)")
+            self.fit_nn(grip[:, None], grip_nn, "gripper_value (action)", mode='gaussian')
 
             for param_name in ["scale", "offset"]:
                 nns['action'].params_dict[param_name] = torch.cat([

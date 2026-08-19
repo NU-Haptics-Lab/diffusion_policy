@@ -17,6 +17,22 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
     # patch embedding/spatial-softmax layers.
     PATCH_GRID_KEYS = ["wrist_cam_patch_features", "overhead_roi_patch_features"]
 
+    # obs keys that are precomputed derived signals rather than a literal-name
+    # rb array: fixed-tau (no learning) spatial-softmax keypoint descriptors
+    # over the full 14x14 patch grid -- see
+    # add_spatial_softmax_keypoints.py -- computed once offline instead of
+    # from raw patch grids at train time (much smaller to load: [T, 384, 2]
+    # vs [T, 14, 14, 384]). Used in place of the corresponding
+    # PATCH_GRID_KEYS entry when a config's obs_keys_to_load asks for
+    # "*_keypoints" instead of the raw "*_patch_features" key -- see
+    # aiet_erlenmeyer_flask_7.yaml. Independent of patch_grid_size (the
+    # offline script always reduces the native 14x14 grid, never the
+    # downsampled 7x7 one).
+    KEYPOINT_RB_KEY_MAP = {
+        "wrist_cam_keypoints": "wrist_cam_patch_features_spatial_softmax_xy",
+        "overhead_roi_keypoints": "overhead_roi_patch_features_spatial_softmax_xy",
+    }
+
     def get_action_trajectory(self, ep_idx, key):
         indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx  # type: ignore
         return self.indices.get_sequence_by_train_indices_and_key(indices, key)
@@ -28,6 +44,8 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
         return obs_sample
 
     def resolve_rb_key(self, obs_key):
+        if obs_key in self.KEYPOINT_RB_KEY_MAP:
+            return self.KEYPOINT_RB_KEY_MAP[obs_key]
         if obs_key in self.PATCH_GRID_KEYS and getattr(globals.CONFIG, "patch_grid_size", 14) == 7:  # type: ignore
             return obs_key + "_7x7"
         return obs_key
@@ -58,6 +76,15 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
             sample["subtask_id"] = self.get_key_sample("subtask_id", ep_idx)
         except KeyError:
             sample["subtask_id"] = np.array([0], dtype=np.float32)
+
+        # this episode's identity (rb_episode_end -- unique per episode within
+        # a given rb_id, used as the key in DatasetSampler.ep_samplers too).
+        # Lets a diagnostic look up e.g. "this episode's final palm pose" as a
+        # proxy for the true alignment target, without needing a ground-truth
+        # pellet-location label (see DiffusionModel's alignment-direction
+        # check). Plain identity-normalized scalar, same treatment as
+        # task_id/subtask_id/data_source.
+        sample["ep_id"] = np.array([self.rb_episode_end], dtype=np.float32)
 
         return sample
 

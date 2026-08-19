@@ -1,3 +1,5 @@
+import numpy as np
+
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 
 class ReplayBufferLoader:
@@ -30,8 +32,17 @@ class ReplayBufferLoader:
                 rb = ReplayBuffer.create_from_path(val, mode=self.modes[key])
                 self.rbs[key] = rb
                 
-                print(key + ": replay buffer nb datapoints: ", self.rbs[key].n_steps) 
-                print(key + ": replay buffer nb episodes: ", self.rbs[key].n_episodes) 
+                print(key + ": replay buffer nb datapoints: ", self.rbs[key].n_steps)
+                print(key + ": replay buffer nb episodes: ", self.rbs[key].n_episodes)
+
+                for id_key in ("task_id", "subtask_id"):
+                    if id_key not in rb:
+                        continue
+                    ids = np.asarray(rb[id_key])
+                    values, counts = np.unique(ids, return_counts=True)
+                    print(f"{key}: datapoints per {id_key}:")
+                    for v, c in zip(values, counts):
+                        print(f"    {id_key}={v}: {c}")
             else:
                 rb = None
                 self.rbs[key] = rb

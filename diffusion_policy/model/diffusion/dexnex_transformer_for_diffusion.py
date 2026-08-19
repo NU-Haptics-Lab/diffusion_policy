@@ -815,9 +815,10 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         log_attn: if True, captures the last decoder layer's cross-attention
             weights (trajectory -> obs memory) for diagnostics; see
             `last_cross_attn_entropy` / `last_cross_attn_token_names` /
-            `last_cross_attn_weight_by_token` / `last_cross_attn_timesteps`
-            afterwards -- the last one lets you bucket per-token attention by
-            noise level instead of only seeing a batch-wide average.
+            `last_cross_attn_weight_by_token` / `last_cross_attn_timesteps` /
+            `last_cross_attn_data_source` afterwards -- the latter two let you
+            bucket per-token attention by noise level and/or data_source
+            (sim vs real) instead of only seeing a batch-wide average.
         output: (B,T,input_dim)
         """
         # 1. time
@@ -889,6 +890,23 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         assert cond_embeddings is not None, \
             "at least one non-timestep cond source (task_id/cond_keys/patch groups) is required when use_adaln_timestep=True"
 
+        # accumulates both masking mechanisms below into a single boolean
+        # key_padding_mask (True = excluded), on top of (not instead of) the
+        # existing embedding-zeroing. Zeroing alone stops gradient flow into
+        # an excluded token's source projection, but does NOT remove it from
+        # the attention softmax -- a zeroed-but-present token still gets a
+        # real (non -inf) logit and can absorb attention weight as a fixed,
+        # content-free "sink" instead of that capacity going to genuinely
+        # present tokens (confirmed empirically: with p_drop_token=0.9,
+        # attention to a token's real value decreased as intended, but
+        # attention to its DROPPED placeholder increased, while vision's
+        # attention kept dropping too -- the network was routing freed-up
+        # capacity into the cheap placeholder instead of vision). Passing
+        # this as src_key_padding_mask/memory_key_padding_mask gives excluded
+        # tokens a -inf logit, so they get exactly 0 softmax weight and can't
+        # be used as an attention sink at all.
+        padding_mask = None
+
         if data_source is not None and self.data_source_token_allow_matrix is not None:
             # deterministic, always-on masking (unlike p_drop_token): some
             # tokens are structurally absent for a given data source, not
@@ -901,6 +919,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             ds = torch.reshape(data_source, [-1]).long()  # (B,), values in [0, num_data_sources)
             avail = self.data_source_token_allow_matrix[ds].to(cond_embeddings.dtype)  # (B, T_cond)
             cond_embeddings = cond_embeddings * avail.unsqueeze(-1)
+            padding_mask = avail < 0.5
 
         if self.training and self.p_drop_token > 0:
             eligible = torch.tensor(
@@ -910,6 +929,29 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             rand = torch.rand(cond_embeddings.shape[0], cond_embeddings.shape[1], device=cond_embeddings.device)
             keep_mask = (rand >= self.p_drop_token) | ~eligible.unsqueeze(0)
             cond_embeddings = cond_embeddings * keep_mask.unsqueeze(-1).to(cond_embeddings.dtype)
+            # stashed so cross-attn diagnostics can split "attention to a
+            # token's real value" from "attention to its zeroed placeholder"
+            # -- dropping a token doesn't remove it from the sequence (same
+            # feature-zeroing-not-masking gap as data_source_token_allow_matrix),
+            # so a token's average logged attention weight otherwise conflates
+            # both cases, which matters a lot at high p_drop_token (e.g. 0.9,
+            # where the placeholder is present ~90% of the time).
+            self.last_keep_mask = keep_mask.detach()  # (B, T_cond)
+            self.last_keep_mask_token_names = list(cond_token_names)
+            padding_mask = ~keep_mask if padding_mask is None else (padding_mask | ~keep_mask)
+
+        if padding_mask is not None:
+            # timestep (when it's a token at all, i.e. not use_adaln_timestep)
+            # is never droppable and never excluded by any current config, so
+            # it always survives as the "at least one visible token" anchor
+            # -- an all-True row here would make every logit -inf and produce
+            # NaN from softmax, so this assert catches a misconfiguration
+            # (e.g. excluded_token_keys_by_data_source targeting timestep)
+            # before it silently corrupts training.
+            assert not (padding_mask.all(dim=-1)).any(), \
+                "at least one cond token must remain unmasked per sample -- check " \
+                "excluded_token_keys_by_data_source/droppable_token_keys for a data source " \
+                "or dropout draw that excludes every token at once"
 
         tc = cond_embeddings.shape[1]
         cond_position_embeddings = self.cond_pos_emb[:, :tc, :]
@@ -917,10 +959,10 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         # the fused/efficient SDPA backward kernel has a known NaN-producing edge
         # case under near-saturated softmax; force the naive math backend for
         # stability. Negligible cost here since sequences are short.
-        
+
         # with sdpa_kernel(SDPBackend.MATH):
         #     memory = self.encoder(x_cond)
-        memory = self.encoder(x_cond)
+        memory = self.encoder(x_cond, src_key_padding_mask=padding_mask)
         
         
         # (B,T_cond,n_emb)
@@ -949,7 +991,8 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         #     )
         x = self.decoder(
             tgt=x,
-            memory=memory
+            memory=memory,
+            memory_key_padding_mask=padding_mask
         )
 
         if self.use_adaln_timestep:
@@ -971,6 +1014,13 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             # per token within each timestep bucket) instead of only seeing an
             # average across the whole batch's mix of noise levels
             self.last_cross_attn_timesteps = timesteps.detach()  # (B,)
+            # per-sample data_source, so callers can additionally break down
+            # last_cross_attn_weight_by_token by data_source (e.g. sim vs
+            # real) instead of only seeing an average across whatever mix of
+            # sources happened to be in this batch. None if this forward call
+            # wasn't given a data_source (e.g. a single-source batch loader
+            # that doesn't pass one).
+            self.last_cross_attn_data_source = data_source.detach() if data_source is not None else None
 
         # head
         x = self.ln_f(x)

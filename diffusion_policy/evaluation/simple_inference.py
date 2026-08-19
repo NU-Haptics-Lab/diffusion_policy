@@ -41,16 +41,31 @@ class SimpleInference:
         # save a handle
         self.batch_loader = globals.DEFAULT_BATCH_LOADER
 
-        # make the scheduler, hard-coded except prediction_type which callers
-        # may override via globals.CONFIG.prediction_type before calling setup()
-        self.noise_scheduler = DDIMScheduler(
-            beta_end=0.02,
-            beta_schedule="squaredcos_cap_v2",
-            beta_start=0.0001,
-            clip_sample=True,
-            num_train_timesteps=globals.CONFIG.common_noise_scheduler.num_train_timesteps, # type:ignore
-            prediction_type=getattr(globals.CONFIG.common_noise_scheduler, "prediction_type", "epsilon"),
-        )
+        # Prefer the checkpoint's own common_val_ddim_scheduler config node
+        # when present (added in aiet_erlenmeyer_flask_6+ yamls, used by
+        # get_val_action_mse_error for validation) -- hydra-instantiate it
+        # directly rather than hand-duplicating its fields below, so any
+        # field this inference stack doesn't yet know to copy (e.g.
+        # clip_sample_range, introduced in aiet_erlenmeyer_flask_8.yaml) is
+        # picked up automatically instead of silently diverging from what
+        # validation actually sampled with. Falls back to the old hardcoded
+        # construction for configs that don't define this node at all
+        # (flask_4/5, aiet_alignment_sim_3).
+        val_ddim_cfg = globals.CONFIG.get("common_val_ddim_scheduler", None)
+        if val_ddim_cfg is not None:
+            import hydra
+            self.noise_scheduler = hydra.utils.instantiate(val_ddim_cfg)
+        else:
+            # make the scheduler, hard-coded except prediction_type which callers
+            # may override via globals.CONFIG.prediction_type before calling setup()
+            self.noise_scheduler = DDIMScheduler(
+                beta_end=0.02,
+                beta_schedule="squaredcos_cap_v2",
+                beta_start=0.0001,
+                clip_sample=True,
+                num_train_timesteps=globals.CONFIG.common_noise_scheduler.num_train_timesteps, # type:ignore
+                prediction_type=getattr(globals.CONFIG.common_noise_scheduler, "prediction_type", "epsilon"),
+            )
         self.noise_scheduler.set_timesteps(globals.CONFIG.num_inference_steps) # type:ignore
 
         self.original_policy_noise_scheduler = None

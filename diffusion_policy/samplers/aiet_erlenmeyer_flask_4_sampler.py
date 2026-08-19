@@ -93,8 +93,26 @@ class AIETErlenmeyerFlask4SimSampler(AIETAlignmentSim3Sampler):
     excluded_token_keys_by_data_source).
     """
 
-    ZERO_FILL_KEYS = ["biotac_lh", "overhead_roi_patch_features"]
+    ZERO_FILL_KEYS = [
+        "biotac_lh", "overhead_roi_patch_features", "overhead_roi_keypoints",
+        "overhead_roi_keypoints_dinov3l",
+    ]
     NATIVE_WRIST_PATCH_KEY = "wrist_camera_patch_features"  # always 14x14 -- no _7x7 variant in combined.zarr
+    # precomputed fixed-tau spatial-softmax keypoints over NATIVE_WRIST_PATCH_KEY
+    # -- combined.zarr uses "wrist_camera_" (not "wrist_cam_") naming, so this
+    # can't go through the base class's KEYPOINT_RB_KEY_MAP. Assumes whatever
+    # offline script adds this to combined.zarr follows
+    # add_spatial_softmax_keypoints.py's f"{src_key}_spatial_softmax_xy"
+    # naming convention against NATIVE_WRIST_PATCH_KEY -- update this constant
+    # if that ends up named differently.
+    NATIVE_WRIST_KEYPOINT_KEY = "wrist_camera_patch_features_spatial_softmax_xy"
+    # dinov3-LARGE (1024-channel) counterpart, precomputed directly under this
+    # name in combined.zarr (unlike NATIVE_WRIST_KEYPOINT_KEY above, this one
+    # wasn't derived via add_spatial_softmax_keypoints.py's naming convention
+    # -- confirmed by inspecting the zarr directly). See
+    # aiet_erlenmeyer_flask_8.yaml, which cotrains with the real legs' own
+    # wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l.
+    NATIVE_WRIST_KEYPOINT_KEY_DINOV3L = "wrist_camera_keypoints_dinov3l"
 
     @staticmethod
     def _pool_2x2(patch_grid: np.ndarray) -> np.ndarray:
@@ -113,6 +131,10 @@ class AIETErlenmeyerFlask4SimSampler(AIETAlignmentSim3Sampler):
                 if getattr(globals.CONFIG, "patch_grid_size", 14) == 7:  # type: ignore
                     patch = self._pool_2x2(patch)
                 obs_sample[obs_key] = patch
+            elif obs_key == "wrist_cam_keypoints":
+                obs_sample[obs_key] = self.get_key_sample(self.NATIVE_WRIST_KEYPOINT_KEY, ep_idx)
+            elif obs_key == "wrist_cam_keypoints_dinov3l":
+                obs_sample[obs_key] = self.get_key_sample(self.NATIVE_WRIST_KEYPOINT_KEY_DINOV3L, ep_idx)
             else:
                 obs_sample[obs_key] = self.get_key_sample(obs_key, ep_idx)
         return obs_sample
@@ -120,7 +142,34 @@ class AIETErlenmeyerFlask4SimSampler(AIETAlignmentSim3Sampler):
     def get_sample(self, ep_idx):
         sample = super().get_sample(ep_idx)
         sample["data_source"] = np.array([1], dtype=np.float32)  # 1 = sim
+        # own dedicated task_id (distinct from the real legs' task_id==24),
+        # so the (now-enabled) task embedding gives the model an explicit,
+        # cheap signal to distinguish sim from real -- reusing task_id_emb
+        # rather than adding new AdaLN/token machinery for a data_source
+        # signal. num_tasks in the yaml must cover this id (>= 27).
+        sample["task_id"] = np.array([26], dtype=np.float32)
         return sample
 
     def get_constant_sample_fields(self):
-        return {"data_source": 1.0}
+        return {"data_source": 1.0, "task_id": 26.0}
+
+    def resolve_rb_key(self, obs_key):
+        """
+        Only matters for train_and_val._vectorized_load_dataset's fast-path
+        probe (obs_key_map), which calls this directly instead of
+        get_obs_sample -- get_obs_sample above is already correct on its own
+        without this override. Base class's KEYPOINT_RB_KEY_MAP would
+        resolve "wrist_cam_keypoints" to the WRONG name here (it assumes
+        "wrist_cam_" naming; combined.zarr uses "wrist_camera_"), so this
+        maps it explicitly instead of letting vectorization decline via a
+        confusing not-found KeyError. "overhead_roi_keypoints" resolves to
+        None like every other ZERO_FILL_KEYS entry -- see resolve_rb_key's
+        docstring (None == zero-fill placeholder).
+        """
+        if obs_key == "wrist_cam_keypoints":
+            return self.NATIVE_WRIST_KEYPOINT_KEY
+        if obs_key == "wrist_cam_keypoints_dinov3l":
+            return self.NATIVE_WRIST_KEYPOINT_KEY_DINOV3L
+        if obs_key in self.ZERO_FILL_KEYS:
+            return None
+        return super().resolve_rb_key(obs_key)

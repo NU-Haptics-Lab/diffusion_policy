@@ -822,13 +822,17 @@ class DatasetSampler:
             ep_sampler_class_str: str = "diffusion_policy.common.sarsa_sampler.EpisodeSampler", # I don't love this design
             use_cap_rewards = False,
             reward_cap = 50.0,
+            episode_filter_key = None, # raw replay-buffer key (e.g. "subtask_id") to filter whole episodes by, checked at each episode's first raw timestep. None = include every episode (default, InitAll's old behavior).
+            episode_filter_value = None, # only episodes whose episode_filter_key's first-timestep value equals this are included. Assumes the key is constant within an episode (true for e.g. subtask_id in task_24 -- see AIETErlenmeyerFlaskSampler).
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
         self.ep_sampler_class_str = ep_sampler_class_str
         self.use_cap_rewards = use_cap_rewards
         self.reward_cap = reward_cap
-        
+        self.episode_filter_key = episode_filter_key
+        self.episode_filter_value = episode_filter_value
+
         # convert text to class object using hydra
         self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class_str)
         
@@ -917,10 +921,31 @@ class DatasetSampler:
             
     def InitAll(self):
         n_eps = len(self.replay_buffer.episode_ends) #type:ignore
-        
-        ep_mask = np.ones(n_eps, dtype=bool)
-        
+
+        if self.episode_filter_key is not None:
+            ep_mask = self._compute_episode_filter_mask(n_eps)
+        else:
+            ep_mask = np.ones(n_eps, dtype=bool)
+
         self.Init(ep_mask)
+
+    def _compute_episode_filter_mask(self, n_eps):
+        """
+        Per-episode boolean mask: episode i is included iff
+        replay_buffer[episode_filter_key]'s value at episode i's FIRST raw
+        timestep equals episode_filter_value. Only meaningful when the
+        filter key is constant across an entire episode (e.g. task_24's
+        subtask_id, which marks whole dedicated alignment-focused episodes,
+        not a per-frame phase within a mixed episode -- checked empirically:
+        every episode containing any subtask_id==1 frame is subtask_id==1
+        for its entire length).
+        """
+        ends = np.asarray(self.replay_buffer.episode_ends) #type:ignore
+        assert len(ends) == n_eps
+        starts = np.concatenate([[0], ends[:-1]])
+        raw = np.asarray(self.replay_buffer[self.episode_filter_key]) #type:ignore
+        first_frame_values = raw[starts]
+        return first_frame_values == self.episode_filter_value
         
     def reinit_all(self):
         """

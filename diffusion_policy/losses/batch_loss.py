@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from collections import defaultdict
 
@@ -13,6 +14,31 @@ from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.sarsa_sampler import DatasetSampler, Indices
 from diffusion_policy.dataset.train_and_val import TrainAndVal
+
+
+# TEMPORARY profiling helper -- answers "is torch.compile worth it, or is the
+# 6 it/s bottleneck actually data-fetch/logging overhead?" (see
+# BatchLoss.compute_loss's timing/{rb_id}_* logging below). Remove once
+# that question is answered; not meant to be permanent instrumentation.
+# torch.cuda.synchronize() makes the measured boundary accurate (GPU work is
+# otherwise async and would leak into whichever section happens to call
+# .item()/.cpu() first), at the cost of adding real sync overhead of its own
+# -- fine for a temporary profiling pass, not something to leave on always.
+class _TimedSection:
+    def __init__(self, on_done):
+        self.on_done = on_done
+
+    def __enter__(self):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self.on_done(time.perf_counter() - self._t0)
+        return False
 
 from diffusion_policy.model.model import ModelEmaOptim
 from diffusion_policy.model.diffusion_ql.attractor import Attractor
@@ -339,29 +365,32 @@ class BatchLoss:
         """
         Train for one batch.
         """
-        # get the batch from the batch loader
-        self.get_next_batch()
-        
-        actor_loss = utils.InitZeroTensorOnDevice()
-        losses = self.init_losses()
-        
-        if self.use_bc_loss:
-            # get the BC loss
-            sample_loss, a0, timesteps = self.compute_sample_loss()
+        # get the batch from the batch loader -- TEMPORARY timing split (see
+        # _TimedSection) to tell data-fetch time apart from forward/loss time
+        with _TimedSection(lambda dt: globals.LOGGER.log_one(f"timing/{self.rb_id}_data_fetch_s", dt)):
+            self.get_next_batch()
 
-            self.a0 = a0
+        with _TimedSection(lambda dt: globals.LOGGER.log_one(f"timing/{self.rb_id}_forward_loss_s", dt)):
+            actor_loss = utils.InitZeroTensorOnDevice()
+            losses = self.init_losses()
 
-            # mean it
-            actor_loss = sample_loss.mean()
+            if self.use_bc_loss:
+                # get the BC loss
+                sample_loss, a0, timesteps = self.compute_sample_loss()
 
-            # save and log
-            self.save_bc_loss(losses, actor_loss)
+                self.a0 = a0
 
-            # must run right after compute_sample_loss(): reads the spatial
-            # softmax keypoints that call's forward() pass just cached for
-            # THIS nbatch (see compute_keypoint_loss's docstring)
-            losses['actor']['keypoint'] = self.compute_keypoint_loss(self.current_batch)
-            losses['actor']['pellet_xyz'] = self.compute_pellet_xyz_loss(self.current_batch)
+                # mean it
+                actor_loss = sample_loss.mean()
+
+                # save and log
+                self.save_bc_loss(losses, actor_loss)
+
+                # must run right after compute_sample_loss(): reads the spatial
+                # softmax keypoints that call's forward() pass just cached for
+                # THIS nbatch (see compute_keypoint_loss's docstring)
+                losses['actor']['keypoint'] = self.compute_keypoint_loss(self.current_batch)
+                losses['actor']['pellet_xyz'] = self.compute_pellet_xyz_loss(self.current_batch)
 
         return losses
 
@@ -397,7 +426,8 @@ class BatchLoss:
         # get the action mse error
         if self.current_batch is not None:
             task_id = self.current_batch['task_id'] if 'task_id' in self.current_batch else None
-            action_mse_error = self.actor_model.get_val_action_mse_error(self.current_batch, task_id=task_id)
+            action_mse_error = self.actor_model.get_val_action_mse_error(
+                self.current_batch, task_id=task_id, rb_id=self.rb_id, batch_loader=self.batch_loader)
 
         return loss, action_mse_error
     

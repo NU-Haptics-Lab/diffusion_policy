@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_erlenmeyer_flask_5: cotraining of the real erlenmeyer-flask
+description: "aiet_erlenmeyer_flask_6: cotraining of the real erlenmeyer-flask
   dataset (task_24) with the sim-only pellet alignment dataset (combined.zarr,
   same as aiet_alignment_sim_3). The full_avatar_real_world_cotrain_dataset leg
   is TEMPORARILY DISABLED -- its wrist camera may be mounted ~180 degrees rotated
@@ -35,7 +35,7 @@ description: "aiet_erlenmeyer_flask_5: cotraining of the real erlenmeyer-flask
 debug: false
 single_thread: false
 use_compiled_policy: false
-total_num_epochs: 3001 # can do about 6000 epochs overnight
+total_num_epochs: 6001 # can do about 3000 epochs overnight
 batches_per_epoch: 100
 val_every: 20
 
@@ -52,13 +52,13 @@ to_load:
   - actor
   - globals
 
-resume: true
+resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_erlenmeyer_flask_5
+run_tag: aiet_erlenmeyer_flask_6
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_5
+output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_6
 
 tasks_to_use:
   - erlenmeyer
@@ -269,10 +269,17 @@ session_trainer:
     nb_batches: 4
     val_every: ${val_every}
 
+    # dedicated _val batch-loss nodes below (NOT the ${common_wbatch_loss_*}
+    # ones step_trainer uses) -- those hardcode batch_loader.train_or_val:
+    # train, so reusing them here silently ran "validation" over the
+    # TRAINING split the whole time (confirmed: val_alignment_direction_cos_sim's
+    # ep_id lookups, built from val_sampler's tiny held-out episode list,
+    # never matched any batch ep_id -- because those batches were actually
+    # drawn from the much larger train split, not val).
     w_batch_losses:
-      erlenmeyer: ${common_wbatch_loss_erlenmeyer}
-      erlenmeyer_align: ${common_wbatch_loss_erlenmeyer_align}
-      sim_alignment: ${common_wbatch_loss_sim}
+      erlenmeyer: ${common_wbatch_loss_erlenmeyer_val}
+      erlenmeyer_align: ${common_wbatch_loss_erlenmeyer_align_val}
+      sim_alignment: ${common_wbatch_loss_sim_val}
 
 
 common_wbatch_loss_erlenmeyer:
@@ -285,30 +292,41 @@ common_wbatch_loss_erlenmeyer:
     freqs: ${step_freqs}
     eta: 1.0
 
-    # per-sample loss weight by subtask_id -- task_24's real data distinguishes
-    # 0=normal from 1=alignment-focused frames (see
-    # AIETErlenmeyerFlaskSampler.get_sample); upweight the alignment-focused
-    # ones same as aiet_erlenmeyer_flask_3 did, since those are the frames
-    # that actually teach precise pellet servoing rather than generic
-    # reach/grasp motion.
-    subtask_weights:
-      0: 1.0
-      1: 2.0 # now do it through the separate batch loss
+    # no subtask_weights here anymore -- this stream's sampler now excludes
+    # subtask_id==1 (alignment) episodes entirely (see the sampler block
+    # below), so there's nothing left to upweight; alignment emphasis is
+    # handled solely via common_wbatch_loss_erlenmeyer_align's weight.
 
     batch_loader:
       _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
       rb_id: erlenmeyer
       train_or_val: train
 
-# dedicated stream over ONLY the subtask_id==1 (alignment-focused) episodes,
-# on top of (not instead of) the subtask_weights upweighting above within the
-# main erlenmeyer stream -- this guarantees every training step sees some
-# alignment-focused real data, rather than relying on it showing up by chance
-# in a random ${batch_size}=100 draw from a pool where it's only ~5.5% of
-# samples. NOTE: this does mean subtask_id==1 data is now doubly emphasized
-# (upweighted within common_wbatch_loss_erlenmeyer AND given its own stream
-# here) -- reduce/remove the subtask_weights entry above if that's more
-# emphasis than intended.
+# same as common_wbatch_loss_erlenmeyer, but pointed at the held-out val
+# split -- used ONLY by epoch_evaluator, kept as a separate node (rather than
+# reusing common_wbatch_loss_erlenmeyer) so training and validation can never
+# silently share the same train_or_val: train batch_loader again.
+common_wbatch_loss_erlenmeyer_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer
+      train_or_val: val
+
+# dedicated stream over ONLY the subtask_id==1 (alignment-focused) episodes
+# -- the main erlenmeyer stream above now excludes them entirely, so this is
+# the sole source of alignment-focused real data (weight below controls its
+# emphasis). Guarantees every training step sees some, rather than relying on
+# it showing up by chance in a random ${batch_size}=100 draw from a pool
+# where it used to be only ~5.5% of samples.
 common_wbatch_loss_erlenmeyer_align:
   _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
   weight: 2.0 # relative weight of the alignment-focused real loss -- tune as needed
@@ -324,6 +342,24 @@ common_wbatch_loss_erlenmeyer_align:
       rb_id: erlenmeyer_align
       train_or_val: train
 
+# same as common_wbatch_loss_erlenmeyer_align, but pointed at the held-out
+# val split -- see common_wbatch_loss_erlenmeyer_val's comment for why this
+# is a separate node rather than shared with the training one.
+common_wbatch_loss_erlenmeyer_align_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 2.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_align
+      train_or_val: val
+
 common_wbatch_loss_sim:
   _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
   weight: 0.5 # relative weight of the sim alignment loss -- tune as needed
@@ -338,6 +374,24 @@ common_wbatch_loss_sim:
       _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
       rb_id: sim_alignment
       train_or_val: train
+
+# same as common_wbatch_loss_sim, but pointed at the held-out val split --
+# see common_wbatch_loss_erlenmeyer_val's comment for why this is a separate
+# node rather than shared with the training one.
+common_wbatch_loss_sim_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 0.5
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: sim_alignment
+      train_or_val: val
 
 dataloaders:
   _target_: diffusion_policy.dataset.train_and_val.DataLoaders
@@ -381,6 +435,17 @@ common_dataset_erlenmeyer:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: erlenmeyer
     ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+    # exclude subtask_id==1 (alignment) episodes -- those are covered
+    # entirely by erlenmeyer_align below. Without this, subtask_id==1 data
+    # was double-emphasized (upweighted here via subtask_weights AND given
+    # its own dedicated stream), and val_action_variance_ratio's
+    # {rb_id}_subtask_1 breakdown wasn't comparable between the two streams,
+    # since each stream's full-val-set denominator mixed in a different
+    # population (this one: subtask 0+1 combined; erlenmeyer_align: subtask
+    # 1 only) -- excluding subtask 1 here removes both problems at the root
+    # instead of patching the denominator computation.
+    episode_filter_key: subtask_id
+    episode_filter_value: 0
 
 # same rb_id/sampler class as erlenmeyer, but DatasetSampler's episode_filter_key/
 # value restricts InitAll() to only the 99 episodes (of erlenmeyer's 389) that
@@ -467,6 +532,7 @@ models:
           _target_: diffusion_policy.model.diffusion_model.DiffusionModel
           action_shape: ${shape_meta.action.shape}
           noise_scheduler: ${common_noise_scheduler}
+          val_noise_scheduler: ${common_val_ddim_scheduler} # get_val_action_mse_error samples with THIS scheduler instead of noise_scheduler -- DDIM (eta=0 default) is deterministic given the initial noise draw, unlike DDPM's ancestral sampling which injects fresh stochastic noise at every reverse step; also actually applies num_inference_steps (below) via set_timesteps, which noise_scheduler's own path never did. Set to null to go back to sampling validation with noise_scheduler, unchanged from before.
           obs_encoder_maker: ${common_obs_encoder}
           eval_fixed_crop: true
           obs_as_global_cond: true
@@ -487,8 +553,9 @@ models:
           transformer_n_emb: 128
           transformer_n_cond_layers: 6
           diagnostics_every_n_steps: 50
+          check_alignment_direction: true # log val_alignment_direction_cos_sim: does the predicted relative palm-xyz action point toward this episode's own final palm pose (a no-ground-truth-needed proxy for the true aligned position, via each sample's ep_id)? Requires no code changes to disable -- set false to skip it entirely.
           transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value', 'biotac_lh']
-          transformer_p_drop_token: 0.3
+          transformer_p_drop_token: 0.5
           transformer_normalize_cond_tokens: true # LayerNorm each cond token right after its own projection, so timestep can't dominate cross-attention purely from raw embedding magnitude. In the future solve this problem using adaLN instead
           transformer_use_adaln_timestep: true # DiT-style AdaLN-Zero timestep conditioning instead of a timestep cross-attn token -- the more standard fix
 
@@ -557,6 +624,22 @@ common_noise_scheduler:
   clip_sample: true
   num_train_timesteps: 100
   prediction_type: epsilon # sample or epsilon
+
+# used ONLY for get_val_action_mse_error (val_noise_scheduler above) -- same
+# noise schedule/prediction_type as common_noise_scheduler (that part must
+# match, since both interpret the SAME trained model's output), but DDIM's
+# step() instead of DDPM's ancestral step(). eta defaults to 0.0 (fully
+# deterministic reverse process given the initial noise draw) since it's not
+# set here -- pass eta as a kwarg to .step() (via the model's existing kwargs
+# passthrough) if you want partial stochasticity instead.
+common_val_ddim_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  num_train_timesteps: 100
+  prediction_type: epsilon # MUST BE SAME AS DDPMSCHEDULER (common_noise_scheduler)
 
 device: cuda:0
 

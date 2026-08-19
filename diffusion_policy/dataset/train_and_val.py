@@ -218,6 +218,17 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     probe_sample = dataset[0]
     scalar_fields = [f for f in ("task_id", "subtask_id", "data_source") if f in probe_sample]
 
+    # ep_id (AIETErlenmeyerFlaskSampler.get_sample) is a THIRD kind of scalar
+    # field, distinct from both of the above: it's neither a raw per-timestep
+    # rb array (there's no rb['ep_id']) nor a single dataset-wide constant --
+    # it's constant PER EPISODE (== that episode's own rb_episode_end), so it
+    # needs its own per-episode-broadcast handling below rather than
+    # resolve_scalar_field's "constant or rb array" logic, and must be
+    # excluded from extra_fields (below) so that bucket doesn't try
+    # rb['ep_id'] and decline vectorization entirely for every sampler that
+    # emits ep_id.
+    has_ep_id = 'ep_id' in probe_sample
+
     # some samplers hardcode these in get_sample() regardless of what's in
     # the rb (or even when the rb has no such array at all to read a
     # per-sample value from) -- constant_fields takes precedence over
@@ -249,7 +260,7 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     # (e.g. it needs the aliasing/constant-field handling task_id/
     # subtask_id/data_source get above), this declines to vectorize rather
     # than risk silently building incorrect data.
-    extra_fields = [k for k in probe_sample if k not in ("obs", "action") and k not in scalar_fields]
+    extra_fields = [k for k in probe_sample if k not in ("obs", "action", "ep_id") and k not in scalar_fields]
     raw_extra_arrays = {}
     try:
         for field_name in extra_fields:
@@ -268,6 +279,7 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     action_chunks = []
     scalar_chunks = {field_name: [] for field_name in scalar_fields}
     extra_chunks = {field_name: [] for field_name in extra_fields}
+    ep_id_chunks = [] if has_ep_id else None
 
     for ep in tqdm(eps, desc="gpu-preload (vectorized, per-episode)"):
         indices = ep.indices
@@ -311,6 +323,11 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
         for field_name in extra_fields:
             extra_chunks[field_name].append(raw_extra_arrays[field_name][obs_rb_idx][:, None, ...])
 
+        # ep_id: constant for every sample in this episode (its own
+        # rb_episode_end), not read from anywhere -- see has_ep_id above
+        if has_ep_id:
+            ep_id_chunks.append(np.full((n, 1), float(ep.rb_episode_end), dtype=np.float32))
+
     obs = {}
     for key in per_key_obs:
         full = np.concatenate(per_key_obs[key], axis=0).astype(np.float32)
@@ -328,6 +345,8 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
         data[field_name] = torch.from_numpy(np.concatenate(scalar_chunks[field_name], axis=0).astype(np.float32))
     for field_name in extra_fields:
         data[field_name] = torch.from_numpy(np.concatenate(extra_chunks[field_name], axis=0).astype(np.float32))
+    if has_ep_id:
+        data['ep_id'] = torch.from_numpy(np.concatenate(ep_id_chunks, axis=0).astype(np.float32))
 
     # safety check: this bypasses the normal per-sample path entirely, so
     # verify it against the known-correct dataset[i] for a handful of random
@@ -844,15 +863,40 @@ class TrainAndVal:
         # first, init the all sampler
         self.sampler.InitAll()
 
-        # get the val mask
+        # get the val mask -- sized to the CURRENTLY-INCLUDED episode count
+        # (i.e. len(self.sampler.get_ep_list())), which only equals the raw
+        # replay-buffer episode count when InitAll() didn't filter anything
+        # out (e.g. via episode_filter_key/value). Init()/make_episodes()
+        # index by RAW episode position (enumerate(replay_buffer.episode_ends)),
+        # so this must be scattered back into raw-episode-index space before
+        # being passed to Init() -- otherwise a filtered sampler (fewer
+        # included episodes than raw episodes) hits an out-of-bounds index
+        # once make_episodes() walks past the included count.
         val_mask = self.sampler.get_sample_mask(
             ratio = self.val_ratio,
             seed = self.seed,
             split_by_episode = self.split_val_by_episode,
         )
-        
-        # get the train mask
-        train_mask = ~val_mask
+
+        # self.sampler.ep_mask is the raw-length inclusion mask InitAll() just
+        # built (all-True if unfiltered); its True positions are exactly the
+        # raw episode indices get_ep_list()/get_sample_mask() enumerate over,
+        # in the same (ascending) order.
+        raw_ep_mask = self.sampler.ep_mask
+        included_raw_indices = np.where(raw_ep_mask)[0]
+        assert len(included_raw_indices) == len(val_mask)
+
+        def _expand_to_raw(mask_over_included):
+            raw = np.zeros_like(raw_ep_mask, dtype=bool)
+            raw[included_raw_indices] = mask_over_included
+            return raw
+
+        val_mask = _expand_to_raw(val_mask)
+
+        # get the train mask -- excluded (filtered-out) episodes must stay
+        # excluded for train too, not fall back into it just because they're
+        # not in val_mask
+        train_mask = raw_ep_mask & ~val_mask
 
         # make train sampler with train mask
         self.train_sampler = self.sampler.copy()
@@ -867,8 +911,41 @@ class TrainAndVal:
             # Load the full dataset once, then create zero-copy views for train/val.
             device = self._resolve_device()
             self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device, num_workers=self.options.train.num_workers, vectorized=self.preload_vectorized) #type:ignore
-            train_indices = np.where(train_mask)[0]
-            val_indices = np.where(val_mask)[0]
+
+            # GPUDatasetView indexes into all_dataset's FLAT sample space
+            # (len(self.sampler), e.g. every valid timestep across every
+            # included episode) -- NOT episode-index space. train_mask/
+            # val_mask are raw-episode-index-space (length == total raw
+            # episode count, one bool per episode, see _expand_to_raw
+            # above), so `np.where(train_mask)[0]` previously handed
+            # GPUDatasetView a handful of small EPISODE positions (e.g.
+            # 0-700) instead of the thousands of sample indices those
+            # episodes actually span -- confirmed directly: train/val
+            # "sample counts" exactly matched episode counts, and val
+            # samples' ep_id never matched val_sampler's own episode list
+            # (the tiny integer "indices" landed on essentially arbitrary
+            # early flat-index samples unrelated to the intended held-out
+            # episodes). Convert to per-episode boundaries in self.sampler's
+            # own iteration order (ascending raw index among included
+            # episodes -- the same order DexNexDataset(self.sampler) uses to
+            # map a flat index to an episode) and expand each selected
+            # episode's boolean flag into its full run of flat sample
+            # indices instead.
+            ep_lengths = np.array(self.sampler.get_ep_lengths())
+            ep_offsets = np.concatenate([[0], np.cumsum(ep_lengths)])[:-1]
+            train_ep_sel = train_mask[included_raw_indices]
+            val_ep_sel = val_mask[included_raw_indices]
+
+            def _flat_sample_indices(ep_sel):
+                chosen = np.where(ep_sel)[0]
+                if len(chosen) == 0:
+                    return np.array([], dtype=int)
+                return np.concatenate([
+                    np.arange(ep_offsets[i], ep_offsets[i] + ep_lengths[i]) for i in chosen
+                ])
+
+            train_indices = _flat_sample_indices(train_ep_sel)
+            val_indices = _flat_sample_indices(val_ep_sel)
             self.train_dataset = GPUDatasetView(self.all_dataset, train_indices)
             self.val_dataset = GPUDatasetView(self.all_dataset, val_indices)
         else:
