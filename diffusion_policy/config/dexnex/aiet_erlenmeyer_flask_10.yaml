@@ -1,0 +1,725 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "aiet_erlenmeyer_flask_10: same as aiet_erlenmeyer_flask_7 (real
+  erlenmeyer-flask task_24, DINOv3-LARGE precomputed keypoint vision input),
+  but with the sim-only pellet alignment dataset (combined.zarr, same as
+  aiet_alignment_sim_3) brought back as a THIRD cotraining stream. Three
+  logical rb_ids: erlenmeyer (subtask_id==0, on-task real), erlenmeyer_align
+  (subtask_id==1, alignment-focused real, upweighted), sim_alignment (sim).
+
+  Vision input is precomputed DINOv3-LARGE (1024-channel) fixed-tau
+  spatial-softmax keypoints for ALL THREE streams --
+  wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l ([1024, 2] each).
+  For the two real streams these names already match the zarr's literal
+  array names (AIETErlenmeyerFlaskSampler's default identity resolve_rb_key
+  handles them with no sampler code changes). combined.zarr uses different
+  naming (wrist_camera_keypoints_dinov3l, confirmed by inspecting the zarr
+  directly) and has no overhead camera at all -- handled by
+  AIETErlenmeyerFlask4SimSampler's NATIVE_WRIST_KEYPOINT_KEY_DINOV3L alias
+  and zero-fill of overhead_roi_keypoints_dinov3l respectively (same pattern
+  already used for the s_plus-variant wrist_cam_keypoints/
+  overhead_roi_keypoints in flask_6).
+
+  Action is relative-palm-pose+gripper (same convention as
+  aiet_alignment_sim_3): rel_palm_pose_xyz_rpy (6) + gripper_value (1).
+  palm_pose_xyz_rpy/gripper_value were added to task_24 by one-time offline
+  migration scripts in ws_avatar_drake (avatar_intelligence/data_processing/
+  common/add_palm_pose_fk.py -- Drake forward kinematics against the left
+  gofa+shadow-hand model -- and add_gripper_value.py -- an empirical
+  per-dataset min/max proxy over finger-flexion joints)."
+
+# global controls
+debug: false
+single_thread: false
+use_compiled_policy: true
+total_num_epochs: 5001 # can do about 3000 epochs overnight
+batches_per_epoch: 100
+val_every: 20
+
+action_key: action # placeholder -- computed (rel_palm_pose_xyz_rpy + gripper_value), not a literal rb field, same as aiet_alignment_sim_3
+
+# 14 or 7 -- selects between the full 14x14 patch grid and the pre-downsampled
+# 7x7 grid for both active sources (task_24 already had wrist_cam_patch_features_7x7/
+# overhead_roi_patch_features_7x7 from prior work; sim's combined.zarr likewise
+# via in-sampler pooling). Only relevant to the (unused here) raw patch-grid
+# obs keys -- see AIETErlenmeyerFlaskSampler.resolve_rb_key.
+patch_grid_size: 14
+
+### Global Control Panel ###
+to_load:
+  - actor
+  - globals
+
+resume: false
+
+# should be the same as this file's name (sans .yaml)
+run_tag: aiet_erlenmeyer_flask_10
+
+resume_tag: latest
+output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_10
+
+tasks_to_use:
+  - erlenmeyer
+  - erlenmeyer_align
+  - sim_alignment
+
+# every BatchLoader in this yaml (all 3 cotrain streams' train+val loaders,
+# AND default_batch_loader) passes this SAME list as normalizer_fit_rb_ids,
+# so their normalizer stats are explicitly, deterministically pooled from
+# all three sources' data and shared across all of them -- rather than each
+# fitting independently, or accidentally sharing based on class name +
+# construction order (see BatchLoader.init_normalizers's docstring). This is
+# what makes real-world inference (which only ever normalizes/unnormalizes
+# through default_batch_loader) consistent with what every stream was
+# actually trained against.
+normalizer_fit_rb_ids: [erlenmeyer, erlenmeyer_align] # don't use sim_alignment since sim data often contains outliers
+
+# fused/single-vector keys routed through the obs_encoder. Vision is NOT raw
+# patch grids here -- wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l
+# are precomputed fixed-tau (no learning) spatial-softmax (x,y) descriptors,
+# one per DINOv3-LARGE channel (1024, vs the earlier dinov3 s_plus variant's
+# 384), added directly to the zarr offline instead of being reduced from a
+# raw patch grid at train time. [1024, 2] = 2048 floats/frame vs
+# 14x14x1024 = 200704 for a raw large patch grid -- still a huge load-time
+# win, at the cost of no longer jointly training the vision-channel reduction
+# (it's a fixed offline transform now). biotac_lh and overhead_roi_keypoints_dinov3l
+# are real-only -- zero-filled by AIETErlenmeyerFlask4SimSampler and excluded
+# (hard-zeroed token) for sim samples via the model's
+# excluded_token_keys_by_data_source below.
+obs_keys_to_use:
+  - palm_pose_xyz_rpy
+  - gripper_value
+  - biotac_lh
+  - wrist_cam_keypoints_dinov3l
+  - overhead_roi_keypoints_dinov3l
+  - env_cam_keypoints_dinov3l
+
+obs_keys_to_load:
+  - palm_pose_xyz_rpy
+  - wrist_cam_keypoints_dinov3l
+  - overhead_roi_keypoints_dinov3l
+  - env_cam_keypoints_dinov3l
+  - gripper_value
+  - biotac_lh
+
+models_to_train:
+  - actor
+
+models_to_eval:
+  - actor
+
+step_freqs:
+  actor: 1
+  res_actor: 1
+  critic: 1
+  sac_actor: 1
+
+use_bc_loss: true
+action_relative_to_state: false
+use_denoise: false
+### End Global Control Panel ###
+
+num_inference_steps: 25
+clamp: false
+
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+obs_rel_indices: [0]
+gradient_accumulate_every: 1
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 100
+  checkpoint_every: 100
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false
+
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  output_dir: ${output_dir}
+
+# common data
+shape_meta:
+  palm_pose_xyz_rpy:
+    shape:
+    - 6 # world pose of lh_palm, xyz + roll/pitch/yaw
+
+  gripper_value:
+    shape:
+    - 1 # [0, 1] "how closed" scalar
+
+  biotac_lh:
+    shape:
+    - 5
+
+  wrist_cam_keypoints_dinov3l:
+    shape:
+      - 1024 # one (x,y) per dinov3-large channel
+      - 2
+
+  overhead_roi_keypoints_dinov3l:
+    shape:
+      - 1024
+      - 2
+
+  env_cam_keypoints_dinov3l:
+    shape:
+      - 1024
+      - 2
+
+  action:
+    shape:
+    - 7 # rel_palm_pose_xyz_rpy (6) + gripper_value (1), same convention as aiet_alignment_sim_3
+
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online
+    name: 2026.diffusion
+    project: dexnex_diffusion
+    resume: true
+    tags:
+    - diffusion
+    - cotrain
+    - sim
+    - default
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    palm_pose_xyz_rpy:
+      shape:
+      - 6
+
+    gripper_value:
+      shape:
+      - 1
+
+    biotac_lh:
+      shape:
+      - 5
+
+    wrist_cam_keypoints_dinov3l:
+      shape:
+      - 1024
+      - 2
+
+    overhead_roi_keypoints_dinov3l:
+      shape:
+      - 1024
+      - 2
+
+    env_cam_keypoints_dinov3l:
+      shape:
+      - 1024
+      - 2
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 7 # 
+  debug: ${debug}
+  use_zero_padding: false
+  restrict_to_valid_future: true
+
+
+# NODE -- replay buffer loader entry point. THREE logical rb_ids (full_avatar
+# disabled -- see aiet_erlenmeyer_flask_6.yaml's history).
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    erlenmeyer: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    # same physical zarr as erlenmeyer -- a second logical rb_id, filtered
+    # down to only the subtask_id==1 (alignment-focused) episodes via
+    # DatasetSampler's episode_filter_key/value (see common_dataset_erlenmeyer_align
+    # below). ReplayBufferLoader opens each rb_id independently/read-only, so
+    # pointing two rb_ids at the same path is safe.
+    erlenmeyer_align: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    sim_alignment: /home/omnid/dexnex/ws_avatar_drake/src/avatar_master/avatar_intelligence/avatar_intelligence/sims/aiet_alignment/combined.zarr
+
+  modes:
+    erlenmeyer: r
+    erlenmeyer_align: r
+    sim_alignment: r
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+  rb_id: "erlenmeyer" # forces a load
+  train_or_val: eval
+  use_dataloader: false
+  strict: false
+  normalizer_fit_rb_ids: ${normalizer_fit_rb_ids} # this is the loader real-world inference actually normalizes/unnormalizes through -- MUST share the same normalizer_fit_rb_ids as every training stream's batch_loader below, or inference would interpret the model's output through a different normalizer than it was trained against.
+
+# NODE -- training entry point. All three streams' losses get summed each step.
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs}
+
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    step_trainer:
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+
+      w_batch_losses:
+        erlenmeyer: ${common_wbatch_loss_erlenmeyer}
+        erlenmeyer_align: ${common_wbatch_loss_erlenmeyer_align}
+        sim_alignment: ${common_wbatch_loss_sim}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    # dedicated _val batch-loss nodes below (NOT the ${common_wbatch_loss_*}
+    # ones step_trainer uses) -- those hardcode batch_loader.train_or_val:
+    # train, so reusing them here silently ran "validation" over the
+    # TRAINING split the whole time (confirmed: val_alignment_direction_cos_sim's
+    # ep_id lookups, built from val_sampler's tiny held-out episode list,
+    # never matched any batch ep_id -- because those batches were actually
+    # drawn from the much larger train split, not val).
+    w_batch_losses:
+      erlenmeyer: ${common_wbatch_loss_erlenmeyer_val}
+      erlenmeyer_align: ${common_wbatch_loss_erlenmeyer_align_val}
+      sim_alignment: ${common_wbatch_loss_sim_val}
+
+
+common_wbatch_loss_erlenmeyer:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0 # relative weight of the on-task real erlenmeyer loss -- tune as needed
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    # no subtask_weights here anymore -- this stream's sampler now excludes
+    # subtask_id==1 (alignment) episodes entirely (see the sampler block
+    # below), so there's nothing left to upweight; alignment emphasis is
+    # handled solely via common_wbatch_loss_erlenmeyer_align's weight.
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# same as common_wbatch_loss_erlenmeyer, but pointed at the held-out val
+# split -- used ONLY by epoch_evaluator, kept as a separate node (rather than
+# reusing common_wbatch_loss_erlenmeyer) so training and validation can never
+# silently share the same train_or_val: train batch_loader again.
+common_wbatch_loss_erlenmeyer_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# dedicated stream over ONLY the subtask_id==1 (alignment-focused) episodes
+# -- the main erlenmeyer stream above now excludes them entirely, so this is
+# the sole source of alignment-focused real data (weight below controls its
+# emphasis). Guarantees every training step sees some, rather than relying on
+# it showing up by chance in a random draw from a pool where it used to be
+# only ~5.5% of samples.
+common_wbatch_loss_erlenmeyer_align:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 2.0 # relative weight of the alignment-focused real loss -- tune as needed
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_align
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# same as common_wbatch_loss_erlenmeyer_align, but pointed at the held-out
+# val split -- see common_wbatch_loss_erlenmeyer_val's comment for why this
+# is a separate node rather than shared with the training one.
+common_wbatch_loss_erlenmeyer_align_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 2.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_align
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_sim:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 0.5 # relative weight of the sim alignment loss -- tune as needed
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: sim_alignment
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# same as common_wbatch_loss_sim, but pointed at the held-out val split --
+# see common_wbatch_loss_erlenmeyer_val's comment for why this is a separate
+# node rather than shared with the training one.
+common_wbatch_loss_sim_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 0.5
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: sim_alignment
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d:
+    erlenmeyer: ${common_dataset_erlenmeyer}
+    erlenmeyer_align: ${common_dataset_erlenmeyer_align}
+    sim_alignment: ${common_dataset_sim}
+
+# on-task real data
+common_dataset_erlenmeyer:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true # hold out whole episodes for val instead of scattered individual timesteps, since per-timestep splitting leaks trajectory-local info (overlapping action-horizon windows, and just smooth-trajectory continuity) across the train/val boundary
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: true
+
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 250
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+    # exclude subtask_id==1 (alignment) episodes -- those are covered
+    # entirely by erlenmeyer_align below. Without this, subtask_id==1 data
+    # was double-emphasized (upweighted here via subtask_weights AND given
+    # its own dedicated stream), and val_action_variance_ratio's
+    # {rb_id}_subtask_1 breakdown wasn't comparable between the two streams,
+    # since each stream's full-val-set denominator mixed in a different
+    # population (this one: subtask 0+1 combined; erlenmeyer_align: subtask
+    # 1 only) -- excluding subtask 1 here removes both problems at the root
+    # instead of patching the denominator computation.
+    episode_filter_key: subtask_id
+    episode_filter_value: 0
+
+# same rb_id/sampler class as erlenmeyer, but DatasetSampler's episode_filter_key/
+# value restricts InitAll() to only the episodes that are entirely
+# subtask_id==1 -- see DatasetSampler._compute_episode_filter_mask.
+common_dataset_erlenmeyer_align:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 250
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer_align
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+    episode_filter_key: subtask_id
+    episode_filter_value: 1
+
+# sim alignment data
+common_dataset_sim:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true # hold out whole episodes for val instead of scattered individual timesteps, since per-timestep splitting leaks trajectory-local info (overlapping action-horizon windows, and just smooth-trajectory continuity) across the train/val boundary
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  options:
+    common:
+      batch_size: 125
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: sim_alignment
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4SimSampler
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          val_noise_scheduler: ${common_val_ddim_scheduler} # get_val_action_mse_error samples with THIS scheduler instead of noise_scheduler -- DDIM (eta=0 default) is deterministic given the initial noise draw, unlike DDPM's ancestral sampling which injects fresh stochastic noise at every reverse step; also actually applies num_inference_steps (below) via set_timesteps, which noise_scheduler's own path never did. Set to null to go back to sampling validation with noise_scheduler, unchanged from before.
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: true
+          obs_as_global_cond: true
+          obs_encoder_group_norm: true
+          n_obs_steps: 1
+          down_dims:
+            - 256
+            - 512
+            - 1024
+          diffusion_step_embed_dim: 32
+
+          action_relative_to_state: ${action_relative_to_state}
+          use_tree: false
+          use_simple_model: false
+
+          model_type: dexnex_transformer
+          transformer_n_layer: 6
+          transformer_n_emb: 128
+          transformer_n_cond_layers: 6
+          diagnostics_every_n_steps: 50
+          check_alignment_direction: true # log val_alignment_direction_cos_sim: does the predicted relative palm-xyz action point toward this episode's own final palm pose (a no-ground-truth-needed proxy for the true aligned position, via each sample's ep_id)? Requires no code changes to disable -- set false to skip it entirely.
+          use_compiled_policy: ${use_compiled_policy} # torch.compile's the transformer trunk (see DiffusionModel._get_forward_model) -- watch the first ~50-100 steps for compile-time spikes/graph breaks (log_attn flips every diagnostics_every_n_steps, train/eval differ, and the model writes diagnostics attrs like last_keep_mask inside forward -- each a possible graph-break source) before trusting steady-state it/s. Confirmed a real win (not just batch-size confound) on flask_7 at a large enough batch size -- if this cotrain's per-stream batch sizes end up much smaller, re-verify with the same timing/* instrumentation before trusting it here too.
+          transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value', 'biotac_lh']
+          transformer_p_drop_token: 0.25
+          transformer_normalize_cond_tokens: true # LayerNorm each cond token right after its own projection, so timestep can't dominate cross-attention purely from raw embedding magnitude. In the future solve this problem using adaLN instead
+          transformer_use_adaln_timestep: true # DiT-style AdaLN-Zero timestep conditioning instead of a timestep cross-attn token -- the more standard fix
+
+          embed_task_id: true # gives the shared decoder an explicit, cheap domain/task signal via the existing task_id_emb lookup table, rather than adding new AdaLN/token machinery for data_source specifically -- sim uses its own dedicated task_id (26, see AIETErlenmeyerFlask4SimSampler.get_sample) instead of sharing task_id==24 with the real legs
+          num_tasks: 28 # 0-25 for real task ids (task_24 uses 24, task_25 uses 25) + 26 for sim + 27 (new real task_id with a valid env_cam_keypoints_dinov3l, see token_keys_valid_only_for_task_ids below) -- must cover the highest task_id actually used
+
+          # NOTE: no patch_keys_to_use/spatial_softmax_* here, unlike flask_6
+          # -- wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l are
+          # precomputed (see obs_keys_to_use's comment above), so they're
+          # plain lowdim obs keys routed through obs_encoder/cond_dims like
+          # palm_pose_xyz_rpy, not raw patch grids needing an in-model
+          # spatial-softmax reduction. This also means the vision-channel
+          # reduction is no longer jointly trained end-to-end (it's a fixed
+          # offline transform now) -- if that turns out to matter, that's
+          # the tradeoff to revisit.
+
+          # training-time Gaussian noise on cond_dims keys, per data_source
+          # (0=erlenmeyer real, 1=sim) -- defaults to every data_source x
+          # every eligible key; remove entries you don't want noised.
+          # Motivation: sim's non-vision signals (simulated, noise-free
+          # proprioception) are unrealistically clean relative to real's
+          # actual sensor readings, which may let the model solve sim's task
+          # without leaning on vision much -- behavior that then doesn't
+          # transfer to real, where vision genuinely matters. Applied after
+          # each key's raw value is read and before its projection into a
+          # token.
+          gaussian_noise_by_data_source:
+            0: ['palm_pose_xyz_rpy', 'gripper_value'] # 0=erlenmeyer
+            1: ['palm_pose_xyz_rpy', 'gripper_value'] # 1=sim
+          gaussian_noise_std: 0.0 # shared across every enabled (data_source, key) pair -- keys are on very different natural scales (radians/meters, [0,1] gripper, [-1,1] keypoint coords), so tune per-key by pruning the lists above if 0.1 is too coarse for some
+
+          # cotrain masking: data_source 0=erlenmeyer real, 1=sim. biotac_lh
+          # and overhead_roi_keypoints_dinov3l are real-only (sim has no
+          # overhead camera, no biotac) -- both zero-filled by
+          # AIETErlenmeyerFlask4SimSampler and excluded (hard-zeroed token)
+          # here for sim samples. env_cam_keypoints_dinov3l is ALSO listed
+          # here for sim (sim never has it either) -- see
+          # token_keys_valid_only_for_task_ids below for the finer-grained
+          # part: even within data_source==0 (real), only task_id 27 actually
+          # has a non-zero-filled env camera; every other real task_id
+          # zero-fills it the same way sim does. erlenmeyer supplies every
+          # OTHER key natively, so nothing else needs excluding.
+          excluded_token_keys_by_data_source:
+            1: ['biotac_lh', 'overhead_roi_keypoints_dinov3l', 'env_cam_keypoints_dinov3l']
+          num_data_sources: 2
+
+          # finer-grained than excluded_token_keys_by_data_source above:
+          # env_cam_keypoints_dinov3l is only genuinely present for task_id
+          # 27 -- every other task_id (all other real task_ids, AND sim's
+          # task_id 26, redundant with but harmless alongside the
+          # data_source-level exclusion above) gets it hard-zeroed and
+          # masked out of attention. See
+          # DexNexTransformerForDiffusion.__init__'s docstring for the
+          # mechanism (combined via AND with excluded_token_keys_by_data_source).
+          token_keys_valid_only_for_task_ids:
+            env_cam_keypoints_dinov3l: [27]
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 1e-4
+          weight_decay: 1.0e-06
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  clip_sample_range: 6.0 # data-derived
+  num_train_timesteps: 100
+  prediction_type: epsilon # sample or epsilon
+
+# used ONLY for get_val_action_mse_error (val_noise_scheduler above) -- same
+# noise schedule/prediction_type as common_noise_scheduler (that part must
+# match, since both interpret the SAME trained model's output), but DDIM's
+# step() instead of DDPM's ancestral step(). eta defaults to 0.0 (fully
+# deterministic reverse process given the initial noise draw) since it's not
+# set here -- pass eta as a kwarg to .step() (via the model's existing kwargs
+# passthrough) if you want partial stochasticity instead.
+common_val_ddim_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  clip_sample_range: 6.0 # data-derived
+  num_train_timesteps: 100
+  prediction_type: epsilon # MUST BE SAME AS DDPMSCHEDULER (common_noise_scheduler)
+
+device: cuda:0
+
+override:
+  models:
+    models:
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small

@@ -133,6 +133,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             real_only_token_keys: Optional[List[str]] = None,
             excluded_token_keys_by_data_source: Optional[Dict[int, List[str]]] = None,
             num_data_sources: Optional[int] = None,
+            token_keys_valid_only_for_task_ids: Optional[Dict[str, List[int]]] = None,
             normalize_cond_tokens: bool = True,
             use_adaln_timestep: bool = False,
             gaussian_noise_by_data_source: Optional[Dict[int, List[str]]] = None,
@@ -201,6 +202,23 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             fine when every source has at least one exclusion, wrong
             otherwise, so pass this explicitly for any cotrain with 3+
             sources.
+        token_keys_valid_only_for_task_ids: finer-grained than
+            excluded_token_keys_by_data_source -- for a token that's only
+            genuinely present for a SUBSET of task_ids within a single
+            data_source (e.g. env_cam_keypoints_dinov3l: real data_source==0
+            covers many task_ids, but only task_id 27 actually has a non-
+            zero-filled env camera; every other real task_id zero-fills it,
+            same as sim already does for other keys via
+            excluded_token_keys_by_data_source). token name -> the list of
+            task_ids for which it's valid; every task_id NOT in that list
+            gets the token hard-zeroed and masked out of attention, exactly
+            like excluded_token_keys_by_data_source's mechanism but gathered
+            by task_ids instead of data_source, and combined (AND) with it
+            when both apply to the same token. Requires embed_task_id=True
+            and num_tasks to be large enough to cover every task_id used
+            (same requirement task_id_emb already has). Only relevant to
+            single-token cond_dims/spatial-softmax keys and patch groups --
+            never timestep/task_id themselves.
         normalize_cond_tokens: if True (default), apply a per-token-name
             LayerNorm to each cond token's embedding (timestep, task_id, each
             cond_dims/spatial-softmax key, each patch group) right after its
@@ -332,19 +350,21 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         else:
             self.num_data_sources = (max(excluded_token_keys_by_data_source.keys()) + 1
                 if excluded_token_keys_by_data_source else 0)
-        if self.num_data_sources > 0:
-            # mirror forward()'s exact cond_token_names construction (patch
-            # groups repeat their name once per patch, not once per group --
-            # unlike all_token_names above, which is only used for
-            # droppable_token_keys validation and doesn't need per-patch
-            # granularity) so this matrix's column i lines up with
-            # cond_embeddings[:, i] in forward().
-            expanded_token_names = ((['timestep'] if not use_adaln_timestep else [])
-                + (['task_id'] if self.embed_task_id else [])
-                + self.cond_keys)
-            for group in self.patch_group_names:
-                expanded_token_names.extend([group] * self.patch_group_num_patches[group])
 
+        # shared by both the data_source- and task_id-keyed allow-matrices
+        # below: mirrors forward()'s exact cond_token_names construction
+        # (patch groups repeat their name once per patch, not once per group
+        # -- unlike all_token_names above, which is only used for
+        # droppable_token_keys validation and doesn't need per-patch
+        # granularity) so each matrix's column i lines up with
+        # cond_embeddings[:, i] in forward().
+        expanded_token_names = ((['timestep'] if not use_adaln_timestep else [])
+            + (['task_id'] if self.embed_task_id else [])
+            + self.cond_keys)
+        for group in self.patch_group_names:
+            expanded_token_names.extend([group] * self.patch_group_num_patches[group])
+
+        if self.num_data_sources > 0:
             allow_matrix = torch.ones(self.num_data_sources, len(expanded_token_names))
             for ds, keys in self.excluded_token_keys_by_data_source.items():
                 for i, name in enumerate(expanded_token_names):
@@ -353,6 +373,31 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             self.register_buffer("data_source_token_allow_matrix", allow_matrix, persistent=False)
         else:
             self.data_source_token_allow_matrix = None
+
+        # deterministic, always-on per-task_id token masking -- same idea as
+        # data_source_token_allow_matrix, but for a token that's only valid
+        # for a SUBSET of task_ids within a single data_source (e.g. a real
+        # env camera only wired up for one specific real task_id, with every
+        # other real task_id zero-filling it). See
+        # token_keys_valid_only_for_task_ids's docstring above.
+        if token_keys_valid_only_for_task_ids:
+            unknown = set(token_keys_valid_only_for_task_ids.keys()) - set(all_token_names)
+            assert not unknown, \
+                f"token_keys_valid_only_for_task_ids contains unknown token names: {unknown}"
+            assert self.embed_task_id, \
+                "token_keys_valid_only_for_task_ids requires embed_task_id=True (task_ids must be passed to forward())"
+            assert num_tasks > 0, "token_keys_valid_only_for_task_ids requires num_tasks to be set"
+            task_id_allow_matrix = torch.ones(num_tasks, len(expanded_token_names))
+            for key, allowed_task_ids in token_keys_valid_only_for_task_ids.items():
+                allowed = set(allowed_task_ids)
+                for i, name in enumerate(expanded_token_names):
+                    if name == key:
+                        for tid in range(num_tasks):
+                            if tid not in allowed:
+                                task_id_allow_matrix[tid, i] = 0.0
+            self.register_buffer("task_id_token_allow_matrix", task_id_allow_matrix, persistent=False)
+        else:
+            self.task_id_token_allow_matrix = None
 
         # per-(data_source, cond_key) Gaussian noise: column order matches
         # self.cond_keys exactly (not expanded_token_names above -- this only
@@ -920,6 +965,21 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             avail = self.data_source_token_allow_matrix[ds].to(cond_embeddings.dtype)  # (B, T_cond)
             cond_embeddings = cond_embeddings * avail.unsqueeze(-1)
             padding_mask = avail < 0.5
+
+        if task_ids is not None and self.task_id_token_allow_matrix is not None:
+            # same mechanism as data_source_token_allow_matrix, but for a
+            # token that's only valid for a SUBSET of task_ids within a
+            # single data_source (see token_keys_valid_only_for_task_ids's
+            # docstring) -- combined with the data_source-based mask above
+            # (AND, i.e. a token needs both to allow it) rather than
+            # replacing it, since a token can be excluded for a whole data
+            # source AND further restricted to one task_id within the
+            # sources that do have it.
+            tid = torch.reshape(task_ids, [-1]).long()  # (B,), values in [0, num_tasks)
+            task_avail = self.task_id_token_allow_matrix[tid].to(cond_embeddings.dtype)  # (B, T_cond)
+            cond_embeddings = cond_embeddings * task_avail.unsqueeze(-1)
+            task_padding = task_avail < 0.5
+            padding_mask = task_padding if padding_mask is None else (padding_mask | task_padding)
 
         if self.training and self.p_drop_token > 0:
             eligible = torch.tensor(

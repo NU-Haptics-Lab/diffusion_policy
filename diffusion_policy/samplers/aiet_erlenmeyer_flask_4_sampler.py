@@ -96,6 +96,12 @@ class AIETErlenmeyerFlask4SimSampler(AIETAlignmentSim3Sampler):
     ZERO_FILL_KEYS = [
         "biotac_lh", "overhead_roi_patch_features", "overhead_roi_keypoints",
         "overhead_roi_keypoints_dinov3l",
+        # combined.zarr has no third/env camera at all -- see
+        # aiet_erlenmeyer_flask_10.yaml's token_keys_valid_only_for_task_ids
+        # (this key is only genuinely present for real task_id 27 anyway, so
+        # sim samples having it zero-filled+excluded is consistent with every
+        # other real task_id, not sim-specific).
+        "env_cam_keypoints_dinov3l",
     ]
     NATIVE_WRIST_PATCH_KEY = "wrist_camera_patch_features"  # always 14x14 -- no _7x7 variant in combined.zarr
     # precomputed fixed-tau spatial-softmax keypoints over NATIVE_WRIST_PATCH_KEY

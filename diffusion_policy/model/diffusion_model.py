@@ -221,6 +221,7 @@ class DiffusionModel(BaseImagePolicy):
             real_only_token_keys = None, # token keys hard-zeroed for sim (data_source==1) samples, always (train + eval). Binary-only; superseded by excluded_token_keys_by_data_source for >2-source cotrains.
             excluded_token_keys_by_data_source = None, # dict: data_source id -> token keys hard-zeroed for that source, always (train + eval). Generalizes sim_only_token_keys/real_only_token_keys to N cotrain sources; see DexNexTransformerForDiffusion.__init__.
             num_data_sources = None, # how many distinct data_source ids appear; required for 3+-source cotrains where not every source has an entry in excluded_token_keys_by_data_source. See DexNexTransformerForDiffusion.__init__.
+            token_keys_valid_only_for_task_ids = None, # dict: token key -> list of task_ids it's genuinely present for; every other task_id gets that token hard-zeroed and masked out (finer-grained than excluded_token_keys_by_data_source -- for a token only valid for a SUBSET of task_ids within one data_source, e.g. an env camera only wired up for one specific real task_id). Combined (AND) with excluded_token_keys_by_data_source when both apply. Requires embed_task_id=True. See DexNexTransformerForDiffusion.__init__.
             transformer_normalize_cond_tokens = True, # LayerNorm each cond token (timestep/task_id/obs key/patch group) right after its own projection, so no single token's raw magnitude can dominate cross-attention. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
             transformer_use_adaln_timestep = False, # AdaLN-Zero timestep conditioning instead of a timestep cross-attention token (DiT-style, the more standard fix for timestep specifically). Mutually exclusive with normalize_cond_tokens's handling of the timestep token. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
             gaussian_noise_by_data_source = None, # dict: data_source id -> list of cond_dims/spatial-softmax key names to add training-time Gaussian noise to for that source's samples. dexnex_transformer only. See DexNexTransformerForDiffusion.__init__.
@@ -288,6 +289,7 @@ class DiffusionModel(BaseImagePolicy):
         self.real_only_token_keys = real_only_token_keys
         self.excluded_token_keys_by_data_source = excluded_token_keys_by_data_source
         self.num_data_sources = num_data_sources
+        self.token_keys_valid_only_for_task_ids = token_keys_valid_only_for_task_ids
         self.transformer_normalize_cond_tokens = transformer_normalize_cond_tokens
         self.transformer_use_adaln_timestep = transformer_use_adaln_timestep
         self.gaussian_noise_by_data_source = gaussian_noise_by_data_source
@@ -430,6 +432,7 @@ class DiffusionModel(BaseImagePolicy):
                 real_only_token_keys=self.real_only_token_keys,
                 excluded_token_keys_by_data_source=self.excluded_token_keys_by_data_source,
                 num_data_sources=self.num_data_sources,
+                token_keys_valid_only_for_task_ids=self.token_keys_valid_only_for_task_ids,
                 normalize_cond_tokens=self.transformer_normalize_cond_tokens,
                 use_adaln_timestep=self.transformer_use_adaln_timestep,
                 gaussian_noise_by_data_source=self.gaussian_noise_by_data_source,
