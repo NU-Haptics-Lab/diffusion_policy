@@ -415,11 +415,19 @@ class BatchLoader:
         
         self.is_setup = True
     
-    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = "", mode = 'limits'):
+    def fit_nn(self, data, nn: SingleFieldLinearNormalizer, descriptor = "", mode = 'limits', clip_outlier_percentile = 0.0):
         """
         mode='limits' (default): scale+offset map the data's observed
         min/max exactly onto [-1, 1] -- appropriate for obs keys, where you
-        want the full observed range representable.
+        want the full observed range representable. Sensitive to a single
+        rare extreme sample dictating the whole scale and squashing the bulk
+        of typical values into a small sliver of [-1, 1] -- confirmed
+        directly on aiet_erlenmeyer_flask_14's action (several dims' true
+        min/max were nowhere near their own 0.1st/99.9th percentile). Pass
+        clip_outlier_percentile > 0 (e.g. 0.5) to fit scale/offset from that
+        percentile pair instead of the true min/max -- see normalizer.py's
+        _fit for exactly what this does (input_stats still records the true
+        min/max regardless, only scale/offset are affected).
 
         mode='gaussian': scale+offset map to (roughly) unit variance/zero
         mean instead (see normalizer.py's _fit -- actually 1.5 std, so ~87%
@@ -434,9 +442,10 @@ class BatchLoader:
         interacts with common_noise_scheduler's clip_sample: true (clips the
         model's predicted x0 to [-1, 1] during reverse sampling) -- a
         long-tailed action's true target may get clipped there; worth
-        revisiting if that turns out to matter.
+        revisiting if that turns out to matter. clip_outlier_percentile is
+        ignored in this mode (normalizer.py's _fit only applies it to 'limits').
         """
-        nn.fit(data, mode=mode)
+        nn.fit(data, mode=mode, clip_outlier_percentile=clip_outlier_percentile)
         
         # print the results for min max
         input_stats_dict = nn.get_input_stats()
@@ -599,13 +608,41 @@ class BatchLoader:
         a stray rb_id-specific override would silently break it with no
         error. normalizer_fit_rb_ids (constructor param) now makes the
         intended sharing (or non-sharing) explicit in the yaml instead.
+
+        Backward compat: checkpoints saved before normalizer_fit_rb_ids
+        existed cached stats under the bare class name (e.g.
+        "AIETErlenmeyerFlask4BatchLoader", no ":<rb_ids>" suffix) -- the
+        qualified cache_key below will never match those old entries, which
+        would otherwise silently fall through to get_fitted_nns() on every
+        load of an old checkpoint. That's not just slow -- for standalone
+        inference paths that skip building globals.DATALOADERS entirely
+        (since they expect to only ever need cached stats), it's a hard
+        crash (globals.DATALOADERS is None). The legacy key is only ever
+        checked as a fallback when normalizer_fit_rb_ids == [self.rb_id]
+        (single-rb_id/independent fit) -- the only configuration the old,
+        unqualified scheme could have meant, since it existed before
+        multi-rb_id pooling did; for any other normalizer_fit_rb_ids, a
+        legacy-keyed entry (fit against a possibly different rb_id
+        combination) would be semantically wrong to reuse, so it's ignored
+        and a fresh fit proceeds as before.
         """
         cache_key = f"{type(self).__name__}:{','.join(sorted(self.normalizer_fit_rb_ids))}"
+        legacy_cache_key = type(self).__name__
+        is_single_rb_id_fit = self.normalizer_fit_rb_ids == [self.rb_id]
 
         if cache_key in globals.NORMALIZER_STATE_DICTS:
             nns = self.get_static_nns()
             self._apply_normalizer_state_dict(nns, globals.NORMALIZER_STATE_DICTS[cache_key])
             print(f"[BatchLoader:{self.rb_id}] reusing cached normalizer stats for group '{cache_key}'")
+        elif is_single_rb_id_fit and legacy_cache_key in globals.NORMALIZER_STATE_DICTS:
+            nns = self.get_static_nns()
+            self._apply_normalizer_state_dict(nns, globals.NORMALIZER_STATE_DICTS[legacy_cache_key])
+            # also stash it under the qualified key so subsequent lookups
+            # this session (and a future re-save of this checkpoint) use the
+            # current scheme going forward.
+            globals.NORMALIZER_STATE_DICTS[cache_key] = globals.NORMALIZER_STATE_DICTS[legacy_cache_key]
+            print(f"[BatchLoader:{self.rb_id}] reusing LEGACY-keyed cached normalizer stats "
+                  f"'{legacy_cache_key}' (pre-normalizer_fit_rb_ids checkpoint) for group '{cache_key}'")
         else:
             nns = self.get_fitted_nns()
             globals.NORMALIZER_STATE_DICTS[cache_key] = self._flatten_normalizers(nns)
@@ -1753,20 +1790,46 @@ class AIETErlenmeyerFlask4BatchLoader(BatchLoader):
         # per source (all normalizer_fit_rb_ids members are expected to share
         # the same schema when they're being fit together in the first place).
         rb0: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.normalizer_fit_rb_ids[0]]  # type: ignore
-        if "palm_pose_xyz_rpy" in rb0 and "gripper_value" in rb0:
+        # "palm_pose_xyz_rpy" default matches AIETAlignmentSim3Sampler's own
+        # default -- checked against whichever literal key action fitting
+        # will actually read (action_palm_pose_rb_key, e.g.
+        # "palm_pose_xyz_rpy_commands" for aiet_erlenmeyer_flask_15), not
+        # unconditionally the unsuffixed name, so this guard stays correct
+        # for a source that has the configured key but not the default one.
+        action_palm_key = getattr(globals.CONFIG, 'action_palm_pose_rb_key', 'palm_pose_xyz_rpy')  # type: ignore
+        if action_palm_key in rb0 and "gripper_value" in rb0:
             rel_palm, grip = self.get_all_action_components()
             palm_nn = get_identity_normalizer_from_stat({'min': np.zeros(6, dtype=np.float32)})
-            # 'gaussian', not 'limits' -- the action is what diffusion actually
+            # 'gaussian' (default): the action is what diffusion actually
             # noises/denoises; a target distribution closer to zero-mean/unit-
             # variance is a more consistent match for that Gaussian forward
             # process than one min/max-stretched to fill [-1, 1] by its
             # rarest outlier (obs keys stay 'limits', fit_nn's default, since
             # they're not what's being noised). See fit_nn's docstring for
             # the clip_sample interaction this trades in.
-            self.fit_nn(rel_palm, palm_nn, "rel_palm_pose_xyz_rpy", mode='gaussian')
+            #
+            # Config-overridable to 'limits' (action_normalizer_mode) --
+            # gaussian's own outlier problem shows up differently: a
+            # dimension with a tiny std (e.g. aiet_erlenmeyer_flask_14's
+            # cos_yaw, clustered near -1 almost always) gets a HUGE gaussian
+            # scale (scale = 1/(1.5*std)), so a rare-but-real excursion to
+            # the opposite extreme (cos_yaw swinging to +1 when yaw passes
+            # through 0) blows up to a normalized magnitude far past what
+            # 'limits' mode would ever produce (confirmed: ~26 vs the
+            # bounded [-1,1] 'limits' gives by construction) -- worse than
+            # the problem gaussian was chosen to fix in the first place for
+            # a dimension that's already inherently bounded (sin/cos).
+            # action_fit_clip_outliers (only affects 'limits') fits
+            # scale/offset from a percentile pair instead of the true
+            # min/max, so a handful of rare extreme samples don't squash the
+            # bulk of typical values into a small sliver of [-1,1] -- see
+            # fit_nn's docstring.
+            action_mode = getattr(globals.CONFIG, 'action_normalizer_mode', 'gaussian')  # type: ignore
+            clip_pct = 0.5 if getattr(globals.CONFIG, 'action_fit_clip_outliers', False) else 0.0  # type: ignore
+            self.fit_nn(rel_palm, palm_nn, "rel_palm_pose_xyz_rpy", mode=action_mode, clip_outlier_percentile=clip_pct)
 
             grip_nn = get_identity_normalizer_from_stat({'min': np.zeros(1, dtype=np.float32)})
-            self.fit_nn(grip[:, None], grip_nn, "gripper_value (action)", mode='gaussian')
+            self.fit_nn(grip[:, None], grip_nn, "gripper_value (action)", mode=action_mode, clip_outlier_percentile=clip_pct)
 
             for param_name in ["scale", "offset"]:
                 nns['action'].params_dict[param_name] = torch.cat([
@@ -1780,6 +1843,20 @@ class AIETErlenmeyerFlask4BatchLoader(BatchLoader):
 
         return nns
 
+
+class AIETErlenmeyerFlask12BatchLoader(AIETErlenmeyerFlask4BatchLoader):
+    """
+    aiet_erlenmeyer_flask_12's vision-only variant of AIETErlenmeyerFlask4BatchLoader
+    -- obs_keys_to_use/load drop palm_pose_xyz_rpy/gripper_value entirely (see
+    that yaml), so OBS_KEYS_TO_FIT must be empty: fitting an OBS-level
+    normalizer for a key that isn't in obs_keys_to_load would KeyError against
+    get_static_nns()'s nns['obs'] dict (which only has entries for actual obs
+    keys). The ACTION is unaffected -- get_fitted_nns still reads
+    palm_pose_xyz_rpy/gripper_value directly off the replay buffer to build
+    rel_palm_pose_xyz_rpy (the action doesn't care whether the absolute pose
+    is ALSO exposed as an obs), so no other override is needed.
+    """
+    OBS_KEYS_TO_FIT = []
 
 class TroubleshootClenchBatchLoader(BatchLoader):
     """

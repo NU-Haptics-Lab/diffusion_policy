@@ -23,9 +23,9 @@ class AIETAlignmentSim3Sampler(AIETErlenmeyerFlaskSampler):
     palm_pose_xyz_rpy is NOT a model input (deliberately excluded from
     obs_keys_to_use/obs_keys_to_load -- see aiet_alignment_sim_3.yaml) --
     the point is to force the policy to localize off the wrist-camera DINOv3
-    patch tokens instead of just reading off its own current pose. The
-    action's palm component is therefore relative to the CURRENT palm pose
-    (the ep_idx step, i.e. action_rel_indices offset 0), elementwise
+    patch tokens instead of just reading off its own current pose. By
+    default the action's palm component is relative to the CURRENT palm
+    pose (the ep_idx step, i.e. action_rel_indices offset 0), elementwise
     xyz/rpy subtraction (rpy wrapped into (-pi, pi] via _wrap_rpy_delta, so a
     physically-tiny rotation that straddles the +-pi discontinuity -- e.g.
     yaw swinging through the search behavior's rotation range -- doesn't
@@ -35,40 +35,104 @@ class AIETAlignmentSim3Sampler(AIETErlenmeyerFlaskSampler):
     subtract off nobs['state'], which would require palm_pose_xyz_rpy to
     still be a model input.
 
-    gripper_value stays absolute (not relative) -- it's a [0, 1] "how closed"
-    scalar, not a pose, so there's no ambiguity/drift concern that relative
-    encoding would help with.
+    action_pose_relative (config, default True via getattr so every existing
+    yaml keeps its current relative-delta behavior unchanged) switches this:
+    False makes the palm component ABSOLUTE instead -- the raw future palm
+    pose, no subtraction. Yaw specifically is NOT used as a raw radian value
+    in absolute mode -- it's replaced with (sin(yaw), cos(yaw)) (see
+    _yaw_to_sincos), making the absolute palm component 7-dim (x,y,z,roll,
+    pitch,sin_yaw,cos_yaw), not 6. This is NOT the same discontinuity
+    _wrap_rpy_delta handles: that's about a DELTA crossing the +-pi
+    boundary between two readings; this is about yaw's raw ABSOLUTE value
+    itself sitting at/crossing that boundary as a routine part of this
+    task's wrist orientation (confirmed directly: ~1.2% of consecutive
+    real-data timesteps have a raw yaw jump >pi, vs ~0% for roll/pitch) --
+    a plain scalar regression target can't represent "+pi and -pi are the
+    same angle," so a diffusion model predicting raw absolute yaw would get
+    contradictory gradient signal exactly at the orientation this task
+    actually operates in. sin/cos has no such discontinuity anywhere, and
+    the angle is trivially recoverable via atan2(sin, cos). Roll/pitch don't
+    need this (confirmed they essentially never wrap in this dataset), so
+    they stay raw scalars even in absolute mode -- only yaw gets the sin/cos
+    treatment. See aiet_erlenmeyer_flask_14.yaml, which sets
+    action_pose_relative false.
 
-    Action is [rel_palm_pose_xyz_rpy (6), gripper_value (1)] = 7-dim, built
-    here by concatenating/subtracting the two rb keys, since combined.zarr
-    has no single "action" field -- config.action_key is just a placeholder
-    ("action") not present in the rb, matched by AIETAlignmentSim3BatchLoader's
-    get_fitted_nns doing the same relative-pose computation when fitting
-    normalizer stats.
+    gripper_value stays absolute (not relative) regardless -- it's a [0, 1]
+    "how closed" scalar, not a pose, so there's no ambiguity/drift concern
+    that relative encoding would help with.
+
+    Action is [palm component, gripper_value (1)] = 7-dim when relative
+    (palm component is 6: x,y,z,roll,pitch,yaw-delta) or 8-dim when absolute
+    (palm component is 7: x,y,z,roll,pitch,sin_yaw,cos_yaw) -- built here by
+    concatenating/subtracting the two rb keys, since combined.zarr has no
+    single "action" field -- config.action_key is just a placeholder
+    ("action") not present in the rb, matched by AIETErlenmeyerFlask4BatchLoader's
+    get_fitted_nns doing the same relative/absolute-pose computation when
+    fitting normalizer stats.
     """
 
+    @staticmethod
+    def _pose_is_relative():
+        return getattr(globals.CONFIG, 'action_pose_relative', True)
+
+    @staticmethod
+    def _action_palm_pose_rb_key():
+        """
+        Which literal rb array the action's palm-pose component (both the
+        "future"/target value and, in relative mode, the "current" value
+        subtracted from it) is read from. Defaults to "palm_pose_xyz_rpy"
+        (every existing yaml's unchanged behavior) -- override to e.g.
+        "palm_pose_xyz_rpy_commands" (aiet_erlenmeyer_flask_15.yaml) to train
+        the action against the commanded trajectory instead of the
+        ambiguous default array. Independent of what obs key(s) the
+        observation side uses (see obs_use_states_suffix in
+        AIETErlenmeyerFlaskSampler.resolve_rb_key) -- the action and
+        observation sides of this sampler read from entirely separate
+        config knobs, so e.g. obs from *_states + action from *_commands
+        (flask_15) is a deliberate, explicit combination, not a coincidence.
+        """
+        return getattr(globals.CONFIG, 'action_palm_pose_rb_key', 'palm_pose_xyz_rpy')
+
+    @staticmethod
+    def _yaw_to_sincos(palm):
+        """
+        [N, 6] (x,y,z,roll,pitch,yaw) raw absolute palm pose -> [N, 7]
+        (x,y,z,roll,pitch,sin_yaw,cos_yaw). Only used in absolute-pose mode
+        -- see action_pose_relative's docstring for why yaw specifically
+        needs this and roll/pitch don't.
+        """
+        yaw = palm[:, 5:6]
+        return np.concatenate([palm[:, :5], np.sin(yaw), np.cos(yaw)], axis=-1)
+
     def get_action_trajectory(self, ep_idx, key):
+        palm_key = self._action_palm_pose_rb_key()
         indices = np.array(globals.CONFIG.action_rel_indices) + ep_idx  # type: ignore
-        palm = self.indices.get_sequence_by_train_indices_and_key(indices, "palm_pose_xyz_rpy")
+        palm = self.indices.get_sequence_by_train_indices_and_key(indices, palm_key)
         grip = self.indices.get_sequence_by_train_indices_and_key(indices, "gripper_value")
 
-        current_palm = self.indices.get_sequence_by_train_indices_and_key(
-            np.array([ep_idx]), "palm_pose_xyz_rpy"
-        )  # [1, 6]
-        rel_palm = palm - current_palm  # broadcast over the trajectory dim
-        rel_palm[:, 3:] = _wrap_rpy_delta(rel_palm[:, 3:])  # see _wrap_rpy_delta
+        if self._pose_is_relative():
+            current_palm = self.indices.get_sequence_by_train_indices_and_key(
+                np.array([ep_idx]), palm_key
+            )  # [1, 6]
+            palm_component = palm - current_palm  # broadcast over the trajectory dim
+            palm_component[:, 3:] = _wrap_rpy_delta(palm_component[:, 3:])  # see _wrap_rpy_delta
+        else:
+            palm_component = self._yaw_to_sincos(palm)  # absolute -- see action_pose_relative's docstring
 
-        return np.concatenate([rel_palm, grip[:, None]], axis=-1).astype(np.float32)
+        return np.concatenate([palm_component, grip[:, None]], axis=-1).astype(np.float32)
 
     def _gather_rel_palm_and_grip_by_offset(self, train_idx):
         """
         Shared core of get_all_action_components/build_action_chunk below:
-        for each offset in action_rel_indices, the (rel_palm [N, 6],
+        for each offset in action_rel_indices, the (palm component [N, 6],
         gripper_value [N]) column it contributes -- via
         self.indices.get_sequence_by_train_indices_and_key, so this can't
         drift from get_action_trajectory's per-sample logic (same
         fill-back/fill-forward indexing, just batched over train_idx instead
-        of one ep_idx at a time).
+        of one ep_idx at a time). Relative (subtract + wrap) or absolute
+        (raw future pose) per action_pose_relative -- see class docstring;
+        name kept as "rel_palm" for historical/call-site continuity even
+        though it may hold absolute values now.
 
         Returns (rel_palms, grips), each a list of length len(action_rel_indices).
         """
@@ -79,14 +143,20 @@ class AIETAlignmentSim3Sampler(AIETErlenmeyerFlaskSampler):
         # raises. Force int64 explicitly so this can't happen regardless of
         # whether train_idx is empty.
         train_idx = np.asarray(train_idx, dtype=np.int64)
-        current_palm = self.indices.get_sequence_by_train_indices_and_key(train_idx, "palm_pose_xyz_rpy")
+        is_relative = self._pose_is_relative()
+        palm_key = self._action_palm_pose_rb_key()
+        current_palm = (self.indices.get_sequence_by_train_indices_and_key(train_idx, palm_key)
+            if is_relative else None)
 
         rel_palms = []
         grips = []
         for offset in globals.CONFIG.action_rel_indices:  # type: ignore
-            future_palm = self.indices.get_sequence_by_train_indices_and_key(train_idx + offset, "palm_pose_xyz_rpy")
-            rel_palm = future_palm - current_palm
-            rel_palm[:, 3:] = _wrap_rpy_delta(rel_palm[:, 3:])  # see _wrap_rpy_delta
+            future_palm = self.indices.get_sequence_by_train_indices_and_key(train_idx + offset, palm_key)
+            if is_relative:
+                rel_palm = future_palm - current_palm
+                rel_palm[:, 3:] = _wrap_rpy_delta(rel_palm[:, 3:])  # see _wrap_rpy_delta
+            else:
+                rel_palm = self._yaw_to_sincos(future_palm)  # absolute -- see action_pose_relative's docstring
             rel_palms.append(rel_palm)
             grips.append(self.indices.get_sequence_by_train_indices_and_key(train_idx + offset, "gripper_value"))
         return rel_palms, grips

@@ -298,8 +298,9 @@ class TopKCheckpointManager:
                 self.load_checkpoint(path=lastest_ckpt_path)
                 
             else:
-                print("Checkpointer::load: lastest_ckpt_path wasn't a file.")
-                raise
+                raise FileNotFoundError(
+                    f"Checkpointer::load: resume_tag {self.resume_tag!r} resolved to "
+                    f"{lastest_ckpt_path}, which isn't a file.")
             
 # class GlobalCheckpointer(TopKCheckpointManager):
 #     """

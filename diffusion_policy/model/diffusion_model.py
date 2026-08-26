@@ -1215,18 +1215,55 @@ class DiffusionModel(BaseImagePolicy):
                             ]).to(current_xyz_raw.device, current_xyz_raw.dtype)
 
                             d_true_raw = final_xyz_raw - current_xyz_raw  # (K,3)
-                            # pad to the 7-dim action layout (xyz + rpy + gripper) so
-                            # the action normalizer (fit on that 7-dim shape) applies;
-                            # rpy/gripper padding is discarded right after
-                            padded = torch.cat(
-                                [d_true_raw, torch.zeros(d_true_raw.shape[0], 4,
-                                                          device=d_true_raw.device, dtype=d_true_raw.dtype)],
-                                dim=-1)
-                            d_true_normed_xyz = action_normalizer.normalize(padded)[:, :3]
+
+                            # d_true_raw (and, in the action_pose_relative:
+                            # false branch below, the prediction's implied
+                            # delta) are DELTAS -- reweight each xyz axis by
+                            # the action normalizer's own per-dim SCALE only
+                            # (never its additive offset), matching the
+                            # relative magnitude the model was actually
+                            # trained against. The offset is a fitted
+                            # constant for ABSOLUTE action values (e.g. the
+                            # mean workspace position when
+                            # action_pose_relative: false) -- adding it to a
+                            # delta would inject a large, physically
+                            # meaningless constant shift that (since it's not
+                            # applied identically as a pure scaling) distorts
+                            # the cosine similarity between the two sides
+                            # instead of leaving it invariant. Scale-only is
+                            # correct and equivalent to the old
+                            # pad-with-zeros-then-normalize-then-slice
+                            # approach specifically when action_pose_relative
+                            # is true (the normalizer's offset there is
+                            # already fit on deltas, i.e. its own "zero
+                            # delta" already maps near zero) -- and correct
+                            # (unlike that old approach) when it's false too.
+                            xyz_scale = action_normalizer.params_dict['scale'][:3]
+                            xyz_offset = action_normalizer.params_dict['offset'][:3]
+                            d_true_normed_xyz = d_true_raw * xyz_scale
 
                             # furthest-ahead offset in the predicted chunk -- the
                             # model's most-committed near-term intention
-                            pred_xyz = pred_action[known_mask, -1, :3]
+                            if getattr(globals.CONFIG, 'action_pose_relative', True):  # type: ignore
+                                # pred_action is already normalize(raw_delta) =
+                                # raw_delta*scale + offset (same transform
+                                # applied to training targets, which are
+                                # themselves deltas) -- subtract off the
+                                # baked-in offset to get the scale-only
+                                # representation matching d_true_normed_xyz's.
+                                pred_xyz = pred_action[known_mask, -1, :3] - xyz_offset
+                            else:
+                                # action is ABSOLUTE (action_pose_relative: false,
+                                # see AIETAlignmentSim3Sampler) -- pred_action's
+                                # xyz is a predicted absolute position, not a
+                                # delta, so it isn't directly comparable to
+                                # d_true_normed_xyz (which IS a delta). Unnormalize
+                                # the prediction to raw units, subtract off
+                                # current_xyz_raw to get the IMPLIED delta, then
+                                # apply the same scale-only reweighting as d_true.
+                                pred_xyz_raw = action_normalizer.unnormalize(pred_action[known_mask, -1, :])[:, :3]
+                                implied_delta_raw = pred_xyz_raw - current_xyz_raw
+                                pred_xyz = implied_delta_raw * xyz_scale
 
                             cos_sim = F.cosine_similarity(pred_xyz, d_true_normed_xyz, dim=-1, eps=1e-8)
                             key = f"{rb_id}_all" if rb_id else "all"

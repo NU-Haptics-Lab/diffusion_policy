@@ -2,7 +2,7 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_erlenmeyer_flask_11: same as aiet_erlenmeyer_flask_10, but
+description: "aiet_erlenmeyer_flask_12: same as aiet_erlenmeyer_flask_10, but
   with sim_alignment/combined.zarr cotraining REMOVED (real-only, like
   flask_7/9 vs flask_8/10) -- two logical rb_ids over the SAME physical
   task_24 zarr: erlenmeyer (subtask_id==0, on-task) and erlenmeyer_align
@@ -50,10 +50,10 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_erlenmeyer_flask_11
+run_tag: aiet_erlenmeyer_flask_12
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_11
+output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_12
 
 tasks_to_use:
   - erlenmeyer
@@ -82,20 +82,14 @@ normalizer_fit_rb_ids: [erlenmeyer, erlenmeyer_align]
 # genuinely present for task_id 27 -- every other task_id zero-fills it,
 # masked out via the model's token_keys_valid_only_for_task_ids below.
 obs_keys_to_use:
-  - palm_pose_xyz_rpy
-  - gripper_value
-  - biotac_lh 
   - wrist_cam_keypoints_dinov3l
   - overhead_roi_keypoints_dinov3l
   - env_cam_keypoints_dinov3l
 
 obs_keys_to_load:
-  - palm_pose_xyz_rpy
   - wrist_cam_keypoints_dinov3l
   - overhead_roi_keypoints_dinov3l
   - env_cam_keypoints_dinov3l
-  - gripper_value
-  - biotac_lh
 
 models_to_train:
   - actor
@@ -271,7 +265,7 @@ replay_buffer_loader:
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
-  _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+  _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask12BatchLoader
   rb_id: "erlenmeyer" # forces a load
   train_or_val: eval
   use_dataloader: false
@@ -328,7 +322,7 @@ common_wbatch_loss_erlenmeyer:
     # handled solely via common_wbatch_loss_erlenmeyer_align's weight.
 
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask12BatchLoader
       rb_id: erlenmeyer
       train_or_val: train
       normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
@@ -348,7 +342,7 @@ common_wbatch_loss_erlenmeyer_val:
     eta: 1.0
 
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask12BatchLoader
       rb_id: erlenmeyer
       train_or_val: val
       normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
@@ -370,7 +364,7 @@ common_wbatch_loss_erlenmeyer_align:
     eta: 1.0
 
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask12BatchLoader
       rb_id: erlenmeyer_align
       train_or_val: train
       normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
@@ -389,7 +383,7 @@ common_wbatch_loss_erlenmeyer_align_val:
     eta: 1.0
 
     batch_loader:
-      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask12BatchLoader
       rb_id: erlenmeyer_align
       train_or_val: val
       normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
@@ -524,7 +518,7 @@ models:
           diagnostics_every_n_steps: 50
           check_alignment_direction: true # log val_alignment_direction_cos_sim: does the predicted relative palm-xyz action point toward this episode's own final palm pose (a no-ground-truth-needed proxy for the true aligned position, via each sample's ep_id)? Requires no code changes to disable -- set false to skip it entirely.
           use_compiled_policy: ${use_compiled_policy} # torch.compile's the transformer trunk (see DiffusionModel._get_forward_model) -- watch the first ~50-100 steps for compile-time spikes/graph breaks (log_attn flips every diagnostics_every_n_steps, train/eval differ, and the model writes diagnostics attrs like last_keep_mask inside forward -- each a possible graph-break source) before trusting steady-state it/s. Confirmed a real win (not just batch-size confound) on flask_7 at a large enough batch size -- if this cotrain's per-stream batch sizes end up much smaller, re-verify with the same timing/* instrumentation before trusting it here too.
-          transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value', 'biotac_lh']
+          transformer_droppable_token_keys: []
           transformer_p_drop_token: 0.0
           transformer_normalize_cond_tokens: true # LayerNorm each cond token right after its own projection, so timestep can't dominate cross-attention purely from raw embedding magnitude. In the future solve this problem using adaLN instead
           transformer_use_adaln_timestep: true # DiT-style AdaLN-Zero timestep conditioning instead of a timestep cross-attn token -- the more standard fix
@@ -545,7 +539,7 @@ models:
           # training-time Gaussian noise on cond_dims keys -- single data
           # source now (sim_alignment removed), so just one entry.
           gaussian_noise_by_data_source:
-            0: ['palm_pose_xyz_rpy', 'gripper_value'] # 0=erlenmeyer (the only data source now)
+            0: [] # 0=erlenmeyer (the only data source now)
           gaussian_noise_std: 0.0
 
           # no excluded_token_keys_by_data_source/num_data_sources needed --

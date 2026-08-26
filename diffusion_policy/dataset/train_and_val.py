@@ -95,9 +95,38 @@ class DexNexDataset(BaseImageDataset):
     
     def get_ep_lengths(self):
         return self.sampler.get_ep_lengths_arr()
-        
-        
-    
+
+    def get_palm_xy(self, position_source):
+        """
+        (N, 2) palm xy, one row per SAMPLE, in this dataset's own flat
+        sample order (N == len(self)) -- see
+        TrainAndVal.compute_weights_inverse_density's docstring for what
+        position_source means. Exists as its own method (mirroring
+        get_ep_lengths/get_qvals above) so GPUDatasetView can correctly
+        subset it to just its own view's samples below -- computing this
+        against dataset.sampler directly from outside would silently use
+        the FULL/all sampler's samples even for a train/val view (confirmed
+        directly: building it inline against a GPUDatasetView's .sampler
+        produced the "all" sampler's sample count, not the view's).
+        """
+        ep_list = list(self.sampler.get_ep_list())
+        assert len(ep_list) > 0, "get_palm_xy: no episodes to compute positions from"
+        palm_key = ep_list[0].resolve_rb_key('palm_pose_xyz_rpy')
+
+        if position_source == 'sample':
+            return np.asarray(self.sampler.get_key(palm_key))[:, :2]
+        elif position_source == 'episode_final':
+            chunks = []
+            for ep in ep_list:
+                final_xy = np.asarray(ep.get_all_key(palm_key))[-1, :2]
+                chunks.append(np.tile(final_xy, (len(ep), 1)))
+            return np.concatenate(chunks, axis=0)
+        else:
+            raise ValueError(
+                f"unknown weighted_dataloader_position_source: {position_source!r} "
+                "(expected 'episode_final' or 'sample')")
+
+
 
 def _nested_stack_to_device(samples, device):
     """Recursively stack a list of nested dicts/tensors and move to device."""
@@ -469,6 +498,9 @@ class GPUDatasetView(torch.utils.data.Dataset):
     def get_qvals(self):
         return self._cache.get_qvals()[self._indices]
 
+    def get_palm_xy(self, position_source):
+        return self._cache.get_palm_xy(position_source)[self._indices]
+
     def __getattr__(self, name):
         return getattr(self._cache, name)
 
@@ -579,6 +611,9 @@ class TrainAndVal:
             max_train_episodes=None,
             whether_to_use = True,
             use_weighted_dataloader = False,
+            weighted_dataloader_mode = 'episode_length', # 'episode_length' (existing compute_weights2, unchanged default) or 'inverse_density' (compute_weights_inverse_density, new -- see its docstring). Only consulted when use_weighted_dataloader is True.
+            weighted_dataloader_position_source = 'episode_final', # only used by weighted_dataloader_mode='inverse_density': 'episode_final' (every sample in an episode shares that episode's own FINAL xy -- rebalances which OUTCOMES/targets the dataset covers uniformly) or 'sample' (each sample's own CURRENT xy at its observation timestep -- rebalances which STATES/positions along the way are covered uniformly, including transient positions no episode ever ends at). See compute_weights_inverse_density's docstring for the tradeoff.
+            weighted_dataloader_bin_width = 0.05, # physical bin width (meters) per axis for the inverse-density 2D histogram -- bin COUNT is derived from this and each axis's own 0.5th/99.5th percentile range (see compute_weights_inverse_density), not fixed, so it stays meaningful regardless of a stream's actual xy spread. Only used by weighted_dataloader_mode='inverse_density'.
             use_val_set = True, # if false, train_sampler == sampler, will save time during RL
             preload_to_gpu = False, # load entire dataset into GPU memory before training
             preload_vectorized = False, # use _vectorized_load_dataset instead of per-sample loading; falls back automatically if unsupported
@@ -599,6 +634,9 @@ class TrainAndVal:
         self.max_train_episodes = max_train_episodes
         self.whether_to_use = whether_to_use
         self.use_weighted_dataloader = use_weighted_dataloader
+        self.weighted_dataloader_mode = weighted_dataloader_mode
+        self.weighted_dataloader_position_source = weighted_dataloader_position_source
+        self.weighted_dataloader_bin_width = weighted_dataloader_bin_width
         self.use_val_set = use_val_set
         self.preload_to_gpu = preload_to_gpu
         self.preload_vectorized = preload_vectorized
@@ -713,10 +751,130 @@ class TrainAndVal:
         
         # scale range to [0, 1.0]
         weights = probs * 2.0
-        
+
         return weights
-        
-        
+
+    def compute_weights_inverse_density(self, dataset: DexNexDataset):
+        """
+        Inverse-density (importance) sampling weight per sample, based on
+        (x, y) palm position -- rebalances the dataset toward uniform xy
+        coverage instead of whatever the raw collection process happened to
+        concentrate on (e.g. a tray region visited disproportionately often).
+        Uses a 2D histogram density estimate: weight = 1 / (that sample's bin
+        count), so a sample landing in a sparse bin is oversampled relative
+        to one in a dense bin. Always produces exactly one weight per SAMPLE
+        (len(dataset)), aligned with dataset's own flat sample ordering --
+        WeightedRandomSampler needs a weight per sample regardless of which
+        position source below is used, since it's what samples FROM.
+
+        The histogram's extent is each axis's own 0.5th/99.5th percentile
+        (not true min/max) -- same rationale as normalizer.py's
+        clip_outlier_percentile: a handful of rare extreme (x, y) values
+        would otherwise stretch the grid to cover mostly-empty space,
+        starving the bulk of real coverage of bin resolution. Bin COUNT is
+        then derived from that percentile range divided by
+        weighted_dataloader_bin_width (a physical size in meters, e.g. the
+        default 0.05 = 5cm bins) -- so bin count adapts per stream/axis
+        instead of being fixed, and bin width stays physically interpretable
+        regardless of how much real spread a given stream's xy has. A sample
+        whose own (x, y) falls OUTSIDE the percentile range (the rare
+        extreme values excluded from the grid) gets weight 1.0 exactly --
+        neither oversampled nor undersampled relative to a plain uniform
+        draw, since there's no reliable local density estimate for it.
+
+        weighted_dataloader_position_source picks WHICH (x, y) represents a
+        sample:
+          - 'episode_final' (default): every sample in an episode shares
+            that episode's own FINAL xy. Rebalances which OUTCOMES/targets
+            get covered uniformly -- e.g. if the collected data has 10x more
+            episodes ending near the tray's center than its edges, this
+            makes edge-ending episodes 10x likelier to be sampled, without
+            changing how MANY samples come from any given episode relative
+            to its length.
+          - 'sample': each sample's own CURRENT xy at its observation
+            timestep. Rebalances which STATES/positions get covered
+            uniformly, including transient positions no episode ever
+            actually ends at (e.g. approach trajectories passing through a
+            region even if they don't terminate there) -- a broader notion
+            of "dataset coverage" than just terminal outcomes, at the cost
+            of being noisier per-episode (a long episode passing through
+            many different regions gets its samples split across many bins,
+            rather than concentrated in whichever bin its ending falls in).
+        Neither is objectively correct -- pick based on whether what you
+        want rebalanced is "where episodes end up" or "everywhere the arm
+        actually visits along the way."
+        """
+        # dataset.get_palm_xy handles both the plain DexNexDataset case and
+        # the preload_to_gpu GPUDatasetView case (which wraps the FULL/all
+        # sampler's cache plus a train/val _indices subset -- computing xy
+        # off dataset.sampler directly, like an earlier version of this
+        # method did, silently reads the unsplit full population instead of
+        # this dataset's own subset. See get_ep_lengths/get_qvals for the
+        # same pattern).
+        xy = dataset.get_palm_xy(self.weighted_dataloader_position_source)
+
+        assert len(xy) == len(dataset), \
+            f"compute_weights_inverse_density: built {len(xy)} xy positions but dataset has {len(dataset)} samples"
+
+        x, y = xy[:, 0], xy[:, 1]
+        xlo, xhi = np.percentile(x, [0.5, 99.5])
+        ylo, yhi = np.percentile(y, [0.5, 99.5])
+        bin_width = self.weighted_dataloader_bin_width
+        # at least 1 bin even if a degenerate stream's percentile range is
+        # narrower than one bin_width (e.g. very few distinct positions)
+        nx = max(1, int(np.ceil((xhi - xlo) / bin_width)))
+        ny = max(1, int(np.ceil((yhi - ylo) / bin_width)))
+        hist, xedges, yedges = np.histogram2d(
+            x, y, bins=[nx, ny], range=[[xlo, xhi], [ylo, yhi]])
+
+        # samples outside the percentile range never contributed to hist
+        # (histogram2d's explicit range excludes them from the counts, same
+        # as it excludes them from the grid) -- there's no reliable local
+        # density estimate for them, so they get a flat weight of 1.0
+        # (neither oversampled nor undersampled) rather than being clipped
+        # into the nearest edge bin's count.
+        in_range = (x >= xlo) & (x <= xhi) & (y >= ylo) & (y <= yhi)
+        weights = np.ones(len(xy), dtype=np.float64)
+
+        # digitize (not the histogram's own bin-assignment output, which
+        # np.histogram2d doesn't expose) to look up each in-range sample's
+        # own bin count -- clip against the last edge so a point exactly on
+        # the max edge (digitize would put it one bin past the end) still
+        # lands in the last real bin instead of out of bounds.
+        xi = np.clip(np.digitize(x[in_range], xedges) - 1, 0, nx - 1)
+        yi = np.clip(np.digitize(y[in_range], yedges) - 1, 0, ny - 1)
+        counts = hist[xi, yi]
+        counts = np.maximum(counts, 1.0)  # a sample's own bin is never actually empty (it's IN that bin), just guards float/edge weirdness
+        weights[in_range] = 1.0 / counts
+
+        self._print_density_grid(hist, xedges, yedges)
+
+        return weights
+
+    @staticmethod
+    def _print_density_grid(hist, xedges, yedges):
+        """
+        Human-readable dump of the (x, y) histogram compute_weights_inverse_density
+        just built -- one row per y bin (top = highest y, matching a normal
+        top-down map reading), one column per x bin, cell value = sample
+        count in that bin (that stream's own inverse-density weight for a
+        sample there is 1/count). Column/row headers give each bin's own
+        [start, end) edge, not just an index, so the printed grid can be read
+        directly against real tray coordinates.
+        """
+        bins_x = len(xedges) - 1
+        bins_y = len(yedges) - 1
+        cell_w = 7
+        header = "y\\x".rjust(14) + "".join(f"{xedges[i]:>{cell_w}.2f}" for i in range(bins_x))
+        lines = [header]
+        # top row = highest y, so it reads like a normal top-down map
+        for j in reversed(range(bins_y)):
+            row_label = f"[{yedges[j]:.2f},{yedges[j+1]:.2f})".rjust(14)
+            row = row_label + "".join(f"{int(hist[i, j]):>{cell_w}d}" for i in range(bins_x))
+            lines.append(row)
+        lines.append(f"total samples: {int(hist.sum())}  nonzero cells: {int((hist > 0).sum())}/{hist.size}")
+        print("\n".join(lines))
+
     def _resolve_device(self):
         return torch.device(globals.CONFIG.device if globals.CONFIG is not None and hasattr(globals.CONFIG, 'device') else 'cuda')  # type: ignore
 
@@ -756,12 +914,25 @@ class TrainAndVal:
         
         if use:
             # get the weights
-            weights = self.compute_weights2(dataset)
-            
+            if self.weighted_dataloader_mode == 'inverse_density':
+                weights = self.compute_weights_inverse_density(dataset)
+            else:
+                weights = self.compute_weights2(dataset)
+
             assert(len(weights) == len(dataset))
-            
+
             sampler = WeightedRandomSampler(list(weights), len(dataset))
-            
+
+            # torch's DataLoader raises ValueError if both sampler and
+            # shuffle are given (sampler already fully determines draw
+            # order/replacement, so shuffle is meaningless here) -- cfg
+            # carries options.train/val's shuffle: true regardless of
+            # use_weighted_dataloader, so it must be dropped on this path or
+            # every weighted-dataloader stream fails at dataloader
+            # construction time.
+            cfg = dict(cfg)
+            cfg.pop('shuffle', None)
+
             # make the sampler
             dataloader = torchDataLoader(
                 dataset,

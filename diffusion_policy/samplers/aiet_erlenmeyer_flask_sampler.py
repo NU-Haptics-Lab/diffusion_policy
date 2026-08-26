@@ -46,6 +46,22 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
     def resolve_rb_key(self, obs_key):
         if obs_key in self.KEYPOINT_RB_KEY_MAP:
             return self.KEYPOINT_RB_KEY_MAP[obs_key]
+        if getattr(globals.CONFIG, 'obs_use_states_suffix', False):  # type: ignore
+            # e.g. palm_pose_xyz_rpy -> palm_pose_xyz_rpy_states,
+            # gripper_value -> gripper_value_states -- these were added to
+            # task_24's zarr alongside the pre-existing unsuffixed
+            # palm_pose_xyz_rpy/gripper_value arrays (which mix commanded
+            # and measured values ambiguously) and _commands-suffixed
+            # counterparts. Only switches to the _states array if this
+            # sampler's replay buffer actually HAS one -- e.g. biotac_lh has
+            # no _states variant, so it silently falls through to the
+            # existing lookup below (identity, unless some other rule
+            # applies), exactly matching "if it exists" -- no obs key is
+            # ever required to have a _states sibling. See
+            # aiet_erlenmeyer_flask_15.yaml, which sets this true.
+            states_key = obs_key + "_states"
+            if states_key in self.indices.replay_buffer:
+                return states_key
         if obs_key in self.PATCH_GRID_KEYS and getattr(globals.CONFIG, "patch_grid_size", 14) == 7:  # type: ignore
             return obs_key + "_7x7"
         return obs_key

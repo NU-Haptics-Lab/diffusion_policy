@@ -181,15 +181,17 @@ class SingleFieldLinearNormalizer(DictOfTensorMixin):
             output_max=1.,
             output_min=-1.,
             range_eps=1e-4,
-            fit_offset=True):
-        self.params_dict = _fit(data, 
+            fit_offset=True,
+            clip_outlier_percentile=0.0):
+        self.params_dict = _fit(data,
             last_n_dims=last_n_dims,
             dtype=dtype,
             mode=mode,
             output_max=output_max,
             output_min=output_min,
             range_eps=range_eps,
-            fit_offset=fit_offset)
+            fit_offset=fit_offset,
+            clip_outlier_percentile=clip_outlier_percentile)
     
     @classmethod
     def create_fit(cls, data: Union[torch.Tensor, np.ndarray, zarr.Array], **kwargs):
@@ -257,10 +259,27 @@ def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
         output_max=1.,
         output_min=-1.,
         range_eps=1e-4,
-        fit_offset=True):
+        fit_offset=True,
+        clip_outlier_percentile=0.0):
+    """
+    clip_outlier_percentile: only affects mode='limits'. 0.0 (default): scale
+        the true min/max to [output_min, output_max], exactly as before --
+        one rare extreme sample dictates the whole scale, squashing the bulk
+        of typical values into a small sliver of the output range (confirmed
+        directly on aiet_erlenmeyer_flask_14's action: several dims had a
+        true min/max nowhere near their own 0.1st/99.9th percentile). If > 0
+        (e.g. 0.5 for the 0.5th/99.5th percentile), use that percentile pair
+        instead of the true min/max to compute scale/offset, so the bulk of
+        the data gets the full output range and the rare tail lands outside
+        [output_min, output_max] instead of compressing everything else.
+        input_stats (min/max/mean/std) always records the TRUE data
+        statistics regardless -- this only changes what scale/offset are
+        fit from, not what's reported.
+    """
     assert mode in ['limits', 'gaussian']
     assert last_n_dims >= 0
     assert output_max > output_min
+    assert 0.0 <= clip_outlier_percentile < 50.0
 
     # convert data to torch and type
     if isinstance(data, zarr.Array):
@@ -276,7 +295,8 @@ def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
         dim = np.prod(data.shape[-last_n_dims:])
     data = data.reshape(-1,dim)
 
-    # compute input stats min max mean std
+    # compute input stats min max mean std -- ALWAYS the true statistics,
+    # regardless of clip_outlier_percentile (see that param's docstring)
     input_min, _ = data.min(axis=0)
     input_max, _ = data.max(axis=0)
     input_mean = data.mean(axis=0)
@@ -285,13 +305,24 @@ def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
     # compute scale and offset
     if mode == 'limits':
         if fit_offset:
+            # fit_min/fit_max feed scale/offset below -- true min/max unless
+            # clip_outlier_percentile asks for a more robust (outlier-
+            # resistant) pair instead. Kept separate from input_min/input_max
+            # so input_stats above always reflects the true data.
+            if clip_outlier_percentile > 0.0:
+                q = torch.tensor([clip_outlier_percentile, 100.0 - clip_outlier_percentile],
+                    dtype=data.dtype, device=data.device)
+                fit_min, fit_max = torch.quantile(data, q / 100.0, dim=0)
+            else:
+                fit_min, fit_max = input_min, input_max
+
             # unit scale
-            input_range = input_max - input_min
+            input_range = fit_max - fit_min
             ignore_dim = input_range < range_eps
             input_range[ignore_dim] = output_max - output_min
             scale = (output_max - output_min) / input_range
-            offset = output_min - scale * input_min
-            offset[ignore_dim] = (output_max + output_min) / 2 - input_min[ignore_dim]
+            offset = output_min - scale * fit_min
+            offset[ignore_dim] = (output_max + output_min) / 2 - fit_min[ignore_dim]
             # ignore dims scaled to mean of output max and min
         else:
             # use this when data is pre-zero-centered.

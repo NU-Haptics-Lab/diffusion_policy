@@ -2,20 +2,15 @@
 ###################################################
 ###################################################
 ###################################################
-description: "aiet_erlenmeyer_flask_11: same as aiet_erlenmeyer_flask_10, but
-  with sim_alignment/combined.zarr cotraining REMOVED (real-only, like
-  flask_7/9 vs flask_8/10) -- two logical rb_ids over the SAME physical
-  task_24 zarr: erlenmeyer (subtask_id==0, on-task) and erlenmeyer_align
-  (subtask_id==1, alignment-focused, upweighted).
-
-  Vision input is precomputed DINOv3-LARGE (1024-channel) fixed-tau
-  spatial-softmax keypoints -- wrist_cam_keypoints_dinov3l/
-  overhead_roi_keypoints_dinov3l ([1024, 2] each, every real task_id), plus
-  env_cam_keypoints_dinov3l ([1024, 2], ONLY genuinely present for task_id
-  27 -- every other real task_id zero-fills it, masked out via
-  token_keys_valid_only_for_task_ids below rather than
-  excluded_token_keys_by_data_source, since there's only one data source
-  now and the distinction that matters is task_id, not data source).
+description: "aiet_erlenmeyer_flask_13: opposite ablation of aiet_erlenmeyer_flask_12
+  -- flask_12 was vision-only (dropped palm_pose_xyz_rpy/gripper_value/biotac_lh,
+  kept only the DINOv3-LARGE keypoint obs keys); flask_13 drops ALL THREE
+  keypoint obs keys (wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l/
+  env_cam_keypoints_dinov3l) and keeps only palm_pose_xyz_rpy/gripper_value/
+  biotac_lh -- no vision input at all. Same real-only, two-rb_id setup as
+  flask_11/12 (full_avatar and sim_alignment both disabled): erlenmeyer
+  (subtask_id==0, on-task) and erlenmeyer_align (subtask_id==1,
+  alignment-focused, upweighted), same physical task_24 zarr.
 
   Action is relative-palm-pose+gripper (same convention as
   aiet_alignment_sim_3): rel_palm_pose_xyz_rpy (6) + gripper_value (1).
@@ -38,8 +33,9 @@ action_key: action # placeholder -- computed (rel_palm_pose_xyz_rpy + gripper_va
 # 14 or 7 -- selects between the full 14x14 patch grid and the pre-downsampled
 # 7x7 grid for both active sources (task_24 already had wrist_cam_patch_features_7x7/
 # overhead_roi_patch_features_7x7 from prior work; sim's combined.zarr likewise
-# via in-sampler pooling). Only relevant to the (unused here) raw patch-grid
-# obs keys -- see AIETErlenmeyerFlaskSampler.resolve_rb_key.
+# via in-sampler pooling). Not relevant at all here -- flask_13 has no vision
+# obs keys of any kind, patch-grid or keypoint. Kept only because
+# AIETErlenmeyerFlaskSampler.resolve_rb_key references it unconditionally.
 patch_grid_size: 14
 
 ### Global Control Panel ###
@@ -50,10 +46,10 @@ to_load:
 resume: false
 
 # should be the same as this file's name (sans .yaml)
-run_tag: aiet_erlenmeyer_flask_11
+run_tag: aiet_erlenmeyer_flask_13
 
 resume_tag: latest
-output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_11
+output_dir: /media/dexnex_ssd/models/aiet_erlenmeyer_flask_13
 
 tasks_to_use:
   - erlenmeyer
@@ -70,30 +66,15 @@ tasks_to_use:
 # trained against.
 normalizer_fit_rb_ids: [erlenmeyer, erlenmeyer_align]
 
-# fused/single-vector keys routed through the obs_encoder. Vision is NOT raw
-# patch grids here -- wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l/
-# env_cam_keypoints_dinov3l are precomputed fixed-tau (no learning)
-# spatial-softmax (x,y) descriptors, one per DINOv3-LARGE channel (1024),
-# added directly to the zarr offline instead of being reduced from a raw
-# patch grid at train time. [1024, 2] = 2048 floats/frame vs
-# 14x14x1024 = 200704 for a raw large patch grid -- still a huge load-time
-# win, at the cost of no longer jointly training the vision-channel reduction
-# (it's a fixed offline transform now). env_cam_keypoints_dinov3l is only
-# genuinely present for task_id 27 -- every other task_id zero-fills it,
-# masked out via the model's token_keys_valid_only_for_task_ids below.
+# no-vision ablation: only the lowdim proprio/tactile keys, none of the
+# DINOv3-LARGE keypoint obs keys (see description above).
 obs_keys_to_use:
   - palm_pose_xyz_rpy
   - gripper_value
-  - biotac_lh 
-  - wrist_cam_keypoints_dinov3l
-  - overhead_roi_keypoints_dinov3l
-  - env_cam_keypoints_dinov3l
+  - biotac_lh
 
 obs_keys_to_load:
   - palm_pose_xyz_rpy
-  - wrist_cam_keypoints_dinov3l
-  - overhead_roi_keypoints_dinov3l
-  - env_cam_keypoints_dinov3l
   - gripper_value
   - biotac_lh
 
@@ -155,21 +136,6 @@ shape_meta:
     shape:
     - 5
 
-  wrist_cam_keypoints_dinov3l:
-    shape:
-      - 1024 # one (x,y) per dinov3-large channel
-      - 2
-
-  overhead_roi_keypoints_dinov3l:
-    shape:
-      - 1024
-      - 2
-
-  env_cam_keypoints_dinov3l:
-    shape:
-      - 1024
-      - 2
-
   action:
     shape:
     - 7 # rel_palm_pose_xyz_rpy (6) + gripper_value (1), same convention as aiet_alignment_sim_3
@@ -220,21 +186,6 @@ common_obs_encoder:
       shape:
       - 5
 
-    wrist_cam_keypoints_dinov3l:
-      shape:
-      - 1024
-      - 2
-
-    overhead_roi_keypoints_dinov3l:
-      shape:
-      - 1024
-      - 2
-
-    env_cam_keypoints_dinov3l:
-      shape:
-      - 1024
-      - 2
-
 
 common_indices:
   _target_: diffusion_policy.common.sarsa_sampler.Indices
@@ -244,7 +195,7 @@ common_indices:
   training_episode_start: 0
   training_episode_end: 0
   pad_before: 0
-  pad_after: 7 # 
+  pad_after: 7 #
   debug: ${debug}
   use_zero_padding: false
   restrict_to_valid_future: true
@@ -523,24 +474,17 @@ models:
           transformer_n_cond_layers: 6
           diagnostics_every_n_steps: 50
           check_alignment_direction: true # log val_alignment_direction_cos_sim: does the predicted relative palm-xyz action point toward this episode's own final palm pose (a no-ground-truth-needed proxy for the true aligned position, via each sample's ep_id)? Requires no code changes to disable -- set false to skip it entirely.
-          use_compiled_policy: ${use_compiled_policy} # torch.compile's the transformer trunk (see DiffusionModel._get_forward_model) -- watch the first ~50-100 steps for compile-time spikes/graph breaks (log_attn flips every diagnostics_every_n_steps, train/eval differ, and the model writes diagnostics attrs like last_keep_mask inside forward -- each a possible graph-break source) before trusting steady-state it/s. Confirmed a real win (not just batch-size confound) on flask_7 at a large enough batch size -- if this cotrain's per-stream batch sizes end up much smaller, re-verify with the same timing/* instrumentation before trusting it here too.
+          use_compiled_policy: ${use_compiled_policy} # torch.compile's the transformer trunk (see DiffusionModel._get_forward_model) -- watch the first ~50-100 steps for compile-time spikes/graph breaks (log_attn flips every diagnostics_every_n_steps, train/eval differ, and the model writes diagnostics attrs like last_keep_mask inside forward -- each a possible graph-break source) before trusting steady-state it/s.
           transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value', 'biotac_lh']
           transformer_p_drop_token: 0.0
           transformer_normalize_cond_tokens: true # LayerNorm each cond token right after its own projection, so timestep can't dominate cross-attention purely from raw embedding magnitude. In the future solve this problem using adaLN instead
           transformer_use_adaln_timestep: true # DiT-style AdaLN-Zero timestep conditioning instead of a timestep cross-attn token -- the more standard fix
 
-          embed_task_id: true # gives the shared decoder an explicit, cheap task signal via the existing task_id_emb lookup table -- task_24 uses task_id 24, task_25 uses 25, the new env-camera task uses 27 (see token_keys_valid_only_for_task_ids below)
-          num_tasks: 28 # 0-25 for real task ids (task_24 uses 24, task_25 uses 25) + 27 (new real task_id with a valid env_cam_keypoints_dinov3l) -- must cover the highest task_id actually used, not just count of distinct task ids (26 is unused now that sim's gone, harmless to still cover)
+          embed_task_id: true # gives the shared decoder an explicit, cheap task signal via the existing task_id_emb lookup table -- task_24 uses task_id 24, task_25 uses 25, task_id 27 also appears in this dataset (its env-camera vision keys just aren't used as obs here at all, but the task_id itself is still meaningful metadata)
+          num_tasks: 28 # 0-25 for real task ids (task_24 uses 24, task_25 uses 25) + 27 -- must cover the highest task_id actually present in the data, not just count of distinct task ids (26 is unused, harmless to still cover)
 
-          # NOTE: no patch_keys_to_use/spatial_softmax_* here, unlike flask_6
-          # -- wrist_cam_keypoints_dinov3l/overhead_roi_keypoints_dinov3l/
-          # env_cam_keypoints_dinov3l are precomputed (see obs_keys_to_use's
-          # comment above), so they're plain lowdim obs keys routed through
-          # obs_encoder/cond_dims like palm_pose_xyz_rpy, not raw patch grids
-          # needing an in-model spatial-softmax reduction. This also means
-          # the vision-channel reduction is no longer jointly trained
-          # end-to-end (it's a fixed offline transform now) -- if that turns
-          # out to matter, that's the tradeoff to revisit.
+          # no patch_keys_to_use/spatial_softmax_*/vision cond_dims at all --
+          # flask_13 has zero vision obs keys (see obs_keys_to_use above).
 
           # training-time Gaussian noise on cond_dims keys -- single data
           # source now (sim_alignment removed), so just one entry.
@@ -548,15 +492,10 @@ models:
             0: ['palm_pose_xyz_rpy', 'gripper_value'] # 0=erlenmeyer (the only data source now)
           gaussian_noise_std: 0.0
 
-          # no excluded_token_keys_by_data_source/num_data_sources needed --
-          # single data source (erlenmeyer real). env_cam_keypoints_dinov3l
-          # is only genuinely present for task_id 27 -- every other task_id
-          # zero-fills it, masked out (hard-zeroed + removed from attention)
-          # via token_keys_valid_only_for_task_ids instead. See
-          # DexNexTransformerForDiffusion.__init__'s docstring for the
-          # mechanism.
-          token_keys_valid_only_for_task_ids:
-            env_cam_keypoints_dinov3l: [27]
+          # no excluded_token_keys_by_data_source/num_data_sources/
+          # token_keys_valid_only_for_task_ids needed -- single data source,
+          # and no per-task_id-varying obs key (env_cam_keypoints_dinov3l
+          # isn't loaded at all here, so there's nothing to mask).
 
       ema:
         _target_: diffusion_policy.model.model.Ema
