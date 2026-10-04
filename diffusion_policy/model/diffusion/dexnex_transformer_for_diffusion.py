@@ -121,6 +121,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             spatial_softmax_temperature_init: float = 1.0,
             separate_spatial_softmax_by_data_source: bool = False,
             num_tasks: int = 0,
+            num_hands: int = 0,
             n_layer: int = 12,
             n_head: int = 12,
             n_emb: int = 768,
@@ -297,9 +298,12 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
 
         self.use_adaln_timestep = use_adaln_timestep
         self.embed_task_id = num_tasks > 0
+        self.embed_hand_id = num_hands > 0  # (a second categorical token, like task_id: which robot hand)
         T_cond = 0 if use_adaln_timestep else 1  # timestep token (absent when AdaLN-conditioned instead)
         if self.embed_task_id:
             T_cond += 1  # task-id token
+        if self.embed_hand_id:
+            T_cond += 1  # hand-id token
         if obs_as_cond:
             T_cond += len(self.cond_keys)
         T_cond += sum(self.patch_group_num_patches.values())
@@ -314,6 +318,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         # for free once patch groups are in use, no separate mechanism needed.
         all_token_names = ((['timestep'] if not use_adaln_timestep else [])
             + (['task_id'] if self.embed_task_id else [])
+            + (['hand_id'] if self.embed_hand_id else [])
             + self.cond_keys
             + self.patch_group_names)
         if droppable_token_keys is None:
@@ -360,6 +365,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         # cond_embeddings[:, i] in forward().
         expanded_token_names = ((['timestep'] if not use_adaln_timestep else [])
             + (['task_id'] if self.embed_task_id else [])
+            + (['hand_id'] if self.embed_hand_id else [])
             + self.cond_keys)
         for group in self.patch_group_names:
             expanded_token_names.extend([group] * self.patch_group_num_patches[group])
@@ -442,6 +448,10 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         self.task_id_emb = None
         if self.embed_task_id:
             self.task_id_emb = nn.Embedding(num_tasks, n_emb)
+        # hand-id token: likewise categorical (which robot hand produced / will execute the sample)
+        self.hand_id_emb = None
+        if self.embed_hand_id:
+            self.hand_id_emb = nn.Embedding(num_hands, n_emb)
 
         # patch-group embedding stem: one shared (weight-tied) projection per
         # group applied to every patch in that group, a learned per-patch
@@ -517,6 +527,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         if self.normalize_cond_tokens:
             norm_names = ((['timestep'] if not use_adaln_timestep else [])
                 + (['task_id'] if self.embed_task_id else [])
+                + (['hand_id'] if self.embed_hand_id else [])
                 + self.cond_keys
                 + self.patch_group_names)
             self.cond_token_norm = nn.ModuleDict({
@@ -845,7 +856,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
         patches: Optional[Dict[str, torch.Tensor]]=None,
         task_ids: Optional[torch.Tensor]=None,
         data_source: Optional[torch.Tensor]=None,
-        log_attn: bool=False, **kwargs):
+        log_attn: bool=False, hand_ids: Optional[torch.Tensor]=None, **kwargs):
         """
         x: (B,T,input_dim)
         timestep: (B,) or int, diffusion step
@@ -854,6 +865,7 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             each patch becomes its own token (patch_group_dims groups) or gets
             reduced to one spatial-softmax token (spatial_softmax_group_dims groups)
         task_ids: (B,) long tensor of task indices; becomes its own token
+        hand_ids: (B,) long tensor of hand indices (with num_hands > 0); its own token
         data_source: (B,) tensor, 0=real 1=sim; hard-zeroes sim_only_token_keys
             for real samples and real_only_token_keys for sim samples, always
             (train + eval), regardless of p_drop_token
@@ -898,6 +910,16 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
                 task_emb = self.cond_token_norm['task_id'](task_emb)
             cond_embeddings = task_emb if cond_embeddings is None else torch.cat([cond_embeddings, task_emb], dim=1)
             cond_token_names.append('task_id')
+        if self.embed_hand_id:
+            assert self.hand_id_emb is not None and hand_ids is not None
+            hand_ids = torch.reshape(hand_ids, [-1]).long()
+            hand_emb = self.hand_id_emb(hand_ids).unsqueeze(1)
+            # (B,1,n_emb)
+            if self.normalize_cond_tokens:
+                assert self.cond_token_norm is not None
+                hand_emb = self.cond_token_norm['hand_id'](hand_emb)
+            cond_embeddings = hand_emb if cond_embeddings is None else torch.cat([cond_embeddings, hand_emb], dim=1)
+            cond_token_names.append('hand_id')
         if self.obs_as_cond:
             assert self.cond_obs_emb is not None
             key_tokens = []

@@ -505,6 +505,267 @@ class GPUDatasetView(torch.utils.data.Dataset):
         return getattr(self._cache, name)
 
 
+_WAM_SHARED_RAW_CACHE = {}
+# (zarr_path, device_str, sorted resolved-key-mapping) -> {rb_key: GPU tensor}.
+# Module-level, mirroring _COMPILED_MODEL_CACHE's pattern elsewhere in this
+# file: aiet_wam_1.yaml's wam/wam_align/wam_fine_align/wam_full_task streams
+# are four different episode partitions of the SAME physical zarr, so the
+# raw per-key arrays they all gather from (WAM_OBS_KEYS + action_history's
+# palm/gripper source) are identical data -- caching them once here and
+# sharing the same GPU tensors across every stream's WamLazyGPUCachedDataset
+# instance, instead of each stream re-uploading its own copy, is what
+# actually fixes the OOM this class was built to avoid (an earlier version
+# that restricted each stream to only its OWN included rb rows still needed
+# ~10.5GB combined across 4 streams; sharing one copy of the union needs
+# ~4.6GB total, regardless of how many streams/views share it). Keyed by the
+# RESOLVED rb keys (not obs key names) since resolve_rb_key can alias
+# multiple obs key names onto the same literal array, and the mapping
+# itself is included in the key so a differently-configured run sharing a
+# process (e.g. obs_use_states_suffix flipped) can't reuse a stale entry.
+def _get_wam_shared_raw_cache(rb, rb_path, device, resolved_key_map):
+    cache_key = (str(rb_path), str(device), tuple(sorted(resolved_key_map.items())))
+    cached = _WAM_SHARED_RAW_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    cached = {
+        rb_key: torch.from_numpy(np.asarray(rb[rb_key]).astype(np.float32)).to(device)
+        for rb_key in set(resolved_key_map.values())
+    }
+    _WAM_SHARED_RAW_CACHE[cache_key] = cached
+    return cached
+
+
+class WamLazyGPUCachedDataset(torch.utils.data.Dataset):
+    """
+    Like GPUCachedDataset, but for AIETWamSampler-based samplers specifically
+    (see aiet_wam_1.yaml): GPU-caches each raw obs/action-source array
+    exactly ONCE per physical zarr (shared across every stream that points
+    at it -- see _get_wam_shared_raw_cache), and does NOT precompute/cache a
+    dense (N, len(action_rel_indices), action_dim) action tensor the way
+    GPUCachedDataset always does (vectorized or not -- both its paths fully
+    materialize `_data['action']` for every sample up front). For
+    aiet_wam_1's world-model target (repeating large blocks like the three
+    1024x2 DINOv3 keypoint sets once per waypoint), that eager
+    materialization needs ~54GB of GPU memory for a SINGLE stream -- doesn't
+    fit on a 24GB card at all, and even restricting each stream to only its
+    own included rb rows (an earlier version of this class) still needed
+    ~10.5GB combined across aiet_wam_1's four streams (which mostly
+    partition/overlap the same underlying episodes) before the model and
+    optimizer were even built -- confirmed this crashed with a CUDA OOM
+    partway through the first training step.
+
+    Instead, only a small per-sample int64 table (which raw rb row each
+    action_rel_indices offset resolves to) is unique per stream -- negligible
+    next to the actual feature data (O(N * len(action_rel_indices)) int64s).
+    __getitem__ gathers+transforms the actual [T, D] action window (and the
+    current-step obs, and action_history) from the SHARED GPU-resident raw
+    arrays on the fly, per access -- cheap (plain GPU indexing + concat), and
+    never grows past what a single batch needs at a time.
+
+    MUST stay in lockstep with AIETWamSampler.build_action_chunk's exact
+    schema (WAM_OBS_KEYS order, sincos-yaw transform, completion fraction
+    appended last) -- there is deliberately no shared implementation between
+    the two (this class needs everything GPU-resident and vectorized across
+    the whole dataset up front, build_action_chunk needs per-episode batches
+    at preload-verification time), so a change to one must be mirrored in
+    the other by hand.
+    """
+
+    def __init__(self, dataset: 'DexNexDataset', device):
+        from diffusion_policy.samplers.aiet_wam_sampler import AIETWamSampler
+        from diffusion_policy.samplers.aiet_alignment_sim_3_sampler import AIETAlignmentSim3Sampler
+
+        self._source = dataset  # kept for attribute delegation (get_ep_lengths, get_qvals, get_palm_xy, get_key)
+        self.device = device
+        self._len = len(dataset)
+        self.zero_fill_obs_keys = set()  # AIETWamSampler never zero-fills (single real data source)
+        if self._len == 0:
+            self._obs_rb_idx = None
+            return
+
+        print(f"Preloading {self._len} samples to {device} (lazy action gather, shared raw cache) ...")
+
+        sampler = dataset.sampler
+        eps = list(sampler.get_ep_list())
+        assert len(eps) > 0
+        assert isinstance(eps[0], AIETWamSampler), \
+            f"WamLazyGPUCachedDataset requires an AIETWamSampler-based sampler, got {type(eps[0])}"
+
+        rb = eps[0].indices.replay_buffer
+        rb_path = globals.CONFIG.replay_buffer_loader.rb_paths[sampler.rb_id]  # type: ignore
+        obs_keys_to_load = list(globals.CONFIG.obs_keys_to_load)  # type: ignore
+        action_rel_indices_np = np.array(globals.CONFIG.action_rel_indices)  # type: ignore
+        wam_keys = list(AIETWamSampler.WAM_OBS_KEYS)
+
+        # union of every obs key name this stream needs a raw array for
+        # (current-step obs side + future-target side), each resolved via
+        # resolve_rb_key (obs_use_states_suffix-aware) -- WAM_OBS_KEYS is a
+        # superset of obs_keys_to_load in every aiet_wam_1-style yaml, so
+        # this union just avoids assuming that equality holds literally.
+        resolved_key_map = {key: eps[0].resolve_rb_key(key) for key in set(obs_keys_to_load) | set(wam_keys)}
+
+        action_palm_key = AIETAlignmentSim3Sampler._action_palm_pose_rb_key()
+        action_is_relative = AIETAlignmentSim3Sampler._pose_is_relative()
+        # cache key names below are placeholders -- only .values() (the
+        # actual resolved rb key strings) matters to _get_wam_shared_raw_cache,
+        # they just need to be present in SOME entry of the mapping so their
+        # rb arrays get included in the shared cache.
+        resolved_key_map_with_action = dict(resolved_key_map)
+        resolved_key_map_with_action['action_history_palm'] = action_palm_key
+        resolved_key_map_with_action['action_history_grip'] = "gripper_value"
+
+        shared_raw = _get_wam_shared_raw_cache(rb, rb_path, device, resolved_key_map_with_action)
+
+        zero_offset_positions = np.where(action_rel_indices_np == 0)[0]
+        assert len(zero_offset_positions) == 1, \
+            "action_rel_indices must contain exactly one 0 offset for action_history's relative-pose branch"
+        zero_offset_pos = int(zero_offset_positions[0])
+
+        probe_sample = dataset[0]
+        has_ep_id = 'ep_id' in probe_sample
+        scalar_fields = [f for f in ("task_id", "subtask_id", "data_source") if f in probe_sample]
+        constant_fields = eps[0].get_constant_sample_fields()
+        generic_fallback = {"task_id": 24.0, "subtask_id": 0.0, "data_source": 0.0}
+
+        obs_rb_idx_chunks = []          # [n_ep] rb row per sample (current-step obs)
+        offset_rb_idx_chunks = []       # [n_ep, T] rb row per waypoint, per sample
+        ep_relative_idx_chunks = []     # [n_ep] this sample's own episode-relative index
+        final_idx_chunks = []           # [n_ep] this episode's own final valid index (>=1)
+        scalar_chunks = {f: [] for f in scalar_fields}
+        ep_id_chunks = [] if has_ep_id else None
+
+        for ep in tqdm(eps, desc="wam gpu-preload (index tables only, per-episode)"):
+            indices = ep.indices
+            train_idx = np.array(list(indices.get_all_train_indices()))
+            if len(train_idx) == 0:
+                continue
+            n = len(train_idx)
+
+            obs_rb_idx = indices.get_rb_indices(train_idx)
+            obs_rb_idx_chunks.append(obs_rb_idx)
+
+            offsets_rb_idx = np.stack(
+                [indices.get_rb_indices(train_idx + off) for off in action_rel_indices_np],
+                axis=1)  # [n, T]
+            offset_rb_idx_chunks.append(offsets_rb_idx)
+            ep_relative_idx_chunks.append(train_idx.astype(np.float32))
+
+            episode_len = ep.training_episode_end - ep.training_episode_start
+            final_idx_chunks.append(np.full((n,), max(episode_len - 1, 1), dtype=np.float32))
+
+            for f in scalar_fields:
+                if f in constant_fields:
+                    scalar_chunks[f].append(np.full((n, 1), constant_fields[f], dtype=np.float32))
+                else:
+                    try:
+                        raw = np.asarray(rb[f])
+                        scalar_chunks[f].append(raw[obs_rb_idx][:, None])
+                    except KeyError:
+                        scalar_chunks[f].append(np.full((n, 1), generic_fallback[f], dtype=np.float32))
+            if has_ep_id:
+                ep_id_chunks.append(np.full((n, 1), float(ep.rb_episode_end), dtype=np.float32))
+
+        self._obs_keys_to_load = obs_keys_to_load
+        self._resolved_obs_key_map = {key: resolved_key_map[key] for key in obs_keys_to_load}
+        self._wam_keys = wam_keys
+        self._resolved_wam_key_map = {key: resolved_key_map[key] for key in wam_keys}
+        self._shared_raw = shared_raw
+
+        self._obs_rb_idx = torch.from_numpy(np.concatenate(obs_rb_idx_chunks, axis=0)).long().to(device)  # [N]
+        self._offset_rb_idx = torch.from_numpy(np.concatenate(offset_rb_idx_chunks, axis=0)).long().to(device)  # [N, T]
+        self._ep_relative_idx = torch.from_numpy(np.concatenate(ep_relative_idx_chunks, axis=0)).to(device)  # [N]
+        self._final_idx = torch.from_numpy(np.concatenate(final_idx_chunks, axis=0)).to(device)  # [N]
+        self._action_rel_indices = torch.from_numpy(action_rel_indices_np).to(device).float()  # [T]
+
+        self._raw_action_palm = shared_raw[action_palm_key]
+        self._raw_action_grip = shared_raw["gripper_value"]
+        self._action_is_relative = action_is_relative
+        self._zero_offset_pos = zero_offset_pos
+
+        self._has_ep_id = has_ep_id
+        self._scalar_data = {
+            f: torch.from_numpy(np.concatenate(chunks, axis=0)).to(device)
+            for f, chunks in scalar_chunks.items()
+        }
+        if has_ep_id:
+            self._ep_id_data = torch.from_numpy(np.concatenate(ep_id_chunks, axis=0)).to(device)
+
+        # safety check: verify a handful of random samples against the
+        # known-correct per-sample path (dataset[i], which calls
+        # AIETWamSampler.get_action_trajectory/build_action_chunk) before
+        # trusting this lazy reconstruction for training.
+        rng = np.random.default_rng(0)
+        check_idx = rng.choice(self._len, size=min(20, self._len), replace=False)
+        for i in check_idx:
+            expected = dataset[int(i)]
+            got = self[int(i)]
+            for obs_key, obs_val in got['obs'].items():
+                if not torch.allclose(obs_val, expected['obs'][obs_key].to(device), atol=1e-4):
+                    raise RuntimeError(f"WamLazyGPUCachedDataset mismatch at sample {i}, obs key '{obs_key}'")
+            if not torch.allclose(got['action'], expected['action'].to(device), atol=1e-4):
+                raise RuntimeError(f"WamLazyGPUCachedDataset mismatch at sample {i}, key 'action'")
+
+    def __len__(self):
+        return self._len
+
+    def __getitem__(self, idx: int):
+        if self._obs_rb_idx is None:
+            raise IndexError("WamLazyGPUCachedDataset is empty")
+
+        obs_row = self._obs_rb_idx[idx]  # scalar rb row, current step
+        sample = {'obs': {
+            key: self._shared_raw[rb_key][obs_row][None, ...]  # (1, *shape), matching every other obs key's leading history-length-1 axis
+            for key, rb_key in self._resolved_obs_key_map.items()
+        }}
+
+        offsets = self._offset_rb_idx[idx]  # [T]
+
+        # action_history (conditioning key) -- see AIETWamSampler._build_action_history
+        action_palm = self._raw_action_palm[offsets]  # [T, 6]
+        if self._action_is_relative:
+            current_palm = self._raw_action_palm[offsets[self._zero_offset_pos]]  # [6]
+            palm_component = action_palm - current_palm
+            rpy = palm_component[:, 3:]
+            palm_component = torch.cat([
+                palm_component[:, :3], (rpy + torch.pi) % (2 * torch.pi) - torch.pi,
+            ], dim=-1)
+        else:
+            palm_component = torch.cat([
+                action_palm[:, :5], torch.sin(action_palm[:, 5:6]), torch.cos(action_palm[:, 5:6]),
+            ], dim=-1)
+        action_grip = self._raw_action_grip[offsets].reshape(-1, 1)  # [T, 1]
+        action_history = torch.cat([palm_component, action_grip], dim=-1).flatten()  # [T*8]
+        sample['obs']['action_history'] = action_history.unsqueeze(0)  # (1, 128), matching every other obs key's leading history-length-1 axis
+
+        parts = []
+        for key in self._wam_keys:
+            value = self._shared_raw[self._resolved_wam_key_map[key]][offsets].reshape(len(offsets), -1)  # [T, dim]
+            if key == "palm_pose_xyz_rpy":
+                value = torch.cat([
+                    value[:, :5], torch.sin(value[:, 5:6]), torch.cos(value[:, 5:6]),
+                ], dim=-1)
+            parts.append(value)
+
+        final_idx = self._final_idx[idx]
+        idx_at_offset = torch.clamp(self._ep_relative_idx[idx] + self._action_rel_indices, 0, final_idx)
+        completion = (idx_at_offset / final_idx).unsqueeze(-1)  # [T, 1]
+        parts.append(completion)
+
+        sample['action'] = torch.cat(parts, dim=-1)
+
+        for f, data in self._scalar_data.items():
+            sample[f] = data[idx]
+        if self._has_ep_id:
+            sample['ep_id'] = self._ep_id_data[idx]
+
+        return sample
+
+    def __getattr__(self, name):
+        # Delegate any attribute not defined here to the source DexNexDataset
+        # (e.g. get_ep_lengths, get_qvals, get_key, get_palm_xy)
+        return getattr(self._source, name)
+
+
 def _nested_nbytes(data):
     if isinstance(data, dict):
         return sum(_nested_nbytes(v) for v in data.values())
@@ -616,7 +877,8 @@ class TrainAndVal:
             weighted_dataloader_bin_width = 0.05, # physical bin width (meters) per axis for the inverse-density 2D histogram -- bin COUNT is derived from this and each axis's own 0.5th/99.5th percentile range (see compute_weights_inverse_density), not fixed, so it stays meaningful regardless of a stream's actual xy spread. Only used by weighted_dataloader_mode='inverse_density'.
             use_val_set = True, # if false, train_sampler == sampler, will save time during RL
             preload_to_gpu = False, # load entire dataset into GPU memory before training
-            preload_vectorized = False, # use _vectorized_load_dataset instead of per-sample loading; falls back automatically if unsupported
+            preload_vectorized = False, # use _vectorized_load_dataset instead of per-sample loading; falls back automatically if unsupported. Ignored when preload_to_gpu_lazy_action is True (that path never materializes the full action tensor, vectorized or not).
+            preload_to_gpu_lazy_action = False, # use WamLazyGPUCachedDataset instead of GPUCachedDataset: GPU-preloads each raw obs array ONCE (same memory profile as any other aiet_* yaml), but does NOT precompute/cache a dense (N, len(action_rel_indices), action_dim) action tensor -- instead gathers+transforms each sample's action window on the fly, from those same GPU-resident raw arrays, at __getitem__ time. Needed whenever the action target is wide enough (e.g. aiet_wam_1's world-model target, which repeats large per-key blocks like DINOv3 keypoints once per waypoint) that eagerly materializing it for every sample would dwarf available GPU memory -- see WamLazyGPUCachedDataset's docstring. Requires the sampler to expose get_lazy_action_fields() (currently only AIETWamSampler does).
             use_gpu_sample_cache = False, # lazily cache each sample on GPU on first access (GPUSampleCache); mutually exclusive with preload_to_gpu
             gpu_sample_cache_max_bytes = None, # byte budget for the above; None = unbounded
             gpu_sample_cache_evict = True, # LRU-evict to stay under the budget; False = never evict, just stop caching new samples once full
@@ -640,6 +902,7 @@ class TrainAndVal:
         self.use_val_set = use_val_set
         self.preload_to_gpu = preload_to_gpu
         self.preload_vectorized = preload_vectorized
+        self.preload_to_gpu_lazy_action = preload_to_gpu_lazy_action
         self.use_gpu_sample_cache = use_gpu_sample_cache
         self.gpu_sample_cache_max_bytes = gpu_sample_cache_max_bytes
         self.gpu_sample_cache_evict = gpu_sample_cache_evict
@@ -886,6 +1149,8 @@ class TrainAndVal:
         """
         if self.preload_to_gpu:
             device = self._resolve_device()
+            if self.preload_to_gpu_lazy_action:
+                return WamLazyGPUCachedDataset(base_dataset, device)
             return GPUCachedDataset(base_dataset, device, num_workers=self.options.train.num_workers, vectorized=self.preload_vectorized) #type:ignore
         elif self.use_gpu_sample_cache:
             device = self._resolve_device()
@@ -1081,7 +1346,10 @@ class TrainAndVal:
         if self.preload_to_gpu:
             # Load the full dataset once, then create zero-copy views for train/val.
             device = self._resolve_device()
-            self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device, num_workers=self.options.train.num_workers, vectorized=self.preload_vectorized) #type:ignore
+            if self.preload_to_gpu_lazy_action:
+                self.all_dataset = WamLazyGPUCachedDataset(DexNexDataset(self.sampler), device)
+            else:
+                self.all_dataset = GPUCachedDataset(DexNexDataset(self.sampler), device, num_workers=self.options.train.num_workers, vectorized=self.preload_vectorized) #type:ignore
 
             # GPUDatasetView indexes into all_dataset's FLAT sample space
             # (len(self.sampler), e.g. every valid timestep across every

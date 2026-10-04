@@ -824,6 +824,7 @@ class DatasetSampler:
             reward_cap = 50.0,
             episode_filter_key = None, # raw replay-buffer key (e.g. "subtask_id") to filter whole episodes by, checked at each episode's first raw timestep. None = include every episode (default, InitAll's old behavior).
             episode_filter_value = None, # only episodes whose episode_filter_key's first-timestep value equals this are included. Assumes the key is constant within an episode (true for e.g. subtask_id in task_24 -- see AIETErlenmeyerFlaskSampler).
+            episode_min_bag_name = None, # only include episodes from this ROS bag onward, by COLLECTION ORDER (the order gen_dataset.py wrote them, i.e. the replay buffer's own root.attrs['processed_bags'] order -- NOT numeric bag-name order; e.g. toby_10_dagger1 sorts before toby_2 in that list). Combined via AND with episode_filter_key/value if both are set. See _compute_episode_bag_min_mask. None (default) = no bag-based restriction.
             ):
         # the dataset's aka replay-buffer
         self.rb_id = rb_id
@@ -832,6 +833,7 @@ class DatasetSampler:
         self.reward_cap = reward_cap
         self.episode_filter_key = episode_filter_key
         self.episode_filter_value = episode_filter_value
+        self.episode_min_bag_name = episode_min_bag_name
 
         # convert text to class object using hydra
         self.ep_sampler_class = hydra.utils.get_class(ep_sampler_class_str)
@@ -927,7 +929,45 @@ class DatasetSampler:
         else:
             ep_mask = np.ones(n_eps, dtype=bool)
 
+        if self.episode_min_bag_name is not None:
+            ep_mask = ep_mask & self._compute_episode_bag_min_mask(n_eps)
+
         self.Init(ep_mask)
+
+    def _compute_episode_bag_min_mask(self, n_eps):
+        """
+        Per-episode boolean mask: episode i is included iff it belongs to
+        episode_min_bag_name's own bag, or any bag AFTER it in
+        root.attrs['processed_bags'] order (the order gen_dataset.py
+        actually wrote bags in, which is NOT numeric bag-name order -- e.g.
+        toby_10_dagger1 precedes toby_2 in that list). Computed from the
+        replay buffer's own 'processed_bags'/'bag_episode_counts' root attrs
+        (the same authoritative bag->episode-range manifest gen_dataset.py
+        writes), so this stays correct if the zarr is regenerated with more
+        bags appended, rather than hardcoding a specific episode index that
+        would silently go stale.
+        """
+        root = self.replay_buffer.root #type:ignore
+        processed_bags = list(root.attrs['processed_bags'])
+        bag_episode_counts = root.attrs['bag_episode_counts']
+
+        bag_names = [p.split('/')[-1] for p in processed_bags]
+        assert self.episode_min_bag_name in bag_names, \
+            f"episode_min_bag_name {self.episode_min_bag_name!r} not found in this rb's processed_bags: {bag_names}"
+
+        cutoff = None
+        cum = 0
+        for path, name in zip(processed_bags, bag_names):
+            if name == self.episode_min_bag_name:
+                cutoff = cum
+                break
+            cum += bag_episode_counts[path]
+        assert cutoff is not None
+
+        mask = np.zeros(n_eps, dtype=bool)
+        mask[cutoff:] = True
+        assert mask.sum() == n_eps - cutoff
+        return mask
 
     def _compute_episode_filter_mask(self, n_eps):
         """

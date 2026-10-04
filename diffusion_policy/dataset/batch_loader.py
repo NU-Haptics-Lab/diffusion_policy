@@ -1858,6 +1858,187 @@ class AIETErlenmeyerFlask12BatchLoader(AIETErlenmeyerFlask4BatchLoader):
     """
     OBS_KEYS_TO_FIT = []
 
+
+class AIETWamBatchLoader(BatchLoader):
+    """
+    BatchLoader for aiet_wam_1's world model (see AIETWamSampler). Unlike
+    every other aiet_* BatchLoader, the diffused "action" here is a wide
+    (WAM_OBS_KEYS' own future values + completion fraction, concatenated)
+    world-model target, not a small palm+gripper action -- so instead of a
+    single dedicated fit, its per-block scale/offset is assembled from each
+    block's OWN normalizer:
+      - palm_pose_xyz_rpy / gripper_value blocks: fit exactly like every
+        aiet_erlenmeyer_flask_14+ action (absolute pose w/ sincos yaw +
+        gripper, via get_all_action_components) -- reused verbatim for
+        BOTH the "action" target's own palm/gripper block AND the new
+        "action_history" conditioning key, since they're the literal same
+        quantity (see AIETWamSampler.WAM_OBS_KEYS/_build_action_history).
+      - biotac_lh / the three keypoint blocks: identity, same "don't
+        normalize DINO features" precedent as AIETErlenmeyerFlask4BatchLoader
+        -- these are never fit at all, obs or action side.
+      - completion fraction: hardcoded [0, 1] -> [-1, 1] range normalizer
+        (get_image_range_normalizer, the same one used for [0,1] pixel
+        data), not fit from data -- it's [0, 1] by construction (see
+        AIETWamSampler._completion_fraction), so fitting empirical min/max
+        would just rediscover the same range noisily.
+    """
+
+    OBS_KEYS_TO_FIT = ["palm_pose_xyz_rpy", "gripper_value"]
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        obs_keys_to_use = globals.CONFIG.obs_keys_to_use  # type: ignore
+
+        for obs_key in obs_keys_to_use:
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            # full min/max/mean/std (not just 'min') -- get_fitted_nns below
+            # reads THESE identity obs normalizers' own input_stats when
+            # assembling "action"'s blockwise input_stats (for biotac_lh and
+            # the keypoint keys, which stay identity/never separately fit),
+            # so every key needs the same four stat names present or that
+            # concatenation KeyErrors/AttributeErrors on whichever key
+            # happens to be fit vs. identity.
+            zeros = np.zeros(nb, dtype=np.float32)
+            obs[obs_key] = get_identity_normalizer_from_stat(
+                {'min': zeros, 'max': zeros.copy(), 'mean': zeros.copy(), 'std': zeros.copy()}
+            )
+
+        act_key = globals.CONFIG.action_key  # type: ignore
+        nb_act = globals.CONFIG.shape_meta[act_key].shape  # type: ignore
+        zeros_act = np.zeros(nb_act, dtype=np.float32)
+        nns['action'] = get_identity_normalizer_from_stat(
+            {'min': zeros_act, 'max': zeros_act.copy(), 'mean': zeros_act.copy(), 'std': zeros_act.copy()}
+        )
+
+        nns['obs'] = obs
+
+        for key in ['task_id', 'subtask_id', 'ep_id']:
+            nns[key] = get_identity_normalizer_from_stat(
+                {'min': np.array([0], dtype=np.float32)}
+            )
+
+        return nns
+
+    def get_all_action_components(self):
+        """
+        Same delegation as AIETErlenmeyerFlask4BatchLoader.get_all_action_components
+        -- pools every rb_id in normalizer_fit_rb_ids' (rel_palm, grip) pairs
+        (AIETWamSampler inherits AIETAlignmentSim3Sampler.get_all_action_components
+        unchanged, since it still returns the same palm+gripper schema, just
+        no longer diffused directly).
+        """
+        rel_palms = []
+        grips = []
+        for rb_id in self.normalizer_fit_rb_ids:
+            dls: TrainAndVal = globals.DATALOADERS[rb_id]  # type: ignore
+            for ep in dls.sampler.get_ep_list():
+                rel_palm, grip = ep.get_all_action_components()
+                rel_palms.append(rel_palm)
+                grips.append(grip)
+
+        return np.concatenate(rel_palms, axis=0), np.concatenate(grips, axis=0)
+
+    def get_fitted_nns(self):
+        from diffusion_policy.samplers.aiet_wam_sampler import AIETWamSampler
+
+        nns = self.get_static_nns()
+
+        # obs-side palm_pose_xyz_rpy/gripper_value -- pooled across
+        # normalizer_fit_rb_ids, resolved through the FIRST rb_id's own
+        # resolve_rb_key (obs_use_states_suffix-aware, e.g.
+        # palm_pose_xyz_rpy -> palm_pose_xyz_rpy_states), so this fits
+        # against the SAME literal array the sampler's obs side actually
+        # reads -- unlike AIETErlenmeyerFlask4BatchLoader's own
+        # OBS_KEYS_TO_FIT loop, which pools the unsuffixed key
+        # unconditionally even when obs_use_states_suffix is set (worth
+        # revisiting there separately; not touched here to avoid changing
+        # already-shipped flask_15/16 behavior).
+        rb0: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.normalizer_fit_rb_ids[0]]  # type: ignore
+        dls0: TrainAndVal = globals.DATALOADERS[self.normalizer_fit_rb_ids[0]]  # type: ignore
+        ep0 = next(iter(dls0.sampler.get_ep_list()))  # get_ep_list() returns dict_values, not subscriptable
+        for obs_key in self.OBS_KEYS_TO_FIT:
+            resolved_key = ep0.resolve_rb_key(obs_key)
+            pooled = []
+            for rb_id in self.normalizer_fit_rb_ids:
+                rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[rb_id]  # type: ignore
+                if resolved_key in rb:
+                    arr = np.asarray(rb[resolved_key][:])
+                    pooled.append(arr[:, None] if arr.ndim == 1 else arr)
+            if pooled:
+                self.fit_nn(np.concatenate(pooled, axis=0), nns['obs'][obs_key], obs_key)
+
+        # action_history / action's palm+gripper block -- same fit every
+        # aiet_erlenmeyer_flask_14+ action already uses (absolute pose w/
+        # sincos yaw + gripper), just repurposed as conditioning here (see
+        # class docstring).
+        action_palm_key = getattr(globals.CONFIG, 'action_palm_pose_rb_key', 'palm_pose_xyz_rpy')  # type: ignore
+        if action_palm_key in rb0 and "gripper_value" in rb0:
+            rel_palm, grip = self.get_all_action_components()
+            palm_nn = get_identity_normalizer_from_stat({'min': np.zeros(7, dtype=np.float32)})
+            grip_nn = get_identity_normalizer_from_stat({'min': np.zeros(1, dtype=np.float32)})
+            action_mode = getattr(globals.CONFIG, 'action_normalizer_mode', 'gaussian')  # type: ignore
+            clip_pct = 0.5 if getattr(globals.CONFIG, 'action_fit_clip_outliers', False) else 0.0  # type: ignore
+            self.fit_nn(rel_palm, palm_nn, "action_history/action palm", mode=action_mode, clip_outlier_percentile=clip_pct)
+            self.fit_nn(grip[:, None], grip_nn, "action_history/action gripper", mode=action_mode, clip_outlier_percentile=clip_pct)
+
+            n_offsets = len(globals.CONFIG.action_rel_indices)  # type: ignore
+
+            # action_history (conditioning key, obs-side): the SAME
+            # palm+gripper block, repeated once per action_rel_indices
+            # offset (it's the same physical quantity at every offset, so
+            # the same per-dimension scale/offset applies at each one).
+            action_history_nn = nns['obs']['action_history']
+            for param_name in ["scale", "offset"]:
+                block = torch.cat([palm_nn.params_dict[param_name], grip_nn.params_dict[param_name]])
+                action_history_nn.params_dict[param_name] = block.repeat(n_offsets)
+            for stat_name in ["min", "max", "mean", "std"]:
+                block = torch.cat([
+                    palm_nn.params_dict['input_stats'][stat_name],
+                    grip_nn.params_dict['input_stats'][stat_name],
+                ])
+                action_history_nn.params_dict['input_stats'][stat_name] = block.repeat(n_offsets)
+
+            # "action" (the diffused world-model target): blockwise
+            # concatenation, in WAM_OBS_KEYS order, of each key's own
+            # normalizer (palm/gripper: the fit above; everything else:
+            # identity, already sitting in nns['obs'][key] from
+            # get_static_nns), plus completion fraction's hardcoded
+            # [0,1]->[-1,1] range normalizer appended last -- MUST match
+            # AIETWamSampler.build_action_chunk's concatenation order
+            # exactly (WAM_OBS_KEYS, then completion).
+            completion_nn = get_image_range_normalizer()
+            per_key_nn = {
+                "palm_pose_xyz_rpy": palm_nn,
+                "gripper_value": grip_nn,
+            }
+            # keypoint keys' own normalizer scale/offset/stats are shaped
+            # like the obs tensor itself ([1024, 2]), since that's how
+            # they're used on the obs side -- but build_action_chunk
+            # flattens every key to 1D before concatenating into "action"
+            # (matching AIETWamSampler's obs-side flatten too, via
+            # get_obs_sample's get_key_sample), so every block here must be
+            # .reshape(-1)'d to the same flattened width before concatenation
+            # or torch.cat would either shape-mismatch or silently produce
+            # the wrong total width.
+            for param_name in ["scale", "offset"]:
+                blocks = []
+                for obs_key in AIETWamSampler.WAM_OBS_KEYS:
+                    key_nn = per_key_nn.get(obs_key, nns['obs'].get(obs_key))
+                    blocks.append(key_nn.params_dict[param_name].reshape(-1))
+                blocks.append(completion_nn.params_dict[param_name].reshape(-1))
+                nns['action'].params_dict[param_name] = torch.cat(blocks)
+            for stat_name in ["min", "max", "mean", "std"]:
+                blocks = []
+                for obs_key in AIETWamSampler.WAM_OBS_KEYS:
+                    key_nn = per_key_nn.get(obs_key, nns['obs'].get(obs_key))
+                    blocks.append(key_nn.params_dict['input_stats'][stat_name].reshape(-1))
+                blocks.append(completion_nn.params_dict['input_stats'][stat_name].reshape(-1))
+                nns['action'].params_dict['input_stats'][stat_name] = torch.cat(blocks)
+
+        return nns
+
+
 class TroubleshootClenchBatchLoader(BatchLoader):
     """
     BatchLoader for task 24 (erlenmeyer flask insertion).

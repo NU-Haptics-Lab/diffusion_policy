@@ -1,6 +1,18 @@
 import numpy as np
 
 from diffusion_policy.common.replay_buffer import ReplayBuffer
+from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs
+
+# zarr eagerly instantiates (and _load_metadata()'s) EVERY array in a
+# group on open, regardless of which keys are ever actually read later --
+# so opening ANY zarr containing a jpeg2k/etc-compressed array (e.g. this
+# repo's raw wrist_image/overhead_image arrays) needs these codecs
+# registered up front, even for a yaml whose obs_keys_to_load never touches
+# those arrays. robomimic_replay_image_dataset.py/real_data_conversion.py
+# already call this themselves, but train.py's own import path never did --
+# registering here instead, once, covers every entrypoint that goes through
+# ReplayBufferLoader (i.e. all of them).
+register_codecs()
 
 class ReplayBufferLoader:
     """

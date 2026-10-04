@@ -124,8 +124,8 @@ class DexNexTransformerAdapter(nn.Module):
         super().__init__()
         self.transformer = transformer
 
-    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, data_source=None, log_attn=False, **kwargs):
-        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, data_source=data_source, log_attn=log_attn)
+    def forward(self, sample, timestep, task_ids=None, local_cond=None, global_cond=None, patches=None, data_source=None, log_attn=False, hand_ids=None, **kwargs):
+        return self.transformer(sample, timestep, cond=global_cond, patches=patches, task_ids=task_ids, data_source=data_source, log_attn=log_attn, hand_ids=hand_ids)
 
     def get_optim_groups(self, weight_decay: float=1e-3):
         return self.transformer.get_optim_groups(weight_decay=weight_decay)
@@ -203,6 +203,7 @@ class DiffusionModel(BaseImagePolicy):
             num_mid_module_repeats = 4,
             embed_task_id = False,
             num_tasks = 0, # size of the task-id embedding table (dexnex_transformer only)
+            num_hands = 0, # size of the hand-id embedding table (dexnex_transformer only; 0 = no hand token). Batches then carry 'hand_id', predict_action takes hand_id
             model_type = 'unet', # 'unet' | 'dexnex_transformer'
             transformer_n_layer = 8,
             transformer_n_head = 8,
@@ -270,6 +271,7 @@ class DiffusionModel(BaseImagePolicy):
 
         self.embed_task_id = embed_task_id
         self.num_tasks = num_tasks
+        self.num_hands = num_hands
 
         self.model_type = model_type
         self.transformer_n_layer = transformer_n_layer
@@ -420,6 +422,7 @@ class DiffusionModel(BaseImagePolicy):
                 spatial_softmax_temperature_init=self.spatial_softmax_temperature_init,
                 separate_spatial_softmax_by_data_source=self.separate_spatial_softmax_by_data_source,
                 num_tasks=self.num_tasks if self.embed_task_id else 0,
+                num_hands=self.num_hands,
                 n_layer=self.transformer_n_layer,
                 n_head=self.transformer_n_head,
                 n_emb=self.transformer_n_emb,
@@ -655,6 +658,7 @@ class DiffusionModel(BaseImagePolicy):
             data_source=None,
             generator=None,
             task_id = None,
+            hand_id = None,
             # keyword arguments to scheduler.step
             **kwargs
             ):
@@ -676,7 +680,8 @@ class DiffusionModel(BaseImagePolicy):
             model_output = self._get_forward_model()(trajectory,
                                       t,
                                       task_id,
-                local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source)
+                local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source,
+                **({} if hand_id is None else {'hand_ids': hand_id}))
             
             # tree?
             if self.use_tree:
@@ -741,6 +746,7 @@ class DiffusionModel(BaseImagePolicy):
                         task_id = None,
                         data_source = None,
                         noise_scheduler = None, # override for self.noise_scheduler -- e.g. get_val_action_mse_error passing self.val_noise_scheduler
+                        hand_id = None, # (B,) hand indices, with num_hands > 0
                        ) -> Dict[str, torch.Tensor]:
         if noise_scheduler is None:
             noise_scheduler = self.noise_scheduler
@@ -749,6 +755,7 @@ class DiffusionModel(BaseImagePolicy):
             noise_scheduler,
             task_id=task_id,
             data_source=data_source,
+            hand_id=hand_id,
             )
 
     def denoise(self,
@@ -771,6 +778,7 @@ class DiffusionModel(BaseImagePolicy):
             noise_scheduler,
             task_id = None,
             data_source = None,
+            hand_id = None,
             ) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -825,6 +833,7 @@ class DiffusionModel(BaseImagePolicy):
             patches=patches,
             data_source=data_source,
             task_id = task_id,
+            hand_id = hand_id,
             **self.kwargs)
         
         # unnormalize elsewhere
@@ -1441,8 +1450,10 @@ class DiffusionModel(BaseImagePolicy):
         do_diagnostics = self.model_type == 'dexnex_transformer' and utils.StepFreqTrigger(self.diagnostics_every_n_steps)
 
         # Predict the noise residual
+        hand_id = nbatch['hand_id'] if 'hand_id' in nbatch else None
         pred = self._get_forward_model()(noisy_trajectory, timesteps, task_id,
-            local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source, log_attn=do_diagnostics)
+            local_cond=local_cond, global_cond=global_cond, patches=patches, data_source=data_source, log_attn=do_diagnostics,
+            **({} if hand_id is None else {'hand_ids': hand_id}))
 
         # tree?
         if self.use_tree:

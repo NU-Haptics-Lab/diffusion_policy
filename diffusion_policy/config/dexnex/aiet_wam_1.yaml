@@ -1,0 +1,776 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "aiet_wam_1: a WORLD MODEL, not a policy -- based on
+  aiet_erlenmeyer_flask_16 (same replay buffer, same three subtask-partitioned
+  real-only streams, same *_states obs / *_commands action rb keys, same
+  env_cam task-27 masking, same limits+outlier-clipped normalization scheme),
+  but the diffused target and the action's role are swapped:
+
+  - INPUT: the actual action trajectory (the exact same absolute-pose+sincos-
+    yaw+gripper encoding aiet_erlenmeyer_flask_14/15/16 diffuse as their
+    action) is now fed in as a new obs key, 'action_history' (flattened over
+    action_rel_indices, see AIETWamSampler._build_action_history) --
+    conditioning, not something denoised.
+  - OUTPUT: config.action_key's placeholder ('action', unchanged name for
+    code-path compatibility -- see shape_meta.action) now holds a trajectory
+    of every one of AIETWamSampler.WAM_OBS_KEYS' own FUTURE values (palm
+    pose, gripper, biotac, and all three DINOv3-large keypoint sets --
+    literally 'everything the policy observes', not a hand-picked subset),
+    with ONE extra scalar appended per waypoint: task-completion fraction
+    (this waypoint's episode-relative index / this episode's own final
+    index). This IS diffused/denoised, same as any other aiet_* action.
+
+  Motivation: aiet_erlenmeyer_flask_16 already picks up pellets across the
+  tray reasonably well; a world model that can roll forward WHAT WILL BE
+  OBSERVED given a candidate action trajectory (rather than only what
+  action to take next) opens up planning/verification uses a pure BC policy
+  can't -- e.g. scoring candidate action trajectories by whether their
+  predicted rollout's completion fraction actually approaches 1.0.
+
+  task-completion fraction is NOT a reliable target for every bag: older
+  bags (before toby_19) kept recording after the task was actually
+  physically done, so their episode length overstates how incomplete a
+  mid-episode waypoint really is -- their completion-fraction ground truth
+  is systematically too low near the true end of the task. This yaml trains
+  the main 'wam'/'wam_align'/'wam_fine_align' streams (identical role to
+  flask_16's erlenmeyer/erlenmeyer_align/erlenmeyer_fine_align) across ALL
+  bags regardless -- their obs-trajectory prediction is still valid data
+  even where completion-fraction isn't -- and ADDS a dedicated
+  'wam_full_task' stream (see DatasetSampler.episode_min_bag_name,
+  restricted to bags from toby_19 onward, no subtask_id restriction) whose
+  entire purpose is reinforcing a clean completion-fraction signal on top.
+  Since completion fraction is one scalar folded into the same diffused
+  vector as everything else (not a separate loss head), the main streams'
+  gradient on that ONE dimension is somewhat noisy for early-bag samples --
+  a caveat worth revisiting (e.g. per-dimension loss masking) if completion%
+  quality turns out to matter more than this first pass assumes.
+
+  use_weighted_dataloader is off everywhere here (unlike flask_16) -- kept
+  out of scope for this first world-model pass; re-enable
+  weighted_dataloader_mode: inverse_density per-stream later exactly as
+  flask_16 does, no code changes needed.
+
+  batch_size is much smaller than flask_16's per-stream sizes throughout --
+  the action target here is ~770x wider (6158 vs 8 dims) so GPU memory per
+  sample is dramatically higher; revisit upward if there's headroom."
+
+# global controls
+debug: false
+single_thread: false
+use_compiled_policy: true
+total_num_epochs: 3001
+batches_per_epoch: 100
+val_every: 20
+
+action_key: action # placeholder -- now holds the world-model's future-obs-trajectory-plus-completion% target, NOT an action. See description above.
+
+# unchanged from flask_16 -- action_history (the new conditioning input)
+# reuses this exact encoding (absolute pose, sincos yaw), and so does the
+# palm_pose_xyz_rpy block of the "action" world-model target (see
+# AIETWamSampler.build_action_chunk).
+action_pose_relative: false
+action_normalizer_mode: limits
+action_fit_clip_outliers: true
+obs_use_states_suffix: true
+action_palm_pose_rb_key: palm_pose_xyz_rpy_commands
+patch_grid_size: 14
+
+### Global Control Panel ###
+to_load:
+  - actor
+  - globals
+
+resume: false
+
+# should be the same as this file's name (sans .yaml)
+run_tag: aiet_wam_1
+
+output_dir: /media/dexnex_ssd/models/aiet_wam_1
+
+tasks_to_use:
+  - wam
+  - wam_align
+  - wam_fine_align
+  - wam_full_task
+
+# every BatchLoader in this yaml passes this SAME list as
+# normalizer_fit_rb_ids, so their normalizer stats are pooled from every
+# stream and shared across all of them (see BatchLoader.init_normalizers's
+# docstring, and flask_16's identical comment) -- this is what makes
+# real-world use of this model (which only ever normalizes/unnormalizes
+# through default_batch_loader) consistent with what every stream was
+# actually trained against. wam_full_task is INCLUDED here even though it's
+# a bag-restricted subset of the same underlying episodes wam/wam_align/
+# wam_fine_align already cover -- fine to pool, its rows are a subset of an
+# already-pooled population, not a new distribution.
+normalizer_fit_rb_ids: [wam, wam_align, wam_fine_align, wam_full_task]
+
+# fused/single-vector keys routed through the obs_encoder -- WAM_OBS_KEYS
+# (AIETWamSampler) plus the new action_history conditioning key. See that
+# class's docstring for why WAM_OBS_KEYS is deliberately identical to
+# flask_16's obs_keys_to_use.
+obs_keys_to_use:
+  - palm_pose_xyz_rpy
+  - gripper_value
+  - biotac_lh
+  - wrist_cam_keypoints_dinov3l
+  - overhead_roi_keypoints_dinov3l
+  - env_cam_keypoints_dinov3l
+  - action_history
+
+# NOTE: action_history is deliberately NOT here -- it isn't a raw rb key,
+# AIETWamSampler.get_obs_sample computes it itself and adds it after
+# iterating this list. See that method's docstring.
+obs_keys_to_load:
+  - palm_pose_xyz_rpy
+  - wrist_cam_keypoints_dinov3l
+  - overhead_roi_keypoints_dinov3l
+  - env_cam_keypoints_dinov3l
+  - gripper_value
+  - biotac_lh
+
+models_to_train:
+  - actor
+
+models_to_eval:
+  - actor
+
+step_freqs:
+  actor: 1
+  res_actor: 1
+  critic: 1
+  sac_actor: 1
+
+use_bc_loss: true
+action_relative_to_state: false
+use_denoise: false
+### End Global Control Panel ###
+
+num_inference_steps: 25
+clamp: false
+
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+obs_rel_indices: [0]
+gradient_accumulate_every: 1
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 100
+  checkpoint_every: 100
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false
+
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  output_dir: ${output_dir}
+
+resume_tag: null
+
+# common data
+shape_meta:
+  palm_pose_xyz_rpy:
+    shape:
+    - 6 # world pose of lh_palm, xyz + roll/pitch/yaw (current-step obs -- raw, NOT sincos'd; only the diffused "action" target's palm block gets sincos'd, see AIETWamSampler.build_action_chunk)
+
+  gripper_value:
+    shape:
+    - 1 # [0, 1] "how closed" scalar
+
+  biotac_lh:
+    shape:
+    - 5
+
+  wrist_cam_keypoints_dinov3l:
+    shape:
+      - 1024 # one (x,y) per dinov3-large channel
+      - 2
+
+  overhead_roi_keypoints_dinov3l:
+    shape:
+      - 1024
+      - 2
+
+  env_cam_keypoints_dinov3l:
+    shape:
+      - 1024
+      - 2
+
+  action_history:
+    shape:
+    - 128 # len(action_rel_indices) (16) * 8 (absolute palm pose w/ sincos yaw (7) + gripper_value (1)), flattened -- see AIETWamSampler._build_action_history
+
+  action:
+    shape:
+    - 6158 # per waypoint: palm_pose_xyz_rpy w/ sincos yaw (7) + gripper_value (1) + biotac_lh (5) + wrist/overhead/env_cam keypoints (1024*2=2048 each, x3) + completion_fraction (1) = 7+1+5+2048*3+1. See AIETWamSampler.build_action_chunk/WAM_OBS_KEYS.
+
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online
+    name: 2026.diffusion
+    project: dexnex_diffusion
+    resume: true
+    tags:
+    - diffusion
+    - world_model
+    - wam
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    palm_pose_xyz_rpy:
+      shape:
+      - 6
+
+    gripper_value:
+      shape:
+      - 1
+
+    biotac_lh:
+      shape:
+      - 5
+
+    wrist_cam_keypoints_dinov3l:
+      shape:
+      - 1024
+      - 2
+
+    overhead_roi_keypoints_dinov3l:
+      shape:
+      - 1024
+      - 2
+
+    env_cam_keypoints_dinov3l:
+      shape:
+      - 1024
+      - 2
+
+    action_history:
+      shape:
+      - 128
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 7
+  debug: ${debug}
+  use_zero_padding: false
+  restrict_to_valid_future: true
+
+
+# NODE -- replay buffer loader entry point. FOUR logical rb_ids, same
+# physical zarr -- wam/wam_align/wam_fine_align are the same subtask_id
+# partition flask_16 uses (0/1/2 respectively); wam_full_task adds a FOURTH
+# view with no subtask restriction, filtered instead to bags from toby_19
+# onward via episode_min_bag_name (see common_dataset_wam_full_task below).
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    wam: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    wam_align: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    wam_fine_align: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+    wam_full_task: /media/dexnex_ssd/datasets/task_24_erlenmeyer_flask.zarr
+
+  modes:
+    wam: r
+    wam_align: r
+    wam_fine_align: r
+    wam_full_task: r
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+  rb_id: "wam" # forces a load
+  train_or_val: eval
+  use_dataloader: false
+  strict: false
+  normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# NODE -- training entry point. All four streams' losses get summed each step.
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs}
+
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    step_trainer:
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+
+      w_batch_losses:
+        wam: ${common_wbatch_loss_wam}
+        wam_align: ${common_wbatch_loss_wam_align}
+        wam_fine_align: ${common_wbatch_loss_wam_fine_align}
+        wam_full_task: ${common_wbatch_loss_wam_full_task}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    # dedicated _val batch-loss nodes (NOT the ${common_wbatch_loss_*} ones
+    # step_trainer uses, which hardcode train_or_val: train) -- see
+    # flask_16's identical comment for why these must stay separate nodes.
+    w_batch_losses:
+      wam: ${common_wbatch_loss_wam_val}
+      wam_align: ${common_wbatch_loss_wam_align_val}
+      wam_fine_align: ${common_wbatch_loss_wam_fine_align_val}
+      wam_full_task: ${common_wbatch_loss_wam_full_task_val}
+
+
+common_wbatch_loss_wam:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_wam_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_wam_align:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam_align
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_wam_align_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam_align
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_wam_fine_align:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam_fine_align
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_wam_fine_align_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam_fine_align
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# dedicated stream (see common_dataset_wam_full_task below) whose entire
+# purpose is reinforcing a clean task-completion-fraction signal, on top of
+# (not instead of) the other three streams -- see description above for why
+# this exists as a separate stream rather than folding it into them.
+common_wbatch_loss_wam_full_task:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 0.5 # additive reinforcement, not this world model's primary data source -- tune as needed
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam_full_task
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+common_wbatch_loss_wam_full_task_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 0.5
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWamBatchLoader
+      rb_id: wam_full_task
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d:
+    wam: ${common_dataset_wam}
+    wam_align: ${common_dataset_wam_align}
+    wam_fine_align: ${common_dataset_wam_fine_align}
+    wam_full_task: ${common_dataset_wam_full_task}
+
+# on-task real data, subtask_id==0 only -- same partition as flask_16's
+# erlenmeyer stream, sampler class swapped to AIETWamSampler.
+common_dataset_wam:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: false # irrelevant here -- see preload_to_gpu_lazy_action below
+  preload_to_gpu_lazy_action: true # see WamLazyGPUCachedDataset -- required for this yaml's ~6158-dim action target (GPUCachedDataset's normal eager materialization would need ~54GB GPU memory just for one stream)
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 32 # much smaller than flask_16's 250 -- see description above (action target is ~770x wider)
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: wam
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_wam_sampler.AIETWamSampler
+    episode_filter_key: subtask_id
+    episode_filter_value: 0
+
+# subtask_id==1 (alignment-focused) episodes only -- same partition as
+# flask_16's erlenmeyer_align stream.
+common_dataset_wam_align:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: false # irrelevant here -- see preload_to_gpu_lazy_action below
+  preload_to_gpu_lazy_action: true # see WamLazyGPUCachedDataset -- required for this yaml's ~6158-dim action target (GPUCachedDataset's normal eager materialization would need ~54GB GPU memory just for one stream)
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 32
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: wam_align
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_wam_sampler.AIETWamSampler
+    episode_filter_key: subtask_id
+    episode_filter_value: 1
+
+# subtask_id==2 (fine/precise alignment) episodes only -- same partition as
+# flask_16's erlenmeyer_fine_align stream. Much smaller pool, so a smaller
+# batch_size than wam/wam_align's.
+common_dataset_wam_fine_align:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: false # irrelevant here -- see preload_to_gpu_lazy_action below
+  preload_to_gpu_lazy_action: true # see WamLazyGPUCachedDataset -- required for this yaml's ~6158-dim action target (GPUCachedDataset's normal eager materialization would need ~54GB GPU memory just for one stream)
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 8
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: wam_fine_align
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_wam_sampler.AIETWamSampler
+    episode_filter_key: subtask_id
+    episode_filter_value: 2
+
+# NEW stream (no subtask_id restriction) -- restricted instead to episodes
+# from bag toby_19_highercamres onward, by DatasetSampler's own
+# 'processed_bags' collection-order manifest (episode_min_bag_name; see that
+# param's docstring) -- these are the bags that actually stop recording at
+# task completion, so this stream's completion-fraction ground truth is
+# trustworthy (unlike wam/wam_align/wam_fine_align above, which include
+# older bags that kept recording past task completion). See description
+# above for why this exists as an ADDITIONAL stream rather than a
+# replacement for the other three.
+common_dataset_wam_full_task:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: false # irrelevant here -- see preload_to_gpu_lazy_action below
+  preload_to_gpu_lazy_action: true # see WamLazyGPUCachedDataset -- required for this yaml's ~6158-dim action target (GPUCachedDataset's normal eager materialization would need ~54GB GPU memory just for one stream)
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 32
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: wam_full_task
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_wam_sampler.AIETWamSampler
+    episode_min_bag_name: toby_19_highercamres
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          val_noise_scheduler: ${common_val_ddim_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: true
+          obs_as_global_cond: true
+          obs_encoder_group_norm: true
+          n_obs_steps: 1
+          down_dims:
+            - 256
+            - 512
+            - 1024
+          diffusion_step_embed_dim: 32
+
+          action_relative_to_state: ${action_relative_to_state}
+          use_tree: false
+          use_simple_model: false
+
+          model_type: dexnex_transformer
+          transformer_n_layer: 6
+          transformer_n_emb: 512
+          transformer_n_cond_layers: 6
+          diagnostics_every_n_steps: 50
+          # still meaningful here even though "action" is now a world-model
+          # target: this target's palm block sits at the exact same [x,y,z]
+          # position (dims 0:3) that every aiet_erlenmeyer_flask_14+ action
+          # used, so val_alignment_direction_cos_sim still reads as "does
+          # the model's predicted FINAL-waypoint palm position point toward
+          # this episode's own true final palm pose" -- unaffected by
+          # everything appended after it in the vector.
+          check_alignment_direction: true
+          use_compiled_policy: ${use_compiled_policy}
+          transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value', 'biotac_lh']
+          transformer_p_drop_token: 0.0
+          transformer_normalize_cond_tokens: true
+          transformer_use_adaln_timestep: true
+
+          embed_task_id: true
+          num_tasks: 28
+
+          gaussian_noise_by_data_source:
+            0: ['palm_pose_xyz_rpy', 'gripper_value']
+          gaussian_noise_std: 0.0
+
+          token_keys_valid_only_for_task_ids:
+            env_cam_keypoints_dinov3l: [27]
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 1e-4
+          weight_decay: 1.0e-06
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  clip_sample_range: 6.0 # unaudited for this much wider target -- see flask_11-13/flask_16's clip_sample_range comments; revisit once real training stats exist for this vector.
+  num_train_timesteps: 100
+  prediction_type: epsilon
+
+common_val_ddim_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  num_train_timesteps: 100
+  prediction_type: epsilon # MUST BE SAME AS DDPMSCHEDULER (common_noise_scheduler)
+
+device: cuda:0
+
+override:
+  models:
+    models:
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small
