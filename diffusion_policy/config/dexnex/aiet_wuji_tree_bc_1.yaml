@@ -1,0 +1,439 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "aiet_wuji_tree_bc_1: plain diffusion BC on the SuperDex AIET task with the floating Wuji hand (pick the
+  pellet off the tray, drop it into the Erlenmeyer flask), from the tree exploration's success paths -- no images,
+  no cotraining, no aux losses, no RL. Data: avatar_intelligence's success_to_zarr.py (success_rollouts/*_success*.npz
+  -> one episode per success path, one row per 30 Hz control step). Obs: the simulator's state features, split into
+  eleven lowdim groups (one transformer token each): hand joint positions / velocities, wrist pose (xyz + rotation
+  vector from the palm-down start), palm, fingertip pads and their normals, the pellet's pose (xyz + rot6), velocity
+  and contacts, the flask's mouth, task_state. Action: the absolute held-action target sent each control step (20
+  finger joint targets, wrist xyz, wrist rotation vector) over the next 16 steps (~0.53 s), 'limits'-normalized --
+  a literal rb array, so the stock AIETErlenmeyerFlaskSampler reads it (AIETWujiTreeBatchLoader fits the normalizers).
+  Based on aiet_alignment_sim_3 (single 'all' stream, dexnex_transformer), minus its wrist-camera patches and its
+  Drake rollouts."
+
+# global controls
+debug: false
+single_thread: false
+use_compiled_policy: false
+total_num_epochs: 3001
+batches_per_epoch: 100
+batch_size: 512
+val_every: 20
+
+# a literal rb array here (data/action: [T, 26]) -- see AIETWujiTreeBatchLoader
+action_key: action
+action_normalizer_mode: limits # (clip_sample below clips the denoised action to [-1, 1])
+action_fit_clip_outliers: false
+
+### Global Control Panel ###
+to_load:
+  - actor
+  - globals
+
+resume: false
+resume_tag: null
+
+# should be the same as this file's name (sans .yaml)
+run_tag: aiet_wuji_tree_bc_1
+
+output_dir: /media/dexnex_ssd/models/aiet_wuji_tree_bc_1
+
+tasks_to_use:
+  - all
+
+# every obs group is a model input (one token each) -- the same list is loaded (obs_keys_to_load) and encoded
+obs_keys_to_use:
+  - hand_joint_pos
+  - hand_joint_vel
+  - wrist_pose
+  - palm
+  - fingertips
+  - fingertip_normals
+  - pellet_pose
+  - pellet_velocity
+  - pellet_contact
+  - flask_mouth
+  - task_state
+
+obs_keys_to_load:
+  - hand_joint_pos
+  - hand_joint_vel
+  - wrist_pose
+  - palm
+  - fingertips
+  - fingertip_normals
+  - pellet_pose
+  - pellet_velocity
+  - pellet_contact
+  - flask_mouth
+  - task_state
+
+models_to_train:
+  - actor
+
+models_to_eval:
+  - actor
+
+step_freqs:
+  actor: 1
+  res_actor: 1
+  critic: 1
+  sac_actor: 1
+
+use_bc_loss: true
+action_relative_to_state: false
+use_denoise: false
+### End Global Control Panel ###
+
+num_inference_steps: 25
+clamp: false
+
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] # control steps (30 Hz): the tree's edges are 5 of them
+obs_rel_indices: [0]
+gradient_accumulate_every: 1
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 50
+  checkpoint_every: 50
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false
+
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  output_dir: ${output_dir}
+
+# common data (every rb array is [T, D]: see success_to_zarr.py's OBS_GROUPS)
+shape_meta:
+  hand_joint_pos:
+    shape:
+    - 20 # the Wuji's actuated finger joints [rad] (SuperDex order: index, middle, pinky, ring, thumb)
+  hand_joint_vel:
+    shape:
+    - 20
+  wrist_pose:
+    shape:
+    - 6 # xyz [m] + rotation vector from the palm-down start [rad]
+  palm:
+    shape:
+    - 3
+  fingertips:
+    shape:
+    - 15 # the five pad centers, thumb first
+  fingertip_normals:
+    shape:
+    - 15
+  pellet_pose:
+    shape:
+    - 9 # xyz + rot6 (two columns of its rotation)
+  pellet_velocity:
+    shape:
+    - 3
+  pellet_contact:
+    shape:
+    - 5 # on the tray, any hand contact, back-of-hand contact, links touching, penetration [m]
+  flask_mouth:
+    shape:
+    - 3
+  task_state:
+    shape:
+    - 4 # entered the mouth, non-fingertip links touching, 0, 0
+  action:
+    shape:
+    - 26 # absolute held-action target: 20 finger joint targets, wrist xyz, wrist rotation vector
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: offline # (sync later with `wandb sync`; online to upload live)
+    name: 2026.diffusion
+    project: dexnex_diffusion
+    resume: true
+    tags:
+    - diffusion
+    - sim
+    - aiet
+    - wuji
+    - tree_exploration
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    hand_joint_pos:
+      shape:
+      - 20
+    hand_joint_vel:
+      shape:
+      - 20
+    wrist_pose:
+      shape:
+      - 6
+    palm:
+      shape:
+      - 3
+    fingertips:
+      shape:
+      - 15
+    fingertip_normals:
+      shape:
+      - 15
+    pellet_pose:
+      shape:
+      - 9
+    pellet_velocity:
+      shape:
+      - 3
+    pellet_contact:
+      shape:
+      - 5
+    flask_mouth:
+      shape:
+      - 3
+    task_state:
+      shape:
+      - 4
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: ${debug}
+  use_zero_padding: false # position control: hold the last target past the end
+  restrict_to_valid_future: true # (no window running past an episode's end)
+
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: /media/dexnex_ssd/datasets/aiet_wuji_tree.zarr
+
+  modes:
+    all: r
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.AIETWujiTreeBatchLoader
+  rb_id: "default" # forces a load
+  train_or_val: eval
+  use_dataloader: false
+  strict: false
+  normalizer_fit_rb_ids: [all] # (the same stats as training's)
+
+# NODE -- training entry point
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs}
+
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    step_trainer:
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+
+      w_batch_losses:
+        all: ${common_wbatch_loss}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    w_batch_losses:
+      all: ${common_wbatch_loss_val}
+
+
+common_wbatch_loss:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWujiTreeBatchLoader
+      rb_id: all
+      train_or_val: train
+      normalizer_fit_rb_ids: [all]
+
+common_wbatch_loss_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWujiTreeBatchLoader
+      rb_id: all
+      train_or_val: val
+      normalizer_fit_rb_ids: [all]
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d:
+    all: ${common_dataset}
+
+common_dataset:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.05
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  # lowdim only, ~51k steps x ~130 floats: the whole dataset fits on the GPU
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  options:
+    common:
+      batch_size: ${batch_size}
+      timeout: 0
+    train:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: all
+    # (stock: obs from obs_keys_to_load, the action window from the literal 'action' array)
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_sampler.AIETErlenmeyerFlaskSampler
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: false
+          obs_as_global_cond: true
+          obs_encoder_group_norm: false
+          n_obs_steps: 1
+          down_dims:
+            - 256
+            - 512
+            - 1024
+          diffusion_step_embed_dim: 32
+
+          action_relative_to_state: ${action_relative_to_state}
+          use_tree: false
+          use_simple_model: false
+
+          # diffusion transformer over the eleven obs tokens (no patches, no task id)
+          model_type: dexnex_transformer
+          transformer_n_layer: 4
+          transformer_n_emb: 256
+          transformer_n_cond_layers: 4
+          diagnostics_every_n_steps: 50
+          # (off: it reads the erlenmeyer data's palm_pose_xyz_rpy rb key, which this dataset doesn't have -- and its
+          # "relative palm action points at the final palm pose" proxy doesn't fit an absolute 26-dim action)
+          check_alignment_direction: false
+
+          embed_task_id: false
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 1e-4
+          weight_decay: 1.0e-06
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true # the action is 'limits'-normalized to [-1, 1]
+  num_train_timesteps: 100
+  prediction_type: epsilon
+
+device: cuda:0
+
+override:
+  models:
+    models:
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small # (DDPM only: not common to DDIM)

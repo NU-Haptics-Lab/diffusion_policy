@@ -1,0 +1,477 @@
+###################################################
+###################################################
+###################################################
+###################################################
+description: "aiet_wuji_tree_success_wp_bc_1: as aiet_wuji_tree_success_bc_1, but its chunk is 16 WAYPOINTS 0.1 s apart (1.6 s; tree_to_zarr.py --waypoint-dt 0.1 --horizon 16: the path's commanded target trajectory resampled, ~10 edges -- one target per search edge was mostly the search's exploration noise), each run ramped over hold_steps 3 control steps (0.1 s at 30 Hz). The original: aiet_wuji_tree_success_bc_1: SUCCESS-ONLY diffusion BC on the exploration trees (tree_to_zarr.py --label-mode success: only the edges a success is reachable below -- the success paths, their branches that also succeed, every backward tree edge -- each 4-edge chunk along a succeeding branch; every label 1, so the edge_quality token is a constant: evaluate unconditionally, condition nan). Balanced over trees, then task phases. Otherwise as the original, aiet_wuji_tree_cond_bc_1: advantage-conditioned diffusion BC on WHOLE exploration trees (SuperDex AIET,
+  floating Wuji hand), not only their success paths -- the bad states the search wandered into and the moves out of
+  them are the recovery data success-only BC (aiet_wuji_tree_bc_1) never sees. Data: avatar_intelligence's
+  tree_to_zarr.py (tree_data/*.npz: TreeExplorer.save_tree_data). Every edge is labelled edge_quality in [-1, 1]: its
+  backed-up advantage (the explorer's cost backup, gamma 0.9: V(parent) - V(child), counting where an edge leads, not
+  its own step) percentile-ranked within its tree; a quarter of the edges below 0 kept as contrast. Per-edge
+  granularity (the trees keep states at the edges' ends): a sample is a node's state and the next 4 edges' absolute
+  held-action targets (the edge, then the best path below it), each ramped over hold_steps (5) control steps when run.
+  Each zarr row is one whole sample (its chunk stored in the row: action_chunk), episodes are blocks of ~1000 of one
+  tree's samples (AIETWujiTreeChunkSampler) -- not one 4-row episode per sample.
+  The label is one more cond token, dropped on 15% of samples (transformer_p_drop_token) so the same network is also
+  the unconditional policy -- at inference: condition on a high edge_quality (e.g. 0.8-1.0) with classifier-free
+  guidance (bc_diffusion_server.py: the unconditional pass force-drops the token). Obs as aiet_wuji_tree_bc_1."
+
+# (read by the actor viewer's pure_bc_diffusion server: what the action chunk's entries are and what conditions it)
+condition_key: edge_quality
+action_granularity: edge # each action entry is a held-action target ramped over hold_steps control steps
+hold_steps: 3  # (a waypoint every 0.1 s: ramped over 3 control steps at 30 Hz)
+
+# global controls
+debug: false
+single_thread: false
+use_compiled_policy: false
+total_num_epochs: 3001
+batches_per_epoch: 100
+batch_size: 512
+val_every: 20
+
+# a literal rb array here (data/action: [T, 26]) -- see AIETWujiTreeBatchLoader
+action_key: action_chunk # the rb array the action normalizer is fit from: each row's whole chunk [rows, 4, 26] (AIETWujiTreeChunkSampler)
+action_normalizer_mode: limits # (clip_sample below clips the denoised action to [-1, 1])
+action_fit_clip_outliers: false
+
+### Global Control Panel ###
+to_load:
+  - actor
+  - globals
+
+resume: false
+resume_tag: latest
+
+# should be the same as this file's name (sans .yaml)
+run_tag: aiet_wuji_tree_success_wp_bc_1
+
+output_dir: /media/dexnex_ssd/models/aiet_wuji_tree_success_wp_bc_1
+
+tasks_to_use:
+  - all
+
+# every obs group is a model input (one token each), and the label (edge_quality) -- the same list is loaded and encoded
+obs_keys_to_use:
+  - hand_joint_pos
+  - hand_joint_vel
+  - wrist_pose
+  - palm
+  - fingertips
+  - fingertip_normals
+  - pellet_pose
+  - pellet_velocity
+  - pellet_contact
+  - flask_mouth
+  - task_state
+  - edge_quality
+
+obs_keys_to_load:
+  - hand_joint_pos
+  - hand_joint_vel
+  - wrist_pose
+  - palm
+  - fingertips
+  - fingertip_normals
+  - pellet_pose
+  - pellet_velocity
+  - pellet_contact
+  - flask_mouth
+  - task_state
+  - edge_quality
+
+models_to_train:
+  - actor
+
+models_to_eval:
+  - actor
+
+step_freqs:
+  actor: 1
+  res_actor: 1
+  critic: 1
+  sac_actor: 1
+
+use_bc_loss: true
+action_relative_to_state: false
+use_denoise: false
+### End Global Control Panel ###
+
+num_inference_steps: 25
+clamp: false
+
+###################################################
+###################################################
+###################################################
+###################################################
+action_rel_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] # EDGES: the chunk's length (the model's horizon) -- stored whole in each row (action_chunk), not read as a window of rows
+obs_rel_indices: [0]
+gradient_accumulate_every: 1
+
+checkpoint:
+  _target_: diffusion_policy.common.checkpointer.TopKCheckpointManager
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+  format_str: step={global_step:07d}.ckpt
+  k: 50
+  checkpoint_every: 50
+  mode: max
+  monitor_key: epoch
+  use_current_directory: false
+
+  resume: ${resume}
+  resume_tag: ${resume_tag}
+  output_dir: ${output_dir}
+
+# common data (every rb array is [T, D]: see success_to_zarr.py's OBS_GROUPS)
+shape_meta:
+  hand_joint_pos:
+    shape:
+    - 20 # the Wuji's actuated finger joints [rad] (SuperDex order: index, middle, pinky, ring, thumb)
+  hand_joint_vel:
+    shape:
+    - 20
+  wrist_pose:
+    shape:
+    - 6 # xyz [m] + rotation vector from the palm-down start [rad]
+  palm:
+    shape:
+    - 3
+  fingertips:
+    shape:
+    - 15 # the five pad centers, thumb first
+  fingertip_normals:
+    shape:
+    - 15
+  pellet_pose:
+    shape:
+    - 9 # xyz + rot6 (two columns of its rotation)
+  pellet_velocity:
+    shape:
+    - 3
+  pellet_contact:
+    shape:
+    - 5 # on the tray, any hand contact, back-of-hand contact, links touching, penetration [m]
+  flask_mouth:
+    shape:
+    - 3
+  task_state:
+    shape:
+    - 4 # entered the mouth, non-fingertip links touching, 0, 0
+  edge_quality:
+    shape:
+    - 1 # the condition: the sample's percentile-ranked backed-up advantage, -1 (worst) .. 1 (best in its tree)
+  action:
+    shape:
+    - 26 # absolute held-action target of an edge: 20 finger joint targets, wrist xyz, wrist rotation vector
+  action_chunk:
+    shape:
+    - 26 # (the same, per row: [4, 26] -- action_key's normalizer per action dimension)
+
+training:
+  max_train_steps: null
+  max_val_steps: null
+  sample_every: 2
+  seed: 42
+  tqdm_interval_sec: 1.0
+
+
+logging:
+  _target_: diffusion_policy.common.logging.Logging
+  use_wandb: true
+
+  wandb_cfg:
+    group: null
+    id: null
+    mode: online # (sync later with `wandb sync`; online to upload live)
+    name: 2026.diffusion
+    project: dexnex_diffusion
+    resume: true
+    tags:
+    - diffusion
+    - sim
+    - aiet
+    - wuji
+    - tree_exploration
+    - conditioned
+
+common_obs_encoder:
+  _target_: diffusion_policy.model.obs_encoder.ObsEncoderMaker
+  obs_keys_to_use: ${obs_keys_to_use}
+  rgbs: {}
+  ch: null
+  cw: null
+
+  lowdims:
+    hand_joint_pos:
+      shape:
+      - 20
+    hand_joint_vel:
+      shape:
+      - 20
+    wrist_pose:
+      shape:
+      - 6
+    palm:
+      shape:
+      - 3
+    fingertips:
+      shape:
+      - 15
+    fingertip_normals:
+      shape:
+      - 15
+    pellet_pose:
+      shape:
+      - 9
+    pellet_velocity:
+      shape:
+      - 3
+    pellet_contact:
+      shape:
+      - 5
+    flask_mouth:
+      shape:
+      - 3
+    task_state:
+      shape:
+      - 4
+    edge_quality:
+      shape:
+      - 1
+
+
+common_indices:
+  _target_: diffusion_policy.common.sarsa_sampler.Indices
+  rb_id: default
+  rb_episode_start_idx: 0
+  rb_episode_end: 0
+  training_episode_start: 0
+  training_episode_end: 0
+  pad_before: 0
+  pad_after: 0
+  debug: ${debug}
+  use_zero_padding: false # position control: hold the last target past the end
+  restrict_to_valid_future: false # (every row is a whole sample: no window of rows to run past an episode's end)
+
+
+# NODE -- replay buffer loader entry point
+replay_buffer_loader:
+  _target_: diffusion_policy.common.replay_buffer_loader.ReplayBufferLoader
+
+  rb_paths:
+    all: /media/dexnex_ssd/datasets/aiet_wuji_tree_success_wp.zarr
+
+  modes:
+    all: r
+
+# to be used for norming / unnorming without loading
+default_batch_loader:
+  _target_: diffusion_policy.dataset.batch_loader.AIETWujiTreeBatchLoader
+  rb_id: "default" # forces a load
+  train_or_val: eval
+  use_dataloader: false
+  strict: false
+  normalizer_fit_rb_ids: [all] # (the same stats as training's)
+
+# NODE -- training entry point
+session_trainer:
+  _target_: diffusion_policy.trainers.session_trainer.SessionTrainer
+  nb_epochs: ${total_num_epochs}
+
+  epoch_trainer:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochTrainer
+    nb_batches: ${batches_per_epoch}
+
+    step_trainer:
+      _target_: diffusion_policy.trainers.step_trainer.StepTrainer
+      grad_norm: 1.0
+
+      w_batch_losses:
+        all: ${common_wbatch_loss}
+
+  epoch_evaluator:
+    _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
+    nb_batches: 4
+    val_every: ${val_every}
+
+    w_batch_losses:
+      all: ${common_wbatch_loss_val}
+
+
+common_wbatch_loss:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWujiTreeBatchLoader
+      rb_id: all
+      train_or_val: train
+      normalizer_fit_rb_ids: [all]
+
+common_wbatch_loss_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETWujiTreeBatchLoader
+      rb_id: all
+      train_or_val: val
+      normalizer_fit_rb_ids: [all]
+
+dataloaders:
+  _target_: diffusion_policy.dataset.train_and_val.DataLoaders
+
+  d:
+    all: ${common_dataset}
+
+common_dataset:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.05
+  split_val_by_episode: true
+  max_train_episodes: null
+  # rebalanced by the label: edge_quality piles up at exactly 0 (~half the samples: neutral edges) while the policy is
+  # queried near +1 -- five bins (worsening -1..-0.5, -0.5..0, neutral 0 alone, improving 0..0.5, 0.5..1), each drawn
+  # equally often (TrainAndVal.compute_weights_label_bins; the bins' counts and shares printed at startup)
+  use_weighted_dataloader: true
+  # balanced (tree_to_zarr's tree_id / task_phase columns): trees ~ samples ** alpha, then the task phases, then the
+  # edge_quality bins within each phase, each ~ count ** alpha (0: equal; 1: as is); bins under min_cell merged.
+  # (label_bins: the quality bins alone at bin_mass -- for zarrs without those columns)
+  weighted_dataloader_mode: balanced
+  weighted_dataloader_group_key: tree_id
+  weighted_dataloader_cell_keys: [task_phase]
+  weighted_dataloader_alpha: 0.5
+  weighted_dataloader_min_cell: 50
+  weighted_dataloader_key: null  # (success-only: every label 1 -- trees, then phases, no quality bins)
+  weighted_dataloader_bins: [-1.0, -0.5, -1.0e-6, 1.0e-6, 0.5, 1.0]
+  weighted_dataloader_bin_mass: [0.2, 0.2, 0.2, 0.2, 0.2]
+  # lowdim only: ~100-500k samples x 4 rows x ~130 floats fits on the GPU
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  options:
+    common:
+      batch_size: ${batch_size}
+      timeout: 0
+    train:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: all
+    # (obs from obs_keys_to_load, the action: the row's own action_chunk)
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_wuji_tree_chunk_sampler.AIETWujiTreeChunkSampler
+
+# models node
+models:
+  _target_: diffusion_policy.model.models.Models
+
+  models:
+    actor:
+      _target_: diffusion_policy.model.model.ModelEmaOptim
+
+      model:
+        _target_: diffusion_policy.model.model.Model
+        model:
+          _target_: diffusion_policy.model.diffusion_model.DiffusionModel
+          action_shape: ${shape_meta.action.shape}
+          noise_scheduler: ${common_noise_scheduler}
+          obs_encoder_maker: ${common_obs_encoder}
+          eval_fixed_crop: false
+          obs_as_global_cond: true
+          obs_encoder_group_norm: false
+          n_obs_steps: 1
+          down_dims:
+            - 256
+            - 512
+            - 1024
+          diffusion_step_embed_dim: 32
+
+          action_relative_to_state: ${action_relative_to_state}
+          use_tree: false
+          use_simple_model: false
+
+          # diffusion transformer over the eleven obs tokens + the edge_quality condition (no patches, no task id)
+          model_type: dexnex_transformer
+          transformer_n_layer: 4
+          transformer_n_emb: 256
+          transformer_n_cond_layers: 4
+          diagnostics_every_n_steps: 50
+          # (off: it reads the erlenmeyer data's palm_pose_xyz_rpy rb key, which this dataset doesn't have -- and its
+          # "relative palm action points at the final palm pose" proxy doesn't fit an absolute 26-dim action)
+          check_alignment_direction: false
+
+          embed_task_id: false
+
+          # classifier-free guidance training: the condition token dropped on 15% of samples (zeroed + masked out of
+          # attention), so the network also learns the unconditional policy
+          transformer_droppable_token_keys: ['edge_quality']
+          transformer_p_drop_token: 0.15
+
+      ema:
+        _target_: diffusion_policy.model.model.Ema
+        use_ema: true
+        ema_cfg:
+          inv_gamma: 1.0
+          max_value: 0.9999
+          min_value: 0.0
+          power: 0.75
+          update_after_step: 0
+
+      optim:
+        _target_: diffusion_policy.model.model.Optim
+
+        lr_scheduler: cosine
+        lr_warmup_steps: 500
+        gradient_accumulate_every: 1
+        optimizer_target: torch.optim.AdamW
+        optimizer_cfg:
+          betas:
+            - 0.95
+            - 0.999
+          eps: 1.0e-08
+          lr: 1e-4
+          weight_decay: 1.0e-06
+
+
+common_noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true # the action is 'limits'-normalized to [-1, 1]
+  num_train_timesteps: 100
+  prediction_type: epsilon
+
+device: cuda:0
+
+override:
+  models:
+    models:
+      actor:
+        model:
+          model:
+            noise_scheduler:
+              variance_type: fixed_small # (DDPM only: not common to DDIM)

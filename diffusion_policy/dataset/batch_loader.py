@@ -2099,3 +2099,60 @@ class TroubleshootClenchBatchLoader(BatchLoader):
             self.fit_nn(rb[act_key], nns['action'], act_key)
 
         return nns
+
+class AIETWujiTreeBatchLoader(BatchLoader):
+    """
+    BatchLoader for aiet_wuji_tree_bc_*: plain diffusion BC on the SuperDex AIET (Wuji hand) tree-exploration success
+    paths, converted by avatar_intelligence's success_to_zarr.py. Lowdim only, every key stored [T, D]:
+
+      obs (the simulator's state features, split into one transformer token per group -- see the converter's
+      OBS_GROUPS): hand_joint_pos [20], hand_joint_vel [20], wrist_pose [6] (xyz + rotation vector from the
+      palm-down start), palm [3], fingertips [15], fingertip_normals [15], pellet_pose [9] (xyz + rot6),
+      pellet_velocity [3], pellet_contact [5], flask_mouth [3], task_state [4]
+      action [26]: the absolute held-action target sent each control step (20 finger joint targets, wrist xyz,
+      wrist rotation vector) -- a literal rb array, so the stock AIETErlenmeyerFlaskSampler reads its
+      action_rel_indices window directly (no sampler of its own)
+
+    Every obs key and the action are fit with 'limits' (min/max -> [-1, 1]; the action optionally percentile-clipped:
+    action_fit_clip_outliers), pooled over normalizer_fit_rb_ids. task_id / subtask_id / ep_id (emitted by the sampler)
+    get identity normalizers.
+    """
+
+    def get_static_nns(self):
+        nns = {}
+        obs = {}
+        for obs_key in globals.CONFIG.obs_keys_to_load:  # type: ignore
+            nb = globals.CONFIG.shape_meta[obs_key].shape  # type: ignore
+            obs[obs_key] = get_identity_normalizer_from_stat({'min': np.zeros(nb, dtype=np.float32)})
+        nb_act = globals.CONFIG.shape_meta['action'].shape  # type: ignore
+        nns['action'] = get_identity_normalizer_from_stat({'min': np.zeros(nb_act, dtype=np.float32)})
+        nns['obs'] = obs
+        # exactly the fields AIETErlenmeyerFlaskSampler.get_sample emits besides obs / action (a strict loader raises
+        # on a normalizer whose field the batch lacks -- e.g. data_source, which only the cotrain samplers emit)
+        for key in ['task_id', 'subtask_id', 'ep_id']:
+            nns[key] = get_identity_normalizer_from_stat({'min': np.array([0], dtype=np.float32)})
+        return nns
+
+    def _pooled(self, key):
+        """rb[key] ([T, D]) over every rb_id in normalizer_fit_rb_ids that has it, as one [N, D] array (None if none)."""
+        arrays = []
+        for rb_id in self.normalizer_fit_rb_ids:
+            rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[rb_id]  # type: ignore
+            if rb is not None and key in rb:
+                data = np.asarray(rb[key][:], dtype=np.float32)
+                arrays.append(data.reshape(-1, data.shape[-1]))  # ([T, D]; a row-stored chunk [T, H, D] too: per action dimension)
+        return np.concatenate(arrays, axis=0) if arrays else None
+
+    def get_fitted_nns(self):
+        nns = self.get_static_nns()
+        for obs_key in globals.CONFIG.obs_keys_to_load:  # type: ignore
+            data = self._pooled(obs_key)
+            if data is not None:
+                self.fit_nn(data, nns['obs'][obs_key], obs_key)
+        act_key = globals.CONFIG.action_key  # type: ignore
+        actions = self._pooled(act_key)  # (the rb key the action is fit from: 'action', or tree_to_zarr's 'action_chunk')
+        if actions is not None:
+            mode = getattr(globals.CONFIG, 'action_normalizer_mode', 'limits')  # type: ignore
+            clip_pct = 0.5 if getattr(globals.CONFIG, 'action_fit_clip_outliers', False) else 0.0  # type: ignore
+            self.fit_nn(actions, nns['action'], act_key, mode=mode, clip_outlier_percentile=clip_pct)
+        return nns

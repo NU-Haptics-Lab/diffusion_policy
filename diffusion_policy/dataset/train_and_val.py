@@ -29,6 +29,56 @@ import diffusion_policy.globals as globals
 from diffusion_policy.model.diffusion_ql.diffusion_ql_loss import CriticLoss
 
 # TODO: move this class to its own file
+
+def _balanced_weights(groups: np.ndarray, cells: list[np.ndarray], alpha: float = 0.5, min_cell: int = 50) -> tuple[np.ndarray, list]:
+    """Per-sample weights (mean 1) rebalancing BC data two ways at once: across ``groups`` (e.g. trees: each group's
+    total mass proportional to its sample count ** alpha -- big trees count more, but less than in proportion) and down
+    the nested ``cells`` keys (categorical, e.g. [task phase, quality bin]): at each level the values share their parent's
+    mass in proportion to count ** alpha (the phases first, then the quality bins within each phase), the last level's
+    values under ``min_cell`` samples merged with their neighbours (ascending) so a handful of samples isn't repeated
+    hundreds of times. Weight = group factor x the cell's share / its count, renormalized. alpha 0: every group /
+    value equal; 1: no rebalancing. Also returns a summary, (cell key, count, share before, share after) per leaf cell.
+    (A copy of avatar_intelligence's tree_to_zarr.balanced_weights: keep them the same.)"""
+    groups = np.asarray(groups)
+    n = len(groups)
+    _, group_index, group_counts = np.unique(groups, return_inverse=True, return_counts=True)
+    group_factor = (group_counts.astype(np.float64) ** alpha / group_counts)[group_index]
+    keys = [np.asarray(c).reshape(n) for c in cells] or [np.zeros(n, dtype=np.int64)]
+    leaves = []  # (key, members, share)
+
+    def split(members, level, share, prefix):
+        values = np.unique(keys[level][members])
+        parts = [(v, members[keys[level][members] == v]) for v in values]
+        if level == len(keys) - 1:  # (the last level: merge short runs, ascending)
+            runs, run = [], []
+            for value, part in parts:
+                run.append((value, part))
+                if sum(len(p) for _, p in run) >= min_cell:
+                    runs.append(run)
+                    run = []
+            if run:
+                if runs:
+                    runs[-1] += run
+                else:
+                    runs.append(run)
+            parts = [(tuple(v for v, _ in r), np.concatenate([p for _, p in r])) for r in runs]
+        masses = np.array([len(p) ** alpha for _, p in parts], dtype=np.float64)
+        masses /= masses.sum()
+        for (value, part), mass in zip(parts, masses):
+            if level == len(keys) - 1:
+                leaves.append(((*prefix, value), part, share * mass))
+            else:
+                split(part, level + 1, share * mass, (*prefix, value))
+
+    split(np.arange(n), 0, 1.0, ())
+    cell_factor = np.zeros(n)
+    for _, members, share in leaves:
+        cell_factor[members] = share / len(members)
+    weights = group_factor * cell_factor
+    weights = weights * (n / weights.sum())
+    summary = [(key, len(members), len(members) / n, float(weights[members].sum()) / n) for key, members, _ in leaves]
+    return weights, summary
+
 class DexNexDataset(BaseImageDataset):
     def __init__(self,
                  sampler
@@ -95,6 +145,17 @@ class DexNexDataset(BaseImageDataset):
     
     def get_ep_lengths(self):
         return self.sampler.get_ep_lengths_arr()
+
+    def get_sample_values(self, key):
+        """
+        (N, ...) the replay-buffer key ``key`` at each SAMPLE's current index, in this dataset's own flat sample order
+        (N == len(self)) -- the per-sample values TrainAndVal.compute_weights_label_bins bins (e.g. a conditioning
+        label such as tree_to_zarr's edge_quality). Its own method, like get_palm_xy below, so GPUDatasetView subsets
+        it to its own view's samples.
+        """
+        values = np.asarray(self.sampler.get_key(key))
+        assert len(values) == len(self), f"get_sample_values({key!r}): {len(values)} values for {len(self)} samples"
+        return values
 
     def get_palm_xy(self, position_source):
         """
@@ -501,6 +562,9 @@ class GPUDatasetView(torch.utils.data.Dataset):
     def get_palm_xy(self, position_source):
         return self._cache.get_palm_xy(position_source)[self._indices]
 
+    def get_sample_values(self, key):
+        return self._cache.get_sample_values(key)[self._indices]
+
     def __getattr__(self, name):
         return getattr(self._cache, name)
 
@@ -872,8 +936,15 @@ class TrainAndVal:
             max_train_episodes=None,
             whether_to_use = True,
             use_weighted_dataloader = False,
-            weighted_dataloader_mode = 'episode_length', # 'episode_length' (existing compute_weights2, unchanged default) or 'inverse_density' (compute_weights_inverse_density, new -- see its docstring). Only consulted when use_weighted_dataloader is True.
+            weighted_dataloader_mode = 'episode_length', # 'episode_length' (existing compute_weights2, unchanged default), 'inverse_density' (compute_weights_inverse_density, new -- see its docstring) or 'label_bins' (compute_weights_label_bins: a per-sample value's bins at set shares). Only consulted when use_weighted_dataloader is True.
             weighted_dataloader_position_source = 'episode_final', # only used by weighted_dataloader_mode='inverse_density': 'episode_final' (every sample in an episode shares that episode's own FINAL xy -- rebalances which OUTCOMES/targets the dataset covers uniformly) or 'sample' (each sample's own CURRENT xy at its observation timestep -- rebalances which STATES/positions along the way are covered uniformly, including transient positions no episode ever ends at). See compute_weights_inverse_density's docstring for the tradeoff.
+            weighted_dataloader_key = None, # weighted_dataloader_mode='label_bins': the replay-buffer key whose per-sample value is binned (e.g. 'edge_quality': tree_to_zarr's conditioning label) -- see compute_weights_label_bins
+            weighted_dataloader_bins = None, # ... its bin edges, ascending (len = number of bins + 1; values outside go to the end bins), e.g. [-1, -0.5, -1e-6, 1e-6, 0.5, 1]: a narrow bin around 0 holds the neutral label alone
+            weighted_dataloader_group_key = None, # weighted_dataloader_mode='balanced': the replay-buffer key of each sample's group (e.g. tree_to_zarr's 'tree_id': each tree's mass ~ its samples ** alpha) -- see compute_weights_balanced
+            weighted_dataloader_cell_keys = None, # ... categorical keys balanced in nesting order before weighted_dataloader_key's bins (e.g. ['task_phase']: the phases first, then the quality bins within each)
+            weighted_dataloader_alpha = 0.5, # ... each level's values share their parent's mass ~ count ** alpha (0: equal; 1: no rebalancing)
+            weighted_dataloader_min_cell = 50, # ... last-level bins under this many samples merged with their neighbours
+            weighted_dataloader_bin_mass = None, # ... the share of the sampled batches each bin gets (len = number of bins; normalized; default equal) -- an empty bin's share is dropped
             weighted_dataloader_bin_width = 0.05, # physical bin width (meters) per axis for the inverse-density 2D histogram -- bin COUNT is derived from this and each axis's own 0.5th/99.5th percentile range (see compute_weights_inverse_density), not fixed, so it stays meaningful regardless of a stream's actual xy spread. Only used by weighted_dataloader_mode='inverse_density'.
             use_val_set = True, # if false, train_sampler == sampler, will save time during RL
             preload_to_gpu = False, # load entire dataset into GPU memory before training
@@ -899,6 +970,13 @@ class TrainAndVal:
         self.weighted_dataloader_mode = weighted_dataloader_mode
         self.weighted_dataloader_position_source = weighted_dataloader_position_source
         self.weighted_dataloader_bin_width = weighted_dataloader_bin_width
+        self.weighted_dataloader_key = weighted_dataloader_key
+        self.weighted_dataloader_bins = None if weighted_dataloader_bins is None else [float(b) for b in weighted_dataloader_bins]
+        self.weighted_dataloader_bin_mass = None if weighted_dataloader_bin_mass is None else [float(m) for m in weighted_dataloader_bin_mass]
+        self.weighted_dataloader_group_key = weighted_dataloader_group_key
+        self.weighted_dataloader_cell_keys = list(weighted_dataloader_cell_keys or [])
+        self.weighted_dataloader_alpha = float(weighted_dataloader_alpha)
+        self.weighted_dataloader_min_cell = int(weighted_dataloader_min_cell)
         self.use_val_set = use_val_set
         self.preload_to_gpu = preload_to_gpu
         self.preload_vectorized = preload_vectorized
@@ -1015,6 +1093,61 @@ class TrainAndVal:
         # scale range to [0, 1.0]
         weights = probs * 2.0
 
+        return weights
+
+    def compute_weights_balanced(self, dataset: DexNexDataset):
+        """
+        Per-sample weights from _balanced_weights: across groups (weighted_dataloader_group_key, e.g. 'tree_id': each
+        tree's mass ~ its samples ** alpha) and down nested cells -- weighted_dataloader_cell_keys (categorical, e.g.
+        ['task_phase']) then weighted_dataloader_key binned at weighted_dataloader_bins (e.g. 'edge_quality') -- each
+        level's values sharing their parent's mass ~ count ** weighted_dataloader_alpha, last-level bins under
+        weighted_dataloader_min_cell merged. Prints each cell's count and its share before and after.
+        """
+        n = len(dataset)
+        if n == 0:
+            raise ValueError("weighted dataloader (balanced): this split has no samples -- too few episodes in the zarr for a train / "
+                             "val split (each tree's samples are blocks of tree_to_zarr's --rows-per-episode rows): convert more trees")
+        flat = lambda key: np.asarray(dataset.get_sample_values(key), dtype=np.float64).reshape(n, -1)[:, 0]
+        groups = flat(self.weighted_dataloader_group_key) if self.weighted_dataloader_group_key else np.zeros(n)
+        cells = [np.round(flat(key)).astype(np.int64) for key in self.weighted_dataloader_cell_keys]
+        if self.weighted_dataloader_key:
+            edges = np.asarray(self.weighted_dataloader_bins if self.weighted_dataloader_bins is not None else [-1.0, -0.5, -1e-6, 1e-6, 0.5, 1.0])
+            cells.append(np.clip(np.digitize(flat(self.weighted_dataloader_key), edges[1:-1]), 0, len(edges) - 2))
+        weights, summary = _balanced_weights(groups, cells, self.weighted_dataloader_alpha, self.weighted_dataloader_min_cell)
+        print(f"weighted dataloader (balanced: groups {self.weighted_dataloader_group_key!r} ({len(np.unique(groups))}), cells "
+              f"{self.weighted_dataloader_cell_keys + ([self.weighted_dataloader_key] if self.weighted_dataloader_key else [])}, alpha "
+              f"{self.weighted_dataloader_alpha:g}, min cell {self.weighted_dataloader_min_cell}): {n} samples")
+        for key, count, before, after in summary:
+            print(f"  cell {key}: {count:8d} samples, {100 * before:5.1f}% of them -> {100 * after:5.1f}% of the draws")
+        return weights
+
+    def compute_weights_label_bins(self, dataset: DexNexDataset):
+        """
+        Per-sample weights that give each bin of a per-sample value (weighted_dataloader_key -- e.g. a conditioning
+        label) a set share of the sampled batches (weighted_dataloader_bin_mass, default equal): weight = the bin's
+        share / the bin's sample count, so WeightedRandomSampler draws every bin as often as its share says however
+        many samples it holds (rebalancing a label whose raw distribution piles up in one place -- e.g. tree_to_zarr's
+        edge_quality, ~half its samples exactly 0, neutral -- toward the values the policy is queried at). Bins:
+        weighted_dataloader_bins' edges (values outside the outer edges count in the end bins). A multi-column value
+        is binned by its first column. Prints each bin's count and its share before and after.
+        """
+        assert self.weighted_dataloader_key, "weighted_dataloader_mode 'label_bins' needs weighted_dataloader_key"
+        edges = np.asarray(self.weighted_dataloader_bins if self.weighted_dataloader_bins is not None else [-1.0, -0.5, -1e-6, 1e-6, 0.5, 1.0])
+        assert len(edges) >= 2 and np.all(np.diff(edges) > 0), f"weighted_dataloader_bins must ascend: {edges}"
+        n_bins = len(edges) - 1
+        mass = np.asarray(self.weighted_dataloader_bin_mass if self.weighted_dataloader_bin_mass is not None else [1.0] * n_bins, dtype=np.float64)
+        assert len(mass) == n_bins, f"weighted_dataloader_bin_mass has {len(mass)} entries for {n_bins} bins"
+        values = np.asarray(dataset.get_sample_values(self.weighted_dataloader_key), dtype=np.float64)
+        values = values.reshape(len(values), -1)[:, 0]
+        which = np.clip(np.digitize(values, edges[1:-1]), 0, n_bins - 1)
+        counts = np.bincount(which, minlength=n_bins).astype(np.float64)
+        mass = np.where(counts > 0, mass, 0.0)
+        mass = mass / mass.sum()
+        weights = mass[which] / counts[which]
+        print(f"weighted dataloader (label_bins on {self.weighted_dataloader_key!r}): {len(values)} samples")
+        for k in range(n_bins):
+            print(f"  [{edges[k]:+.3g}, {edges[k + 1]:+.3g}): {int(counts[k]):8d} samples, {100 * counts[k] / len(values):5.1f}% of them"
+                  f" -> {100 * mass[k]:5.1f}% of the draws")
         return weights
 
     def compute_weights_inverse_density(self, dataset: DexNexDataset):
@@ -1181,6 +1314,10 @@ class TrainAndVal:
             # get the weights
             if self.weighted_dataloader_mode == 'inverse_density':
                 weights = self.compute_weights_inverse_density(dataset)
+            elif self.weighted_dataloader_mode == 'label_bins':
+                weights = self.compute_weights_label_bins(dataset)
+            elif self.weighted_dataloader_mode == 'balanced':
+                weights = self.compute_weights_balanced(dataset)
             else:
                 weights = self.compute_weights2(dataset)
 

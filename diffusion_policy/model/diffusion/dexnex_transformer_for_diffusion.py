@@ -329,6 +329,10 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             assert 'timestep' not in droppable_token_keys, "the timestep token is required for diffusion and cannot be dropped"
         self.p_drop_token = p_drop_token
         self.droppable_token_keys = set(droppable_token_keys)
+        # tokens dropped on EVERY sample, train or eval, the same way p_drop_token drops them (zeroed + masked out of
+        # attention) -- empty by default; set from outside for the unconditional pass of classifier-free guidance at
+        # inference (a token trained with p_drop_token > 0, e.g. a return/advantage condition)
+        self.force_drop_token_keys: set = set()
 
         # deterministic, always-on (train + eval) per-data-source token masking
         # -- e.g. a sim-only obs key must be zeroed for real-robot samples and
@@ -1021,6 +1025,12 @@ class DexNexTransformerForDiffusion(ModuleAttrMixin):
             self.last_keep_mask = keep_mask.detach()  # (B, T_cond)
             self.last_keep_mask_token_names = list(cond_token_names)
             padding_mask = ~keep_mask if padding_mask is None else (padding_mask | ~keep_mask)
+
+        if getattr(self, "force_drop_token_keys", None):
+            forced = torch.tensor([name in self.force_drop_token_keys for name in cond_token_names], device=cond_embeddings.device)
+            keep = ~forced.unsqueeze(0).expand(cond_embeddings.shape[0], -1)
+            cond_embeddings = cond_embeddings * keep.unsqueeze(-1).to(cond_embeddings.dtype)
+            padding_mask = ~keep if padding_mask is None else (padding_mask | ~keep)
 
         if padding_mask is not None:
             # timestep (when it's a token at all, i.e. not use_adaln_timestep)
