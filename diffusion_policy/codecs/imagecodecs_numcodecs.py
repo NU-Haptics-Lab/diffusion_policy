@@ -649,7 +649,16 @@ class Jpeg2k(Codec):
         resolutions=None,
         numthreads=None,
         verbose=0,
+        planar=None,
+        mct=True,
+        squeeze=None,
     ):
+        # planar / mct / squeeze: written into the array metadata by newer imagecodecs' own Jpeg2k (e.g. the sim
+        # co-train zarr, aiet_grip_sim_to_real.zarr) -- accepted so those arrays open; passed to the encoder only when
+        # not the default (older imagecodecs' jpeg2k_encode lacks them)
+        self.planar = planar
+        self.mct = mct
+        self.squeeze = squeeze
         self.level = level
         self.codecformat = codecformat
         self.colorspace = colorspace
@@ -673,6 +682,8 @@ class Jpeg2k(Codec):
             resolutions=self.resolutions,
             numthreads=self.numthreads,
             verbose=self.verbose,
+            **({} if self.planar is None else {"planar": self.planar}),
+            **({} if self.mct else {"mct": False}),
         )
 
     def decode(self, buf, out=None):
