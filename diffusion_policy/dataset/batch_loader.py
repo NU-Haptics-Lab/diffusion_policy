@@ -1859,6 +1859,83 @@ class AIETErlenmeyerFlask12BatchLoader(AIETErlenmeyerFlask4BatchLoader):
     OBS_KEYS_TO_FIT = []
 
 
+_IMAGE_DECODE_POOL = None  # (shared by every image batch loader: JPEG 2000 decode releases the GIL)
+
+
+def _image_decode_pool():
+    global _IMAGE_DECODE_POOL
+    if _IMAGE_DECODE_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _IMAGE_DECODE_POOL = ThreadPoolExecutor(int(getattr(globals.CONFIG, "image_decode_threads", 16)))  # type: ignore
+    return _IMAGE_DECODE_POOL
+
+
+class AIETErlenmeyerFlaskImageBatchLoader(AIETErlenmeyerFlask4BatchLoader):
+    """
+    AIETErlenmeyerFlask4BatchLoader plus raw camera images (configs with image_keys_to_load, e.g.
+    aiet_erlenmeyer_flask_18 -- DiffusionModel's image_encoder turns them into tokens). The images are far too big to
+    preload to the GPU like the lowdim obs, so every sample carries its replay-buffer row (rb_idx -- see
+    AIETErlenmeyerFlaskSampler.get_sample) and this loader reads that row's images from the zarr (decoded by a shared
+    thread pool) once the batch is drawn. They go into nbatch['obs'][key] as [B, 1, H, W, 3] uint8 on the GPU AFTER
+    normalization (never normalized: the image encoder does its own ImageNet normalization).
+
+    One batch ahead: the next batch is drawn and its images decoded in the background while the current one trains.
+    """
+
+    def setup(self):
+        super().setup()
+        from concurrent.futures import ThreadPoolExecutor
+        self.image_keys = list(globals.CONFIG.image_keys_to_load)  # type: ignore
+        self.image_arrays = {}
+        if self.use_dataloader and self.rb_id != "default":  # (a normalizer-only loader never draws batches)
+            rb: ReplayBuffer = globals.REPLAY_BUFFER_LOADER[self.rb_id]  # type: ignore
+            self.image_arrays = {key: rb[key] for key in self.image_keys}
+        self._prefetch = ThreadPoolExecutor(1)
+        self._pending = None
+
+    def reset(self):
+        super().reset()
+        self._pending = None  # (a batch drawn from the old iterator is dropped)
+
+    def _read_images(self, rows: np.ndarray) -> dict:
+        pool = _image_decode_pool()
+        order = np.argsort(rows)  # (read in row order, put back in batch order)
+        out = {}
+        for key, array in self.image_arrays.items():
+            frames = list(pool.map(lambda r: np.asarray(array[int(r)]), rows[order]))
+            stacked = np.empty((len(rows),) + frames[0].shape, dtype=frames[0].dtype)
+            stacked[order] = np.stack(frames)
+            out[key] = torch.from_numpy(stacked).pin_memory()
+        return out
+
+    def _draw(self):
+        assert self.iterator is not None
+        try:
+            batch = next(self.iterator)
+        except Exception:  # (StopIteration / timeout: reshuffle, same as BatchLoader.get_batch)
+            self.reset()
+            batch = next(self.iterator)
+        rows = batch.pop("rb_idx").reshape(-1).cpu().numpy().astype(np.int64)
+        return batch, self._prefetch.submit(self._read_images, rows)
+
+    def get_batch(self):
+        if self._pending is None:
+            self._pending = self._draw()
+        batch, images = self._pending
+        self._pending = self._draw()  # (the next batch's images decode while this one trains)
+
+        ndata = self.transfer_and_norm(batch)
+
+        def fn(x):
+            if not torch.isfinite(x).all():
+                raise ValueError("Batch contains non-finite values.")
+        pytorch_util.dict_apply_inplace(ndata, fn)
+
+        for key, imgs in images.result().items():
+            ndata["obs"][key] = imgs.to(self.device, non_blocking=True)[:, None]  # [B, 1, H, W, 3] uint8
+        return ndata
+
+
 class AIETWamBatchLoader(BatchLoader):
     """
     BatchLoader for aiet_wam_1's world model (see AIETWamSampler). Unlike

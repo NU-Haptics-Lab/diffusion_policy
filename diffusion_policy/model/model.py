@@ -111,9 +111,14 @@ class Optim(Base):
         
         # make the optimizer class
         cls = hydra.utils.get_class(self.optimizer_target)
+        # per-group learning rates when the model defines them (DiffusionModel.optim_param_groups: e.g. a fine-tuned
+        # image backbone at a lower lr, a frozen one left out)
+        params = self.model.parameters()
+        if hasattr(self.model, "optim_param_groups"):
+            params = self.model.optim_param_groups(float(self.optimizer_cfg["lr"]))
         self.optimizer = cls(
                 **self.optimizer_cfg, 
-                params = self.model.parameters()
+                params = params
                 )
         
         # transfer to GPU

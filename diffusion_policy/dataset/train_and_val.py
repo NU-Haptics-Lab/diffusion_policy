@@ -318,6 +318,9 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     # rb['ep_id'] and decline vectorization entirely for every sampler that
     # emits ep_id.
     has_ep_id = 'ep_id' in probe_sample
+    # rb_idx (configs with image_keys_to_load -- see AIETErlenmeyerFlaskSampler.get_sample): the sample's own obs row
+    # in the replay buffer, i.e. obs_rb_idx below -- not an rb array, so excluded from extra_fields like ep_id
+    has_rb_idx = 'rb_idx' in probe_sample
 
     # some samplers hardcode these in get_sample() regardless of what's in
     # the rb (or even when the rb has no such array at all to read a
@@ -350,7 +353,7 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     # (e.g. it needs the aliasing/constant-field handling task_id/
     # subtask_id/data_source get above), this declines to vectorize rather
     # than risk silently building incorrect data.
-    extra_fields = [k for k in probe_sample if k not in ("obs", "action", "ep_id") and k not in scalar_fields]
+    extra_fields = [k for k in probe_sample if k not in ("obs", "action", "ep_id", "rb_idx") and k not in scalar_fields]
     raw_extra_arrays = {}
     try:
         for field_name in extra_fields:
@@ -370,6 +373,7 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
     scalar_chunks = {field_name: [] for field_name in scalar_fields}
     extra_chunks = {field_name: [] for field_name in extra_fields}
     ep_id_chunks = [] if has_ep_id else None
+    rb_idx_chunks = [] if has_rb_idx else None
 
     for ep in tqdm(eps, desc="gpu-preload (vectorized, per-episode)"):
         indices = ep.indices
@@ -417,6 +421,8 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
         # rb_episode_end), not read from anywhere -- see has_ep_id above
         if has_ep_id:
             ep_id_chunks.append(np.full((n, 1), float(ep.rb_episode_end), dtype=np.float32))
+        if has_rb_idx:
+            rb_idx_chunks.append(obs_rb_idx.astype(np.float32)[:, None])
 
     obs = {}
     for key in per_key_obs:
@@ -437,6 +443,8 @@ def _vectorized_load_dataset(dataset: 'DexNexDataset', device: torch.device):
         data[field_name] = torch.from_numpy(np.concatenate(extra_chunks[field_name], axis=0).astype(np.float32))
     if has_ep_id:
         data['ep_id'] = torch.from_numpy(np.concatenate(ep_id_chunks, axis=0).astype(np.float32))
+    if has_rb_idx:
+        data['rb_idx'] = torch.from_numpy(np.concatenate(rb_idx_chunks, axis=0))
 
     # safety check: this bypasses the normal per-sample path entirely, so
     # verify it against the known-correct dataset[i] for a handful of random

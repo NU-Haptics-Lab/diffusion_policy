@@ -33,6 +33,25 @@ class AIETErlenmeyerFlask4Real1Sampler(AIETAlignmentSim3Sampler):
         return {"data_source": 0.0}
 
 
+class AIETErlenmeyerFlaskCotrainSimSampler(AIETErlenmeyerFlask4Real1Sampler):
+    """
+    The SuperDex sim stream of the sim/real co-train configs (aiet_grip_sim_to_real.zarr; aiet_erlenmeyer_flask_18+):
+    Real1Sampler with task_id 28 instead of the zarr's 27 -- a real/sim marker through the existing task-id embedding
+    (num_tasks must cover 28; the env camera's token_keys_valid_only_for_task_ids list must include 28, since the sim
+    renders it). Inference on the robot passes 27.
+    """
+
+    SIM_TASK_ID = 28
+
+    def get_sample(self, ep_idx):
+        sample = super().get_sample(ep_idx)
+        sample["task_id"] = np.array([self.SIM_TASK_ID], dtype=np.float32)
+        return sample
+
+    def get_constant_sample_fields(self):
+        return {"data_source": 0.0, "task_id": float(self.SIM_TASK_ID)}
+
+
 class AIETErlenmeyerFlask4Real2Sampler(AIETAlignmentSim3Sampler):
     """
     full_avatar_real_world_cotrain_dataset real leg of aiet_erlenmeyer_flask_4

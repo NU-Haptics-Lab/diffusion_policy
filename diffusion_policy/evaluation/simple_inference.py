@@ -79,7 +79,16 @@ class SimpleInference:
         self.current_obs = obs
 
 
+    def _image_keys(self):
+        """Raw camera image obs keys (a model with an image_encoder, e.g. aiet_erlenmeyer_flask_18): passed through as
+        uint8, never normalized -- the image encoder does its own normalization, same as in training."""
+        encoder = getattr(self.policy, "image_encoder", None)
+        return list(encoder.image_keys) if encoder is not None else []
+
     def norm_gpu_obs(self, obs_dict_np):
+        images = {key: obs_dict_np[key] for key in self._image_keys() if key in obs_dict_np}
+        obs_dict_np = {key: val for key, val in obs_dict_np.items() if key not in images}
+
         # wrap in a data dict, which is what the batch loader expects
         dd = {"obs": obs_dict_np}
 
@@ -89,6 +98,9 @@ class SimpleInference:
         ndd_torch = self.batch_loader.transfer_and_norm(dd_torch)
 
         nobs_torch = ndd_torch['obs']
+        device = next(self.policy.parameters()).device
+        for key, img in images.items():
+            nobs_torch[key] = torch.as_tensor(np.asarray(img)).to(device)  # [B, To, H, W, 3] uint8
 
         return nobs_torch
 
@@ -144,6 +156,7 @@ class SimpleInference:
 
         keys_to_keep = [key for key in obs_keys_to_use if key not in pellet_localizer_synthetic_keys]
         keys_to_keep += patch_keys_to_use
+        keys_to_keep += self._image_keys()  # (raw camera images: see _image_keys)
         if pellet_localizer_patch_key is not None and pellet_localizer_patch_key not in keys_to_keep:
             keys_to_keep.append(pellet_localizer_patch_key)
 

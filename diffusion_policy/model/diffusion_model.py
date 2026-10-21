@@ -242,6 +242,12 @@ class DiffusionModel(BaseImagePolicy):
             pellet_localizer_hidden_dim = 128,
             pellet_localizer_temperature_init = 1.0,
             pellet_localizer_output_dim = 3,
+            # raw camera images -> one token per camera (dexnex_transformer only): a
+            # diffusion_policy.model.vision.dinov3_image_tokens.DinoV3ImageTokens (hydra-instantiated), or None. Its
+            # image_keys are read from nbatch['obs'] as [B, To, H, W, 3] uint8 (attached by
+            # AIETErlenmeyerFlaskImageBatchLoader, never normalized) and each becomes a cond key of
+            # image_encoder.output_dims()[key] -- see _encode_obs_cond / optim_param_groups.
+            image_encoder = None,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -298,6 +304,10 @@ class DiffusionModel(BaseImagePolicy):
         self.gaussian_noise_std = gaussian_noise_std
         self.diagnostics_every_n_steps = diagnostics_every_n_steps
         self.check_alignment_direction = check_alignment_direction
+        self.image_encoder = image_encoder
+        if image_encoder is not None:
+            assert model_type == 'dexnex_transformer', "image_encoder is dexnex_transformer only"
+            assert n_obs_steps == 1, "image_encoder uses only the most recent obs step"
         self.use_compiled_policy = use_compiled_policy
 
         self.pellet_localizer_patch_key = pellet_localizer_patch_key
@@ -395,6 +405,8 @@ class DiffusionModel(BaseImagePolicy):
                 key: dim * self.n_obs_steps
                 for key, dim in per_key_output_dims(self.obs_encoder).items()
             }
+            if self.image_encoder is not None:
+                cond_dims.update(self.image_encoder.output_dims())  # (one token per camera, see image_encoder)
             # patch-token groups (e.g. DINOv3 patches per camera) bypass obs_encoder entirely,
             # since ObservationEncoder always flattens per-key output and would destroy the
             # patch grid. Shapes come straight from shape_meta, same source ObsEncoderMaker uses.
@@ -574,10 +586,26 @@ class DiffusionModel(BaseImagePolicy):
 
         if self.model_type == 'dexnex_transformer':
             per_key_features = encode_obs_per_key(self.obs_encoder, this_nobs)
-            return {key: feat.reshape(B, -1) for key, feat in per_key_features.items()}
+            cond = {key: feat.reshape(B, -1) for key, feat in per_key_features.items()}
+            if self.image_encoder is not None:
+                cond.update(self.image_encoder({key: nobs[key][:, -1] for key in self.image_encoder.image_keys}))
+            return cond
         else:
             nobs_features = self.obs_encoder(this_nobs)
             return nobs_features.reshape(B, -1)
+
+    def optim_param_groups(self, lr: float):
+        """Optimizer parameter groups (Optim.setup): everything trainable at lr, a fine-tuned image backbone at
+        lr * image_encoder.backbone_lr_scale. A frozen backbone (requires_grad False) is left out entirely."""
+        backbone = set()
+        if self.image_encoder is not None and not self.image_encoder.freeze:
+            backbone = {id(p) for p in self.image_encoder.backbone_parameters()}
+        rest = [p for p in self.parameters() if p.requires_grad and id(p) not in backbone]
+        groups = [{'params': rest}]
+        if backbone:
+            groups.append({'params': [p for p in self.image_encoder.backbone_parameters() if p.requires_grad],
+                           'lr': lr * self.image_encoder.backbone_lr_scale})
+        return groups
 
     def _encode_patch_groups(self, nobs):
         """

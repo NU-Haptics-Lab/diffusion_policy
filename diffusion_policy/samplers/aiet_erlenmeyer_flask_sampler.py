@@ -102,6 +102,12 @@ class AIETErlenmeyerFlaskSampler(EpisodeSampler):
         # task_id/subtask_id/data_source.
         sample["ep_id"] = np.array([self.rb_episode_end], dtype=np.float32)
 
+        # configs with raw camera images (image_keys_to_load, e.g. aiet_erlenmeyer_flask_18): this sample's obs row
+        # in the replay buffer, so AIETErlenmeyerFlaskImageBatchLoader can read its images after the batch is drawn
+        # (images are never preloaded to the GPU -- far too big). Dropped from the batch before normalization.
+        if getattr(globals.CONFIG, "image_keys_to_load", None):  # type: ignore
+            sample["rb_idx"] = np.array([self.indices.get_rb_indices(np.array([ep_idx]))[0]], dtype=np.float32)
+
         return sample
 
 
