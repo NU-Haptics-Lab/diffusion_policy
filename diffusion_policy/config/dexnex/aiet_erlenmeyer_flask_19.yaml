@@ -16,13 +16,15 @@ description: "aiet_erlenmeyer_flask_19: aiet_erlenmeyer_flask_17 (same streams, 
   each step). Also erlenmeyer_sim_layout / erlenmeyer_sim_lift_layout: random ~50k-frame subsets (whole episodes,
   subset_sim_zarr.py, seed 0) of the layout/ re-renders (table / tray moved, domain-randomized look on ~70% of episodes),
   cost-balanced like their nominal streams. The sim labels come from add_sim_frame_labels.py. Each stream's share is
-  set by its batch size: real 645 of 1,285 (50%), sim 640 (50%; the full sim streams split by frame count)."
+  set by its batch size: real 323 of 644 (50%), sim 321 (50%; the full sim streams split by frame count) -- every
+  stream halved for the ~506M-param transformer (32 GB). The gripper's diffusion loss is weighted 5x
+  (action_loss_dim_weights)."
 
 # global controls
 debug: false
 single_thread: false
 use_compiled_policy: true
-total_num_epochs: 5001 # can do about 3000 epochs overnight
+total_num_epochs: 3001 # can do about 3000 epochs overnight
 batches_per_epoch: 100
 val_every: 20
 
@@ -155,7 +157,7 @@ checkpoint:
 
   format_str: step={global_step:07d}.ckpt
   k: 100
-  checkpoint_every: 100
+  checkpoint_every: 50
   mode: max
   monitor_key: epoch
   use_current_directory: false
@@ -758,7 +760,7 @@ common_dataset_erlenmeyer:
 
   options:
     common:
-      batch_size: 250
+      batch_size: 125
       timeout: 0
     train:
       num_workers: 4
@@ -813,7 +815,7 @@ common_dataset_erlenmeyer_sim:
 
   options:
     common:
-      batch_size: 210 # (flask_19: the full sim streams' 490 split by frame count: 115k / 56k / 50k / 50k)
+      batch_size: 105 # (flask_19: the full sim streams' 490 split by frame count: 115k / 56k / 50k / 50k)
       timeout: 0
     train:
       num_workers: 4
@@ -851,7 +853,7 @@ common_dataset_erlenmeyer_sim_lift:
 
   options:
     common:
-      batch_size: 100
+      batch_size: 50
       timeout: 0
     train:
       num_workers: 4
@@ -889,7 +891,7 @@ common_dataset_erlenmeyer_sim_layout:
 
   options:
     common:
-      batch_size: 90
+      batch_size: 45
       timeout: 0
     train:
       num_workers: 4
@@ -927,7 +929,7 @@ common_dataset_erlenmeyer_sim_lift_layout:
 
   options:
     common:
-      batch_size: 90
+      batch_size: 45
       timeout: 0
     train:
       num_workers: 4
@@ -966,7 +968,7 @@ common_dataset_erlenmeyer_sim_fine_align:
 
   options:
     common:
-      batch_size: 75
+      batch_size: 38
       timeout: 0
     train:
       num_workers: 4
@@ -1005,7 +1007,7 @@ common_dataset_erlenmeyer_sim_lift_fine_align:
 
   options:
     common:
-      batch_size: 75
+      batch_size: 38
       timeout: 0
     train:
       num_workers: 4
@@ -1041,7 +1043,7 @@ common_dataset_erlenmeyer_aux:
 
   options:
     common:
-      batch_size: 120
+      batch_size: 60
       timeout: 0
     train:
       num_workers: 4
@@ -1084,7 +1086,7 @@ common_dataset_erlenmeyer_align:
 
   options:
     common:
-      batch_size: 250
+      batch_size: 125
       timeout: 0
     train:
       num_workers: 4
@@ -1132,7 +1134,7 @@ common_dataset_erlenmeyer_fine_align:
 
   options:
     common:
-      batch_size: 25
+      batch_size: 13
       timeout: 0
     train:
       num_workers: 4
@@ -1183,15 +1185,16 @@ models:
           use_simple_model: false
 
           model_type: dexnex_transformer
-          transformer_n_layer: 8 # (flask_17: the large model -- see the description)
-          transformer_n_emb: 512
-          transformer_n_cond_layers: 8
-          transformer_n_head: 8
+          transformer_n_layer: 13 # (flask_19: ~506M params -- n_emb 1024, 16 heads, 13 decoder + 13 encoder layers; flask_17's was 512 / 8 / 8 + 8, 78M)
+          transformer_n_emb: 1024
+          transformer_n_cond_layers: 13
+          transformer_n_head: 16
           diagnostics_every_n_steps: 50
           check_alignment_direction: true # log val_alignment_direction_cos_sim: does the predicted palm-xyz action point toward this episode's own final palm pose (a no-ground-truth-needed proxy for the true aligned position, via each sample's ep_id)? Adapts to action_pose_relative (see DiffusionModel's diagnostic block) -- unnormalizes+re-derives the implied delta when the action is absolute, so this stays meaningful either way. Requires no code changes to disable -- set false to skip it entirely.
           use_compiled_policy: ${use_compiled_policy} # torch.compile's the transformer trunk (see DiffusionModel._get_forward_model) -- watch the first ~50-100 steps for compile-time spikes/graph breaks (log_attn flips every diagnostics_every_n_steps, train/eval differ, and the model writes diagnostics attrs like last_keep_mask inside forward -- each a possible graph-break source) before trusting steady-state it/s.
           transformer_droppable_token_keys: ['palm_pose_xyz_rpy', 'gripper_value']
           transformer_p_drop_token: 0.0
+          action_loss_dim_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 5.0] # (x, y, z, roll, pitch, sin_yaw, cos_yaw, gripper_value): the gripper's diffusion loss 5x
           transformer_normalize_cond_tokens: true # LayerNorm each cond token right after its own projection, so timestep can't dominate cross-attention purely from raw embedding magnitude. In the future solve this problem using adaLN instead
           transformer_use_adaln_timestep: true # DiT-style AdaLN-Zero timestep conditioning instead of a timestep cross-attn token -- the more standard fix
 

@@ -953,6 +953,7 @@ class TrainAndVal:
             weighted_dataloader_alpha = 0.5, # ... each level's values share their parent's mass ~ count ** alpha (0: equal; 1: no rebalancing)
             weighted_dataloader_min_cell = 50, # ... last-level bins under this many samples merged with their neighbours
             weighted_dataloader_bin_mass = None, # ... the share of the sampled batches each bin gets (len = number of bins; normalized; default equal) -- an empty bin's share is dropped
+            weighted_dataloader_xy_key = None, # inverse_density / balanced_x_density: a per-sample column holding the (x, y) to balance by (its first two values; e.g. tree_to_zarr's placement_xy: the tree's pellet placement), instead of the palm (palm_pose_xyz_rpy + weighted_dataloader_position_source)
             weighted_dataloader_bin_width = 0.05, # physical bin width (meters) per axis for the inverse-density 2D histogram -- bin COUNT is derived from this and each axis's own 0.5th/99.5th percentile range (see compute_weights_inverse_density), not fixed, so it stays meaningful regardless of a stream's actual xy spread. Only used by weighted_dataloader_mode='inverse_density'.
             use_val_set = True, # if false, train_sampler == sampler, will save time during RL
             preload_to_gpu = False, # load entire dataset into GPU memory before training
@@ -978,6 +979,7 @@ class TrainAndVal:
         self.weighted_dataloader_mode = weighted_dataloader_mode
         self.weighted_dataloader_position_source = weighted_dataloader_position_source
         self.weighted_dataloader_bin_width = weighted_dataloader_bin_width
+        self.weighted_dataloader_xy_key = weighted_dataloader_xy_key
         self.weighted_dataloader_key = weighted_dataloader_key
         self.weighted_dataloader_bins = None if weighted_dataloader_bins is None else [float(b) for b in weighted_dataloader_bins]
         self.weighted_dataloader_bin_mass = None if weighted_dataloader_bin_mass is None else [float(m) for m in weighted_dataloader_bin_mass]
@@ -1215,7 +1217,10 @@ class TrainAndVal:
         # method did, silently reads the unsplit full population instead of
         # this dataset's own subset. See get_ep_lengths/get_qvals for the
         # same pattern).
-        xy = dataset.get_palm_xy(self.weighted_dataloader_position_source)
+        if self.weighted_dataloader_xy_key:  # (a column of its own, e.g. the tree's pellet placement)
+            xy = np.asarray(dataset.get_sample_values(self.weighted_dataloader_xy_key), dtype=np.float64).reshape(len(dataset), -1)[:, :2]
+        else:
+            xy = dataset.get_palm_xy(self.weighted_dataloader_position_source)
 
         assert len(xy) == len(dataset), \
             f"compute_weights_inverse_density: built {len(xy)} xy positions but dataset has {len(dataset)} samples"
@@ -1326,6 +1331,10 @@ class TrainAndVal:
                 weights = self.compute_weights_label_bins(dataset)
             elif self.weighted_dataloader_mode == 'balanced':
                 weights = self.compute_weights_balanced(dataset)
+            elif self.weighted_dataloader_mode == 'balanced_x_density':  # (both at once: the balanced cells' weights x the xy inverse density)
+                weights = self.compute_weights_balanced(dataset) * self.compute_weights_inverse_density(dataset)
+                weights = weights / weights.mean()
+                print(f"weighted dataloader (balanced x inverse density): {len(weights)} samples, weights {weights.min():.3g}-{weights.max():.3g}")
             else:
                 weights = self.compute_weights2(dataset)
 

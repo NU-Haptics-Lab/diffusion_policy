@@ -212,6 +212,7 @@ class DiffusionModel(BaseImagePolicy):
             transformer_p_drop_attn = 0.1,
             transformer_n_cond_layers = 4,
             transformer_p_drop_token = 0.0, # whole-token (modality) dropout probability
+            action_loss_dim_weights = None, # per-action-dimension multipliers on the diffusion loss (len = action dim, e.g. [1, 1, 1, 1, 1, 1, 1, 5]: the gripper 5x); None = all 1
             transformer_droppable_token_keys = None, # obs/task_id keys eligible for whole-token dropout; None = all except timestep
             patch_keys_to_use = None, # obs keys that are unpooled patch-token grids (e.g. DINOv3 patches); dexnex_transformer only. Read directly from nbatch['obs'], bypassing obs_encoder, since ObservationEncoder always flattens per-key output and would destroy the patch grid.
             spatial_softmax_patch_keys = None, # subset of patch_keys_to_use to reduce via spatial softmax (one token per group) instead of keeping every patch as its own token
@@ -287,6 +288,7 @@ class DiffusionModel(BaseImagePolicy):
         self.transformer_p_drop_attn = transformer_p_drop_attn
         self.transformer_n_cond_layers = transformer_n_cond_layers
         self.transformer_p_drop_token = transformer_p_drop_token
+        self.action_loss_dim_weights = None if action_loss_dim_weights is None else [float(w) for w in action_loss_dim_weights]
         self.transformer_droppable_token_keys = transformer_droppable_token_keys
         self.patch_keys_to_use = patch_keys_to_use or []
         self.spatial_softmax_patch_keys = spatial_softmax_patch_keys or []
@@ -1511,6 +1513,10 @@ class DiffusionModel(BaseImagePolicy):
         # calculate the loss
         loss = F.mse_loss(pred, target, reduction='none')
         loss = loss * loss_mask.type(loss.dtype)
+        if self.action_loss_dim_weights is not None:  # (per action dimension, e.g. the gripper's 5x -- the logged losses include it)
+            assert len(self.action_loss_dim_weights) == loss.shape[-1], \
+                f"action_loss_dim_weights has {len(self.action_loss_dim_weights)} entries for {loss.shape[-1]} action dims"
+            loss = loss * torch.tensor(self.action_loss_dim_weights, dtype=loss.dtype, device=loss.device)
         
         # testing weighing the gofa joints more than hand joints since their link lengths are larger -> ehh... idk.. didn't really work
         if False:
