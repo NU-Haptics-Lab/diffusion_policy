@@ -8,7 +8,13 @@ description: "aiet_erlenmeyer_flask_19: aiet_erlenmeyer_flask_17 (same streams, 
   (diffusion_policy/scripts/add_dinov3_grid_features.py; its PCA .npz is needed at inference). The overhead camera is
   the full 224 frame (the probe found no gain from the ROI crop), the same frames for sim and real -- unlike flask_17s
   keypoints (real from native-resolution frames, sim from the 224 frames). Paths: data_root / model_root (override on
-  the command line on dexbeast)."
+  the command line on dexbeast). Streams added on 2026-11-12, as openpi's views_layout_aux co-train did: erlenmeyer_sim
+  cost-balanced (label_bins on data/start_cost, openpi's aiet_grip cost bins); erlenmeyer_sim_lift (aiet_grip_lift_sim_to_real.zarr,
+  the sim successes ending at the lift, cost-balanced on its own bins); erlenmeyer_sim_fine_align /
+  erlenmeyer_sim_lift_fine_align (only the fine-alignment frames of each sim zarr: label_bins on data/fine_align with
+  the 0 bin's mass 0); erlenmeyer_aux (the real flush / corner demos, bags flush_corner_aux_1_toby onward, about 10% of
+  each step). The sim labels come from add_sim_frame_labels.py. Each stream's share is set by its batch size: real
+  615 of 1,255 (49%), sim 640 (51%)."
 
 # global controls
 debug: false
@@ -74,6 +80,10 @@ tasks_to_use:
   - erlenmeyer_align
   - erlenmeyer_fine_align
   - erlenmeyer_sim
+  - erlenmeyer_sim_lift
+  - erlenmeyer_sim_fine_align
+  - erlenmeyer_sim_lift_fine_align
+  - erlenmeyer_aux
 
 # every BatchLoader in this yaml (both streams' train+val loaders, AND
 # default_batch_loader) passes this SAME list as normalizer_fit_rb_ids, so
@@ -84,7 +94,7 @@ tasks_to_use:
 # real-world inference (which only ever normalizes/unnormalizes through
 # default_batch_loader) consistent with what every stream was actually
 # trained against.
-normalizer_fit_rb_ids: [erlenmeyer, erlenmeyer_align, erlenmeyer_fine_align, erlenmeyer_sim]
+normalizer_fit_rb_ids: [erlenmeyer, erlenmeyer_align, erlenmeyer_fine_align, erlenmeyer_sim, erlenmeyer_sim_lift]
 
 # fused/single-vector keys routed through the obs_encoder. Vision: precomputed
 # DINOv3-L 3x3-grid features (add_dinov3_grid_features.py), [9 cells, 32 PCA
@@ -270,12 +280,21 @@ replay_buffer_loader:
     erlenmeyer_align: ${data_root}/task_24_erlenmeyer_flask.zarr
     erlenmeyer_fine_align: ${data_root}/task_24_erlenmeyer_flask.zarr
     erlenmeyer_sim: ${data_root}/aiet_grip_sim_to_real.zarr
+    erlenmeyer_sim_lift: ${data_root}/aiet_grip_lift_sim_to_real.zarr
+    # views: the same zarrs again, as the real streams share task_24 (see above)
+    erlenmeyer_sim_fine_align: ${data_root}/aiet_grip_sim_to_real.zarr
+    erlenmeyer_sim_lift_fine_align: ${data_root}/aiet_grip_lift_sim_to_real.zarr
+    erlenmeyer_aux: ${data_root}/task_24_erlenmeyer_flask.zarr
 
   modes:
     erlenmeyer: r
     erlenmeyer_align: r
     erlenmeyer_fine_align: r
     erlenmeyer_sim: r
+    erlenmeyer_sim_lift: r
+    erlenmeyer_sim_fine_align: r
+    erlenmeyer_sim_lift_fine_align: r
+    erlenmeyer_aux: r
 
 # to be used for norming / unnorming without loading
 default_batch_loader:
@@ -304,6 +323,10 @@ session_trainer:
         erlenmeyer_align: ${common_wbatch_loss_erlenmeyer_align}
         erlenmeyer_fine_align: ${common_wbatch_loss_erlenmeyer_fine_align}
         erlenmeyer_sim: ${common_wbatch_loss_erlenmeyer_sim}
+        erlenmeyer_sim_lift: ${common_wbatch_loss_erlenmeyer_sim_lift}
+        erlenmeyer_sim_fine_align: ${common_wbatch_loss_erlenmeyer_sim_fine_align}
+        erlenmeyer_sim_lift_fine_align: ${common_wbatch_loss_erlenmeyer_sim_lift_fine_align}
+        erlenmeyer_aux: ${common_wbatch_loss_erlenmeyer_aux}
 
   epoch_evaluator:
     _target_: diffusion_policy.trainers.epoch_trainer.EpochValidator
@@ -322,6 +345,10 @@ session_trainer:
       erlenmeyer_align: ${common_wbatch_loss_erlenmeyer_align_val}
       erlenmeyer_fine_align: ${common_wbatch_loss_erlenmeyer_fine_align_val}
       erlenmeyer_sim: ${common_wbatch_loss_erlenmeyer_sim_val}
+      erlenmeyer_sim_lift: ${common_wbatch_loss_erlenmeyer_sim_lift_val}
+      erlenmeyer_sim_fine_align: ${common_wbatch_loss_erlenmeyer_sim_fine_align_val}
+      erlenmeyer_sim_lift_fine_align: ${common_wbatch_loss_erlenmeyer_sim_lift_fine_align_val}
+      erlenmeyer_aux: ${common_wbatch_loss_erlenmeyer_aux_val}
 
 
 common_wbatch_loss_erlenmeyer:
@@ -396,6 +423,142 @@ common_wbatch_loss_erlenmeyer_sim_val:
     batch_loader:
       _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
       rb_id: erlenmeyer_sim
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the aiet_grip_lift sim stream (successes ending at the lift)
+common_wbatch_loss_erlenmeyer_sim_lift:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_sim_lift
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the aiet_grip_lift sim stream (successes ending at the lift): its held-out val split (epoch_evaluator only)
+common_wbatch_loss_erlenmeyer_sim_lift_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_sim_lift
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the aiet_grip sim zarr's fine-alignment frames only
+common_wbatch_loss_erlenmeyer_sim_fine_align:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_sim_fine_align
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the aiet_grip sim zarr's fine-alignment frames only: its held-out val split (epoch_evaluator only)
+common_wbatch_loss_erlenmeyer_sim_fine_align_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_sim_fine_align
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the aiet_grip_lift sim zarr's fine-alignment frames only
+common_wbatch_loss_erlenmeyer_sim_lift_fine_align:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_sim_lift_fine_align
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the aiet_grip_lift sim zarr's fine-alignment frames only: its held-out val split (epoch_evaluator only)
+common_wbatch_loss_erlenmeyer_sim_lift_fine_align_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_sim_lift_fine_align
+      train_or_val: val
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the real flush / corner demos (flush_corner_aux bags)
+common_wbatch_loss_erlenmeyer_aux:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_aux
+      train_or_val: train
+      normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
+
+# the real flush / corner demos (flush_corner_aux bags): its held-out val split (epoch_evaluator only)
+common_wbatch_loss_erlenmeyer_aux_val:
+  _target_: diffusion_policy.losses.batch_loss.WeightedBatchLoss
+  weight: 1.0
+
+  batch_loss:
+    _target_: diffusion_policy.losses.batch_loss.BatchLoss
+    use_bc_loss: ${use_bc_loss}
+    freqs: ${step_freqs}
+    eta: 1.0
+
+    batch_loader:
+      _target_: diffusion_policy.dataset.batch_loader.AIETErlenmeyerFlask4BatchLoader
+      rb_id: erlenmeyer_aux
       train_or_val: val
       normalizer_fit_rb_ids: ${normalizer_fit_rb_ids}
 
@@ -488,6 +651,10 @@ dataloaders:
     erlenmeyer_align: ${common_dataset_erlenmeyer_align}
     erlenmeyer_fine_align: ${common_dataset_erlenmeyer_fine_align}
     erlenmeyer_sim: ${common_dataset_erlenmeyer_sim}
+    erlenmeyer_sim_lift: ${common_dataset_erlenmeyer_sim_lift}
+    erlenmeyer_sim_fine_align: ${common_dataset_erlenmeyer_sim_fine_align}
+    erlenmeyer_sim_lift_fine_align: ${common_dataset_erlenmeyer_sim_lift_fine_align}
+    erlenmeyer_aux: ${common_dataset_erlenmeyer_aux}
 
 # on-task real data -- NOT rebalanced (see description above for why): plain
 # uniform sampling, same as flask_15.
@@ -540,14 +707,19 @@ common_dataset_erlenmeyer:
     episode_filter_key: subtask_id
     episode_filter_value: 0
 
-# (flask_17) the sim stream: every sim episode (no subtask filter -- all full pick-and-drop successes)
+# (flask_17) the sim stream: every sim episode (no subtask filter -- all full pick-and-drop successes).
+# Cost-balanced (flask_19): each start-cost bin an equal share of the draws (openpi's aiet_grip cost_bins; the
+# carry / place frames sit below 9.5)
 common_dataset_erlenmeyer_sim:
   _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
   seed: 42
   val_ratio: 0.02
   split_val_by_episode: true # hold out whole episodes for val instead of scattered individual timesteps, since per-timestep splitting leaks trajectory-local info (overlapping action-horizon windows, and just smooth-trajectory continuity) across the train/val boundary
   max_train_episodes: null
-  use_weighted_dataloader: false
+  use_weighted_dataloader: true
+  weighted_dataloader_mode: label_bins
+  weighted_dataloader_key: start_cost # (add_sim_frame_labels.py)
+  weighted_dataloader_bins: [0.0, 7.5, 8.5, 9.5, 10.0, 10.5, 11.0, 11.5, 100.0]
   preload_to_gpu: true
   preload_vectorized: true
 
@@ -575,6 +747,159 @@ common_dataset_erlenmeyer_sim:
     _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
     rb_id: erlenmeyer_sim
     ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+
+# (flask_19) the aiet_grip_lift sim stream: every episode, cost-balanced on openpi's aiet_grip_lift cost_bins
+common_dataset_erlenmeyer_sim_lift:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: true
+  weighted_dataloader_mode: label_bins
+  weighted_dataloader_key: start_cost # (add_sim_frame_labels.py)
+  weighted_dataloader_bins: [0.0, 9.5, 10.0, 10.5, 11.0, 11.5, 100.0]
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 150
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer_sim_lift
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+
+# (flask_19) view: the aiet_grip sim zarr's fine-alignment frames (16,012 of 114,840)
+common_dataset_erlenmeyer_sim_fine_align:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: true
+  weighted_dataloader_mode: label_bins
+  weighted_dataloader_key: fine_align # (add_sim_frame_labels.py: 1 = a pad within 2 cm of the pellet, before the lift)
+  weighted_dataloader_bins: [-0.5, 0.5, 1.5]
+  weighted_dataloader_bin_mass: [0.0, 1.0] # only the fine-alignment frames, uniformly
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 75
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer_sim_fine_align
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+
+# (flask_19) view: the aiet_grip_lift sim zarr's fine-alignment frames (14,996 of 56,123)
+common_dataset_erlenmeyer_sim_lift_fine_align:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: true
+  weighted_dataloader_mode: label_bins
+  weighted_dataloader_key: fine_align # (add_sim_frame_labels.py: 1 = a pad within 2 cm of the pellet, before the lift)
+  weighted_dataloader_bins: [-0.5, 0.5, 1.5]
+  weighted_dataloader_bin_mass: [0.0, 1.0] # only the fine-alignment frames, uniformly
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 75
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer_sim_lift_fine_align
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+
+# (flask_19) view: the real flush / corner demos -- every episode from bag flush_corner_aux_1_toby on, in
+# collection order (15 episodes, 2,225 frames; also in erlenmeyer's subtask-0 pool)
+common_dataset_erlenmeyer_aux:
+  _target_: diffusion_policy.dataset.train_and_val.TrainAndVal
+  seed: 42
+  val_ratio: 0.02
+  split_val_by_episode: true
+  max_train_episodes: null
+  use_weighted_dataloader: false
+  preload_to_gpu: true
+  preload_vectorized: true
+
+  use_gpu_sample_cache: false
+  gpu_sample_cache_max_bytes: 1e+10
+  gpu_sample_cache_evict: false
+
+  options:
+    common:
+      batch_size: 120
+      timeout: 0
+    train:
+      num_workers: 4
+      persistent_workers: true
+      pin_memory: true
+      shuffle: true
+    val:
+      num_workers: 0
+      persistent_workers: false
+      pin_memory: false
+      shuffle: true
+
+  sampler:
+    _target_: diffusion_policy.common.sarsa_sampler.DatasetSampler
+    rb_id: erlenmeyer_aux
+    ep_sampler_class_str: diffusion_policy.samplers.aiet_erlenmeyer_flask_4_sampler.AIETErlenmeyerFlask4Real1Sampler
+    episode_min_bag_name: flush_corner_aux_1_toby
 
 # same rb_id/sampler class as erlenmeyer, but DatasetSampler's episode_filter_key/
 # value restricts InitAll() to only the episodes that are entirely
